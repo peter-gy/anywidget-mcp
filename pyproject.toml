@@ -1,0 +1,29 @@
+[project]
+name = "anywidget-mcp-use"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Péter Ferenc Gyarmati", email = "dev.petergy@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "anywidget>=0.11.0",
+    "traitlets>=5.15.1",
+]
+
+[project.scripts]
+anywidget-mcp-use = "anywidget_mcp_use:main"
+
+[build-system]
+requires = ["uv_build>=0.11.28,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "marimo[recommended]>=0.23.14",
+    "pyrefly>=1.1.1",
+    "pytest>=9.1.1",
+    "ruff>=0.15.21",
+    "ty>=0.0.59",
+]
