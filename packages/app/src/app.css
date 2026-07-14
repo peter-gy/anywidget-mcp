@@ -1,0 +1,46 @@
+:root {
+	color-scheme: light dark;
+	font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+	color: var(--color-text-primary, CanvasText);
+	background: transparent;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+}
+
+body {
+	background: transparent;
+}
+
+#app-shell {
+	width: 100%;
+	min-height: 3rem;
+}
+
+#status {
+	margin: 0;
+	padding: 0.75rem;
+	color: var(--color-text-secondary, GrayText);
+	font-size: 0.875rem;
+	line-height: 1.4;
+}
+
+#status[data-kind="error"] {
+	color: var(--color-text-danger, #b42318);
+}
+
+#status[hidden],
+#widget-root[hidden] {
+	display: none;
+}
+
+#widget-root {
+	min-width: 0;
+	overflow: auto;
+}

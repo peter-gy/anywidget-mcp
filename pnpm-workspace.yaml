@@ -1,0 +1,28 @@
+packages:
+  - packages/*
+
+catalogMode: prefer
+
+catalog:
+  "@modelcontextprotocol/ext-apps": 1.7.4
+  "@modelcontextprotocol/sdk": 1.29.0
+  "@types/node": ^22.20.1
+  typescript: ^6.0.3
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.4
+  vite-plugin-singlefile: 2.3.3
+  vite-plus: 0.2.4
+
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+
+overrides:
+  vite: "catalog:"
+
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+
+allowBuilds:
+  esbuild: true

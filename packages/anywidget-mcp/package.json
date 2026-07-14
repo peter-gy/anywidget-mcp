@@ -1,0 +1,20 @@
+{
+	"name": "@anywidget-mcp/python",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "vp build",
+		"dev": "vp dev"
+	},
+	"dependencies": {
+		"@anywidget-mcp/app": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite": "catalog:",
+		"vite-plugin-singlefile": "catalog:",
+		"vite-plus": "catalog:"
+	}
+}

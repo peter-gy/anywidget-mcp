@@ -1,0 +1,1 @@
+import "@anywidget-mcp/app";
