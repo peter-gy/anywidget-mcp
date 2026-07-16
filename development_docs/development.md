@@ -11,6 +11,9 @@
   entry.
 - `development_docs/` contains contributor architecture and protocol material.
 
+Read [Releasing](releasing.md) before changing the package version, creating a
+version tag, or publishing to PyPI.
+
 Read [Architecture](architecture.md) before changing ownership or a
 cross-runtime shape. Read [Widget bridge protocol](protocol.md) before changing
 comm messages, metadata, buffers, model membership, or model context.

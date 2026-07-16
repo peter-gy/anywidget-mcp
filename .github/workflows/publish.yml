@@ -1,0 +1,166 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Read Node.js version
+        id: node-version
+        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
+        with:
+          version: 0.2.4
+          node-version: ${{ steps.node-version.outputs.version }}
+          sfw: true
+          cache: false
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install Python workspace
+        run: uv sync --frozen --python 3.12
+
+      - name: Verify release version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          package_version="$(uv version --package anywidget-mcp --short)"
+          test "$version" = "$package_version"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Verify workspace and build package
+        run: make check
+
+      - name: Check release artifacts
+        shell: bash
+        run: |
+          version="$(uv version --package anywidget-mcp --short)"
+          test -f "dist/anywidget_mcp-${version}-py3-none-any.whl"
+          test -f "dist/anywidget_mcp-${version}.tar.gz"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-packages
+          path: |
+            dist/anywidget_mcp-*.whl
+            dist/anywidget_mcp-*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/anywidget-mcp/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-packages
+          path: dist
+
+      - name: Publish Python package
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+
+  release-notes:
+    name: Update release notes
+    needs: [build, publish-pypi]
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify published artifacts
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in {1..12}; do
+            if python3 - "$version" <<'PY'
+          import json
+          import sys
+          import urllib.request
+
+          version = sys.argv[1]
+          expected = {
+              f"anywidget_mcp-{version}-py3-none-any.whl",
+              f"anywidget_mcp-{version}.tar.gz",
+          }
+          try:
+              with urllib.request.urlopen(
+                  f"https://pypi.org/pypi/anywidget-mcp/{version}/json",
+                  timeout=10,
+              ) as response:
+                  files = {item["filename"] for item in json.load(response)["urls"]}
+          except Exception:
+              raise SystemExit(1) from None
+          raise SystemExit(0 if expected <= files else 1)
+          PY
+            then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 12 ]]; then
+              sleep 5
+            fi
+          done
+          echo "PyPI does not contain both artifacts for $version" >&2
+          exit 1
+
+      - name: Read Node.js version
+        id: node-version
+        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ steps.node-version.outputs.version }}
+          package-manager-cache: false
+
+      - name: Update release notes
+        shell: bash
+        run: |
+          args=()
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" =~ (a|b|rc|dev)[0-9]+ ]]; then
+            args+=(--prerelease)
+          fi
+          npx --yes changelogithub@14.0.0 "${args[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
