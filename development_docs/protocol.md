@@ -34,20 +34,20 @@ The comm prototype produced these concrete traces:
 
 ## Protocol mapping
 
-| AnyWidget or MCP concept | Adapter mapping                                                                                                                                     |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Widget construction      | Class or factory call creates one session-scoped root model. Managed factories remain active until session teardown.                                |
-| Request context          | FastMCP injects `Context` after compiling the model-facing input schema                                                                             |
-| Initial state            | `widget.send_state()` emits canonical state, buffer paths, buffers, and widget sources                                                              |
-| Widget source            | `_esm` and `_css` become typed SHA-256 references. `anywidget_assets` returns session-owned source text for browser verification.                   |
-| Browser comm             | `anywidget_comm` delivers an ipywidgets `update` or `custom` message with an idempotent operation ID                                                |
-| Python state change      | Comm output is returned immediately or collected by an idempotent `anywidget_poll` cycle                                                            |
-| Child composition        | References nested in synchronized dicts, lists, and tuples share the session and AFM host. Replacements enroll before the parent update is applied. |
-| Child removal            | The browser acknowledges applied removals through a later `anywidget_poll`, then Python closes the detached models.                                 |
-| App teardown             | `anywidget_dispose` closes every enrolled model and exits the factory manager                                                                       |
-| MCP App discovery        | Tool `_meta.ui.resourceUri` points to `ui://anywidget-mcp/widget.html`                                                                              |
-| Internal tool discovery  | `_meta.ui.visibility=["app"]` keeps session tools app-facing                                                                                        |
-| Live model context       | `ui/update-model-context` replaces the previous concise state projection                                                                            |
+| AnyWidget or MCP concept | Adapter mapping                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Widget construction      | A class creates one AnyWidget. A factory returns one AnyWidget or a non-empty ordered sequence. Managed factories remain active until session teardown. |
+| Request context          | FastMCP injects `Context` after compiling the model-facing input schema                                                                                 |
+| Initial state            | `widget.send_state()` emits canonical state, buffer paths, buffers, and widget sources                                                                  |
+| Widget source            | `_esm` and `_css` become typed SHA-256 references. `anywidget_assets` returns session-owned source text for browser verification.                       |
+| Browser comm             | `anywidget_comm` delivers an ipywidgets `update` or `custom` message with an idempotent operation ID                                                    |
+| Python state change      | Comm output is returned immediately or collected by an idempotent `anywidget_poll` cycle                                                                |
+| Child composition        | References nested in synchronized dicts, lists, and tuples share the session and AFM host. Replacements enroll before the parent update is applied.     |
+| Child removal            | The browser acknowledges applied removals through a later `anywidget_poll`, then Python closes the detached models.                                     |
+| App teardown             | `anywidget_dispose` closes every enrolled model and exits the factory manager                                                                           |
+| MCP App discovery        | Tool `_meta.ui.resourceUri` points to `ui://anywidget-mcp/widget.html`                                                                                  |
+| Internal tool discovery  | `_meta.ui.visibility=["app"]` keeps session tools app-facing                                                                                            |
+| Live model context       | `ui/update-model-context` replaces the previous concise state projection                                                                                |
 
 The runtime payload lives in the tool result `_meta`. `content` gives the model
 an initial state projection. `structuredContent` identifies the registered tool
@@ -58,6 +58,13 @@ ESM and CSS. The app verifies and hydrates those references before registering
 the launch graph or applying a transaction. Tool results and model context use
 the `tool` field for the registered identity. After interaction, the app sends
 Python-authoritative projections through `ui/update-model-context`.
+
+A sequence result receives one internal group model as its wire root. The
+returned widgets become child models in sequence order and render through that
+root. Each emitted projection applies the public `state` specification to every
+returned widget, then the adapter publishes `{"widgets": [state, ...]}`. A
+one-item sequence keeps the aggregate shape, so the factory's result shape
+determines the state contract.
 
 ## Source asset protocol
 
@@ -114,11 +121,12 @@ observed live trait matches its last-notified value, and a second check rejects
 concurrent drift before commit. Projection callables must not mutate
 synchronized traits.
 
-`StateProjection` can narrow invalidation to selected root traits. The state
-runtime still observes the enrolled graph while the projector runs so mutation
-checks and committed-shadow validation remain intact. `watch=None` invalidates
-from the complete graph, while an empty watch set publishes the initial
-projection once.
+`StateProjection` can narrow invalidation to selected traits on each projection
+root. A sequence applies the same `watch` selection to every returned widget.
+The state runtime still observes the enrolled graph while the projector runs so
+mutation checks and committed-shadow validation remain intact. `watch=None`
+invalidates from the complete graph, while an empty watch set publishes the
+initial projection once.
 
 The runtime scheduler records browser comms and polls at API-call time. It
 coalesces only adjacent updates for the same model. Custom messages, another
@@ -156,7 +164,8 @@ original URL after source hydration and require their origins in the resource
 CSP. Camera, microphone, geolocation, and clipboard access require matching
 resource permissions and host approval.
 
-The factory's child graph is enrolled at launch. Graph discovery recursively
-walks every synchronized dict, list, and tuple. Replacing a container enrolls
-the new reachable graph in the current session. Detached models close after the
-browser acknowledges their applied removal in a later poll.
+The factory's child graph is enrolled at launch. A sequence adds its returned
+widgets beneath one internal group root. Graph discovery recursively walks
+every synchronized dict, list, and tuple. Replacing a container enrolls the new
+reachable graph in the current session. Detached models close after the browser
+acknowledges their applied removal in a later poll.

@@ -16,6 +16,7 @@ export default defineConfig({
 		},
 		nav: [
 			{ text: "Getting started", link: "/getting-started" },
+			{ text: "How it works", link: "/how-it-works" },
 			{
 				text: "Guides",
 				items: [
@@ -33,6 +34,7 @@ export default defineConfig({
 				items: [
 					{ text: "Overview", link: "/" },
 					{ text: "Getting started", link: "/getting-started" },
+					{ text: "How it works", link: "/how-it-works" },
 					{ text: "Factories and composition", link: "/factories" },
 					{ text: "Model-visible state", link: "/state" },
 					{ text: "Deployment", link: "/deployment" },

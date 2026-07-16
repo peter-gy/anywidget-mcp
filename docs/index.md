@@ -37,7 +37,10 @@ host-controlled sandbox.
 
 A direct MCP App implementation coordinates tool metadata, an HTML resource,
 host communication, session state, and packaging. `anywidget-mcp` owns those
-boundaries for AnyWidget, which gives you three paths:
+boundaries for AnyWidget. [How it works](./how-it-works) maps Python classes,
+docstrings, signatures, traits, and widget sources to their MCP contracts.
+
+This gives you three paths:
 
 - **Build from scratch.** Express application logic in Python and develop the
   bespoke interface as a reusable AnyWidget.
@@ -68,8 +71,29 @@ pip install wigglystuff
 Expose one of its widget classes:
 
 ```sh
-anywidget-mcp serve wigglystuff:ColorPicker
+anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
-The server listens at `http://127.0.0.1:8000/mcp`. An MCP Apps-compatible
-host can invoke the generated tool and render the widget.
+The server listens at `http://127.0.0.1:8010/mcp`.
+
+## See it in Inspector Chat
+
+Keep the widget server running. Start the
+[mcp-use Inspector](https://mcp-use.com/docs/inspector) in another terminal:
+
+```sh
+npx --yes @mcp-use/inspector@12.0.3 \
+  --url http://127.0.0.1:8010/mcp \
+  --port 7878 \
+  --no-open
+```
+
+Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
+model provider, and ask: `Use color_picker so I can choose a color.` The widget
+renders in the conversation, and later turns receive its latest synchronized
+state. Keeping `--no-open` lets browser automation drive the same flow.
+
+For richer runtime-input examples, [serve `LiveEdit`
+directly](./factories#turn-an-explanation-into-an-interactive-trace) or [let the
+model create a bespoke AnyWidget](./factories#create-bespoke-widgets-at-runtime)
+for the current conversation.

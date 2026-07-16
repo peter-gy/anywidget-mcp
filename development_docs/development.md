@@ -130,10 +130,8 @@ npx --yes @mcp-use/inspector@12.0.3 \
   --no-open
 ```
 
-Open
-`http://127.0.0.1:8082/inspector?server=http%3A%2F%2F127.0.0.1%3A8766%2Fmcp&tab=chat`
-with one named `agent-browser` session. Configure the OpenAI-compatible chat
-provider in the Inspector UI.
+Open `http://127.0.0.1:8082/inspector?tab=chat` with one named `agent-browser`
+session. Configure the OpenAI-compatible chat provider in the Inspector UI.
 
 Exercise the affected scenarios:
 

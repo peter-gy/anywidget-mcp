@@ -31,7 +31,8 @@ dependencies and package-specific tests or builds.
 ```text
 tool arguments
   -> server.py uses one compiled target for registration and CLI inspection
-  -> FastMCP injects Context while the factory creates or yields an AnyWidget
+  -> FastMCP injects Context while the factory creates or yields widget output
+  -> server.py normalizes a sequence into one internal group render root
   -> server.py keeps the factory manager active in the session lifespan
   -> _bridge.py claims widget identities and serializes models
   -> _bridge.py externalizes ESM and CSS as content-addressed source references
@@ -59,14 +60,25 @@ delegates to the same adapter. One compiled target derives the registration and
 CLI inspection schema from a widget constructor or factory signature. FastMCP
 injects `Context` parameters after schema validation. Tool annotations, icons,
 the registered title, and the app resource URI are attached during the same
-registration step.
+registration step. The `serve` command resolves every requested target before
+constructing the server, then registers the targets in command-line order.
 
-A factory result may be an AnyWidget or a synchronous or asynchronous context
-manager. Either result may arrive through an awaitable. The session runtime
-keeps the manager active for the complete widget session. Teardown closes the
-widget graph before exiting the manager. After acquisition completes, the
-runtime releases its invocation argument map. A returned manager retains the
-domain resources it captures for its own cleanup.
+A factory result may be an AnyWidget or a non-empty `Sequence[AnyWidget]`. A
+synchronous or asynchronous context manager may yield either result. Any form
+may arrive through an awaitable. A sequence is snapshotted when acquired, then
+`_WidgetGroup` becomes its single render root and references the returned
+widgets in order. The session runtime keeps a manager active for the complete
+widget session. Teardown closes the widget graph before exiting the manager.
+After acquisition completes, the runtime releases its invocation argument map.
+A returned manager retains the domain resources it captures for its own
+cleanup.
+
+`create_anywidget()` in `_dynamic.py` executes supplied Python source in a fresh
+module. It resolves explicit `classnames` bindings after execution and
+instantiates them in request order. An omitted list selects the last
+final namespace binding to a source-defined top-level AnyWidget class. One
+class returns a widget. Several classes return the ordered sequence handled by
+the same factory runtime.
 
 Factory acquisition runs in a cancellable scope inside a shielded owner task.
 The manager exit stack lives outside that acquisition scope, so cleanup after a
@@ -108,7 +120,10 @@ runs outside the session lock only when live traits match the shadow, then
 rechecks the shadow before committing. Browser comms invalidate custom
 projections for protocol objects that have no observable trait API. Projectors
 are read-only. Their output is summarized into bounded JSON and versioned for
-the model.
+the model. For a factory sequence, each emitted projection applies the selected
+state specification to every returned widget and aggregates the results as
+`{"widgets": [state, ...]}`. The internal group root stays outside that public
+projection.
 
 ## Browser ownership
 

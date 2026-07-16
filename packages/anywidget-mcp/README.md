@@ -31,22 +31,56 @@ pip install wigglystuff
 Expose one of its widget classes:
 
 ```sh
-anywidget-mcp serve wigglystuff:ColorPicker
+anywidget-mcp serve wigglystuff:ColorPicker --port 8010
+```
+
+## See it in Inspector Chat
+
+Keep the widget server running. In another terminal, start the
+[mcp-use Inspector](https://mcp-use.com/docs/inspector):
+
+```sh
+npx --yes @mcp-use/inspector@12.0.3 \
+  --url http://127.0.0.1:8010/mcp \
+  --port 7878 \
+  --no-open
+```
+
+Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
+model provider, and ask: `Use color_picker so I can choose a color.` The model
+calls the tool and the widget renders in the conversation. Color changes
+synchronize with Python and update the model context available to later turns.
+
+`--no-open` keeps the Inspector ready for browser-driven end-to-end checks.
+Drive the same Chat flow, interact with the rendered widget, then ask about the
+selected color. If port 7878 is busy, use the Inspector URL printed in the
+terminal.
+
+To expose several widget tools through one endpoint, restart the widget server
+with several targets:
+
+```sh
+anywidget-mcp serve \
+  wigglystuff:ManimWeb \
+  wigglystuff:ColorPicker \
+  --port 8010
 ```
 
 The [AnyWidget gallery](https://try.anywidget.dev/) lists more reusable widget
 packages that can be registered the same way.
 
-The target may also be a factory that returns a widget directly or yields one
-from a synchronous or asynchronous context manager:
+The target may also be a factory that returns one widget, returns a non-empty
+sequence of widgets, or yields either form from a synchronous or asynchronous
+context manager:
 
 ```sh
 anywidget-mcp serve my_widgets:create_picker
 ```
 
 The command serves a streamable HTTP endpoint at
-`http://127.0.0.1:8000/mcp`. Constructor parameters become the MCP tool input
-schema, so the host can inspect and invoke the widget with typed arguments.
+`http://127.0.0.1:8000/mcp`. The class constructor or factory signature becomes
+the MCP tool input schema, so the host can inspect and invoke the widget with
+typed arguments.
 
 Inspect that contract before starting the server:
 
@@ -58,6 +92,28 @@ anywidget-mcp inspect my_widgets:create_picker --json
 Inspection reports `widget-class` or `factory` as the target kind. FastMCP
 `Context` parameters are injected at call time and stay outside the displayed
 input schema.
+
+## Create bespoke widgets at runtime
+
+Serve the package's built-in `create_anywidget` factory when the model should
+construct an interface for the current question:
+
+```sh
+anywidget-mcp serve anywidget_mcp:create_anywidget --port 8010
+```
+
+The tool accepts Python source plus an ordered `classnames` list. Each name
+must resolve to a zero-argument AnyWidget class after the code executes. One
+selected class renders directly. Several selected classes render together in
+the requested order. If `classnames` is omitted, the tool selects the last
+final namespace binding to a source-defined top-level AnyWidget class. See the
+[generated widget
+example](https://peter-gy.github.io/anywidget-mcp/factories#create-bespoke-widgets-at-runtime)
+for a retry-budget explorer and its model-visible state.
+
+> `create_anywidget` executes supplied Python in the server process and loads
+> each widget's JavaScript in the app iframe. Run it in a disposable sandbox
+> with scoped filesystem, network, credential, and process access.
 
 ## Serve one widget
 
@@ -198,12 +254,18 @@ async def explore_dataset(
 ```
 
 Factories may return either context-manager type. Each manager must yield an
-`AnyWidget`. The manager stays active until app disposal, idle expiry,
-`aclose()`, or server shutdown. The widget graph closes before the manager
-exits. The class or factory signature defines the input contract after FastMCP
-removes its injected `Context` parameter. A minimal AnyWidget class whose
-constructor is `(*args, **kwargs)` produces an empty input schema. Register a
-factory with named parameters when callers need to configure that widget.
+`AnyWidget` or a non-empty sequence of AnyWidgets. A sequence renders as one
+vertical MCP App result. With state projection enabled, the aggregate projection
+uses `{"widgets": [state, ...]}` within projection limits. Projection limits
+encode a large list as a bounded sequence summary with `type` and `length`. The
+summary may also include retained `items`, an `omitted` count, and `jsonBytes`.
+Set `state=None` to disable the aggregate projection. The manager stays active
+until app disposal, idle expiry, `aclose()`, or server shutdown. The widget
+graph closes before the manager exits. The class or factory signature defines
+the input contract after FastMCP removes its injected `Context` parameter. A
+minimal AnyWidget class whose constructor is `(*args, **kwargs)` produces an
+empty input schema. Register a factory with named parameters when callers need
+to configure that widget.
 
 Cancellation interrupts factory acquisition. When a manager acquires a
 resource before its final pre-yield await, shield that partial-acquisition
