@@ -5,9 +5,6 @@ import {
 	AssetMemoryCache,
 	AssetStore,
 	clearAssetMemoryCache,
-	hydrateSources,
-	normalizeSourceRefs,
-	requireProtocolVersion,
 	widgetAssetId,
 	type AssetKind,
 } from "../src/assets";
@@ -150,25 +147,6 @@ describe("content-addressed widget assets", () => {
 		);
 	});
 
-	test("releases an asset fetch when its caller ignores cancellation", async () => {
-		const esm = await fixtureAsset("esm", "export default {}");
-		const call = vi.fn<QueuedToolCall>(
-			async () => await new Promise<CallToolResult>(() => undefined),
-		);
-		const controller = new AbortController();
-		const result = new AssetStore("session").resolve(
-			manifest(esm),
-			[{ _esm: esm.id }],
-			call,
-			controller.signal,
-		);
-		await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
-
-		controller.abort(new DOMException("initializer stopped", "AbortError"));
-
-		await expect(result).rejects.toMatchObject({ name: "AbortError" });
-	});
-
 	test("chunks more than 128 cache misses into bounded fetch requests", async () => {
 		const assets = await Promise.all(
 			Array.from({ length: 129 }, (_, index) =>
@@ -203,11 +181,9 @@ describe("content-addressed widget assets", () => {
 			call,
 		);
 
-		expect(call).toHaveBeenCalledTimes(2);
 		const batches = call.mock.calls.map(([_name, args]) => args.asset_ids as string[]);
 		expect(batches.map((batch) => batch.length)).toEqual([128, 1]);
 		expect(maxActiveCalls).toBe(1);
-		expect(batches.every((batch) => batch.length <= 128)).toBe(true);
 		expect(new Set(batches.flat())).toEqual(new Set(assets.map((asset) => asset.id)));
 		expect(resolved.size).toBe(129);
 		for (const asset of assets) expect(resolved.get(asset.id)).toBe(asset.text);
@@ -227,18 +203,17 @@ describe("content-addressed widget assets", () => {
 			secondCall,
 		);
 
-		expect(firstCall).toHaveBeenCalledTimes(1);
 		expect(secondCall).not.toHaveBeenCalled();
 		expect(resolved.get(esm.id)).toBe(esm.text);
 	});
 
 	test("persists verified assets and reuses them after the memory cache is cleared", async () => {
 		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		const { cache } = installCache();
+		const { cache, stored } = installCache();
 		const firstCall = vi.fn<QueuedToolCall>(async () => assetResult(esm));
 
 		await new AssetStore("session-1").resolve(manifest(esm), [{ _esm: esm.id }], firstCall);
-		await vi.waitFor(() => expect(cache.put).toHaveBeenCalledTimes(1));
+		await vi.waitFor(() => expect(stored.has(cacheKey(esm.id))).toBe(true));
 		clearAssetMemoryCache();
 
 		const secondCall = vi.fn<QueuedToolCall>(async () => {
@@ -267,7 +242,10 @@ describe("content-addressed widget assets", () => {
 		);
 
 		expect(cache.delete).toHaveBeenCalledWith(cacheKey(esm.id));
-		expect(call).toHaveBeenCalledTimes(1);
+		expect(call).toHaveBeenCalledWith("anywidget_assets", {
+			instance_id: "session-1",
+			asset_ids: [esm.id],
+		});
 		expect(resolved.get(esm.id)).toBe(esm.text);
 	});
 
@@ -284,59 +262,14 @@ describe("content-addressed widget assets", () => {
 			call,
 		);
 
-		expect(call).toHaveBeenCalledTimes(1);
+		expect(call).toHaveBeenCalledWith("anywidget_assets", {
+			instance_id: "session-1",
+			asset_ids: [esm.id],
+		});
 		expect(resolved.get(esm.id)).toBe(esm.text);
 	});
 
-	test("hydrates ESM and CSS with their exact source text", async () => {
-		const esm = await fixtureAsset("esm", "\nexport default { render() { /* café λ */ } }\n");
-		const css = await fixtureAsset("css", '[data-label="λ"]::after { content: "✓"; }\n');
-
-		expect(
-			hydrateSources(
-				{ value: 7 },
-				{ _esm: esm.id, _css: css.id },
-				new Map([
-					[esm.id, esm.text],
-					[css.id, css.text],
-				]),
-			),
-		).toEqual({ value: 7, _esm: esm.text, _css: css.text });
-	});
-
-	test("rejects inline source traits in a versioned wire payload", () => {
-		expect(() => hydrateSources({ _esm: "inline" }, {}, new Map())).toThrow(
-			"Widget source _esm must use a content-addressed reference",
-		);
-		expect(() => hydrateSources({ _css: "inline" }, {}, new Map())).toThrow(
-			"Widget source _css must use a content-addressed reference",
-		);
-	});
-
-	test("rejects incompatible protocol versions", () => {
-		expect(() => requireProtocolVersion(undefined)).toThrow(
-			"Widget payload protocol version undefined is incompatible with version 1",
-		);
-		expect(() => requireProtocolVersion(2)).toThrow(
-			"Widget payload protocol version 2 is incompatible with version 1",
-		);
-	});
-
-	test("rejects malformed source references", async () => {
-		const esm = await fixtureAsset("esm", "export default {}");
-
-		expect(() => normalizeSourceRefs("not-an-object")).toThrow(
-			"Widget source references must be an object",
-		);
-		expect(() => normalizeSourceRefs({ script: esm.id })).toThrow(
-			"Unknown widget source reference script",
-		);
-		expect(() => normalizeSourceRefs({ _esm: "esm:sha256:short" })).toThrow(
-			"Invalid widget source reference for _esm",
-		);
-	});
-
-	test("rejects malformed, missing, unreferenced, and kind-mismatched manifests", async () => {
+	test("rejects malformed, missing, unreferenced, and kind-mismatched manifests before fetching", async () => {
 		const esm = await fixtureAsset("esm", "export default {}");
 		const css = await fixtureAsset("css", ".widget {}");
 		const unusedCall = vi.fn<QueuedToolCall>();

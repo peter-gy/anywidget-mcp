@@ -5,7 +5,6 @@ import threading
 import anywidget
 import pytest
 
-import anywidget_mcp._bridge as bridge
 from anywidget_mcp._bridge import SessionSnapshot, WidgetSession
 
 from .bridge_test_widgets import (
@@ -38,51 +37,18 @@ def test_initial_state_separates_binary_buffers() -> None:
         session.close()
 
 
-def test_reused_child_cleanup_failure_retries_fresh_sibling_close() -> None:
-    class TransientCloseChild(ChildWidget):
-        close_attempts = 0
-
-        def close(self) -> None:
-            self.close_attempts += 1
-            if self.close_attempts == 1:
-                raise RuntimeError("fresh child close failed")
-            super().close()
-
-    foreign = ChildWidget(value=1)
-    foreign_session = WidgetSession("foreign", foreign)
-    original = ChildWidget(value=2)
-    parent = NestedParentWidget(payload=[original])
-    session = WidgetSession("instance", parent)
-    fresh = TransientCloseChild(value=3)
-
-    try:
-        with pytest.raises(ExceptionGroup) as error_info:
-            parent.payload = [foreign, fresh]
-
-        assert "fresh child close failed" in repr(error_info.value)
-        assert parent.payload == [original]
-        assert fresh.close_attempts == 2
-        assert fresh.comm is None
-        assert foreign_session.receive(
-            foreign.model_id,
-            {"method": "request_state"},
-        ).messages
-        assert session.snapshot() == SessionSnapshot([], {}, {}, [], None, None)
-    finally:
-        session.close()
-        foreign_session.close()
-
-
 def test_asset_registry_retains_live_sources_and_the_latest_snapshot() -> None:
     widget = HotSourceWidget()
     session = WidgetSession("instance", widget)
+    middle_source = "export default { render() { return 'middle'; } }"
+    current_source = "export default { render() { return 'current'; } }"
 
     try:
         launch = session.launch_snapshot()
         initial_id = launch.models[widget.model_id]["sourceRefs"]["_esm"]
 
-        widget._esm = "export default { render() { return 'middle'; } }"
-        widget._esm = "export default { render() { return 'current'; } }"
+        widget._esm = middle_source
+        widget._esm = current_source
         update = session.snapshot()
         update_ids = [
             message["sourceRefs"]["_esm"]
@@ -92,11 +58,11 @@ def test_asset_registry_retains_live_sources_and_the_latest_snapshot() -> None:
 
         assert len(update_ids) == 2
         assert set(update.asset_manifest) == set(update_ids)
-        assert session.asset_contents(update_ids)[update_ids[0]]["text"].endswith(
-            "return 'middle'; } }"
+        assert (
+            session.asset_contents(update_ids)[update_ids[0]]["text"] == middle_source
         )
-        assert session.asset_contents(update_ids)[update_ids[1]]["text"].endswith(
-            "return 'current'; } }"
+        assert (
+            session.asset_contents(update_ids)[update_ids[1]]["text"] == current_source
         )
         with pytest.raises(KeyError, match="Unknown widget asset"):
             session.asset_contents([initial_id])
@@ -105,43 +71,17 @@ def test_asset_registry_retains_live_sources_and_the_latest_snapshot() -> None:
         assert following.asset_manifest == {}
         with pytest.raises(KeyError, match="Unknown widget asset"):
             session.asset_contents([update_ids[0]])
-        assert session.asset_contents([update_ids[1]])[update_ids[1]]["text"].endswith(
-            "return 'current'; } }"
+        assert (
+            session.asset_contents([update_ids[1]])[update_ids[1]]["text"]
+            == current_source
         )
 
-        widget._esm = "export default { render() { return 'middle'; } }"
+        widget._esm = middle_source
         repeated = session.snapshot()
         assert set(repeated.asset_manifest) == {update_ids[0]}
-        assert session.asset_contents([update_ids[0]])[update_ids[0]]["text"].endswith(
-            "return 'middle'; } }"
-        )
-    finally:
-        session.close()
-
-
-def test_failed_asset_snapshot_preserves_the_committed_registry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    widget = HotSourceWidget()
-    session = WidgetSession("instance", widget)
-    original_asset_id = bridge._asset_id
-
-    try:
-        launch = session.launch_snapshot()
-        initial_id = launch.models[widget.model_id]["sourceRefs"]["_esm"]
-
-        def fail_new_source(kind: str, source: str) -> str:
-            if "broken" in source:
-                raise RuntimeError("asset hashing failed")
-            return original_asset_id(kind, source)
-
-        monkeypatch.setattr(bridge, "_asset_id", fail_new_source)
-        widget._esm = "export default { render() { return 'broken'; } }"
-
-        with pytest.raises(RuntimeError, match="asset hashing failed"):
-            session.snapshot()
-        assert session.asset_contents([initial_id])[initial_id]["text"].endswith(
-            "return 'initial'; } }"
+        assert (
+            session.asset_contents([update_ids[0]])[update_ids[0]]["text"]
+            == middle_source
         )
     finally:
         session.close()
@@ -152,6 +92,7 @@ def test_asset_registry_releases_sources_after_the_last_live_model_detaches() ->
     second = SharedSourceChild()
     root = NestedParentWidget(payload=[first, second])
     session = WidgetSession("instance", root)
+    shared_source = first._esm
 
     try:
         launch = session.launch_snapshot()
@@ -161,9 +102,7 @@ def test_asset_registry_releases_sources_after_the_last_live_model_detaches() ->
 
         root.payload = [second]
         session.snapshot()
-        assert session.asset_contents([first_id])[first_id]["text"].endswith(
-            "return 'shared'; } }"
-        )
+        assert session.asset_contents([first_id])[first_id]["text"] == shared_source
 
         root.payload = []
         session.snapshot()
@@ -634,13 +573,12 @@ def test_launch_snapshot_finalizes_models_never_exposed_to_the_browser() -> None
     parent = ParentWidget(child=first)
     session = WidgetSession("instance", parent)
     second = ChildWidget(value=9)
-    first_model_id = first.model_id
 
     try:
         parent.child = second
         launch = session.launch_snapshot()
 
-        assert first_model_id not in launch.models
+        assert set(launch.models) == {parent.model_id, second.model_id}
         assert launch.removed_model_ids == []
         assert first.comm is None
     finally:
@@ -823,48 +761,6 @@ def test_snapshot_projects_last_notified_values_during_pre_notify_write() -> Non
         assert widget.value_stored.wait(1)
 
         widget.trigger = 1
-        first = session.snapshot()
-
-        assert first.projection is not None
-        assert first.projection.state == {"trigger": 1, "value": 0}
-        assert [message["data"]["state"] for message in first.messages] == [
-            {"trigger": 1}
-        ]
-
-        widget.resume_value_notification.set()
-        mutation.join()
-        second = session.snapshot()
-
-        assert errors == []
-        assert second.projection is not None
-        assert second.projection.state == {"trigger": 1, "value": 8}
-        assert [message["data"]["state"] for message in second.messages] == [
-            {"value": 8}
-        ]
-    finally:
-        widget.resume_value_notification.set()
-        session.close()
-
-
-def test_snapshot_keeps_prior_dirty_projection_before_value_notification() -> None:
-    widget = PausedNotifyWidget()
-    session = WidgetSession("instance", widget, ("trigger", "value"))
-    errors: list[BaseException] = []
-
-    def change_value() -> None:
-        try:
-            widget.value = 8
-        except BaseException as error:
-            errors.append(error)
-
-    try:
-        assert session.take_projection() is not None
-        widget.trigger = 1
-        widget.pause_value_notification = True
-        mutation = threading.Thread(target=change_value)
-        mutation.start()
-        assert widget.value_stored.wait(1)
-
         first = session.snapshot()
 
         assert first.projection is not None

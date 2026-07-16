@@ -534,7 +534,7 @@ describe("WidgetRuntime command lifecycle", () => {
 		await runtime.dispose();
 	});
 
-	test("does not dispatch a command aborted during queue handoff", async () => {
+	test("skips a command aborted during queue handoff", async () => {
 		const callServerTool = vi.fn().mockResolvedValue({ content: [] });
 		const calls = new ToolCallQueue({ callServerTool } as unknown as App);
 		const runtime = new WidgetRuntime(

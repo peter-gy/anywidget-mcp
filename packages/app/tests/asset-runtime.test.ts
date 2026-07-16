@@ -82,6 +82,84 @@ class RecordingBinding implements RuntimeBinding {
 	async dispose(): Promise<void> {}
 }
 
+type RuntimePayload = Parameters<typeof WidgetRuntime.create>[0];
+
+function runtimePayload(overrides: Partial<RuntimePayload> = {}): RuntimePayload {
+	return {
+		protocolVersion: 1,
+		instanceId: "invalid-session",
+		rootModelId: "root-model",
+		assetManifest: {},
+		models: {
+			"root-model": {
+				modelId: "root-model",
+				state: {},
+			},
+		},
+		...overrides,
+	};
+}
+
+const invalidLaunches: Array<[string, RuntimePayload, string]> = [
+	[
+		"an unversioned payload",
+		runtimePayload({ protocolVersion: undefined }),
+		"Widget payload protocol version undefined is incompatible with version 1",
+	],
+	[
+		"an incompatible protocol version",
+		runtimePayload({ protocolVersion: 2 }),
+		"Widget payload protocol version 2 is incompatible with version 1",
+	],
+	[
+		"a missing root model ID",
+		runtimePayload({ rootModelId: undefined, models: {} }),
+		"Missing root model ID",
+	],
+	[
+		"an inline source",
+		runtimePayload({
+			models: {
+				"root-model": {
+					state: { _esm: "export default { render() {} }" },
+				},
+			},
+		}),
+		"Widget source _esm must use a content-addressed reference",
+	],
+	[
+		"non-object source references",
+		runtimePayload({
+			models: { "root-model": { state: {}, sourceRefs: "not-an-object" } },
+		}),
+		"Widget source references must be an object",
+	],
+	[
+		"an unknown source reference",
+		runtimePayload({
+			models: {
+				"root-model": {
+					state: {},
+					sourceRefs: { script: `esm:sha256:${"0".repeat(64)}` },
+				},
+			},
+		}),
+		"Unknown widget source reference script",
+	],
+	[
+		"an invalid source reference",
+		runtimePayload({
+			models: {
+				"root-model": {
+					state: {},
+					sourceRefs: { _esm: "esm:sha256:short" },
+				},
+			},
+		}),
+		"Invalid widget source reference for _esm",
+	],
+];
+
 describe("WidgetRuntime asset hydration", () => {
 	beforeEach(() => {
 		clearAssetMemoryCache();
@@ -153,16 +231,15 @@ describe("WidgetRuntime asset hydration", () => {
 		expect(root.get("value")).toBe(1);
 		expect(root.get("_esm")).toBe(launchedEsm.text);
 		expect(root.get("_css")).toBe(launchedCss.text);
-		expect(callServerTool).toHaveBeenCalledTimes(1);
-		expect(callServerTool).toHaveBeenCalledWith(
-			{
-				name: "anywidget_assets",
-				arguments: {
-					instance_id: "session-1",
-					asset_ids: [initialEsm.id, initialCss.id, launchedEsm.id, launchedCss.id],
-				},
-			},
-			undefined,
+		const assetRequest = callServerTool.mock.calls.find(
+			([request]) => request.name === "anywidget_assets",
+		)?.[0];
+		expect(assetRequest).toMatchObject({
+			name: "anywidget_assets",
+			arguments: { instance_id: "session-1" },
+		});
+		expect(new Set(assetRequest?.arguments?.asset_ids as string[])).toEqual(
+			new Set([initialEsm.id, initialCss.id, launchedEsm.id, launchedCss.id]),
 		);
 
 		await runtime.dispose();
@@ -267,100 +344,27 @@ describe("WidgetRuntime asset hydration", () => {
 		await runtime.dispose();
 	});
 
-	test("rejects an unversioned launch and disposes its server session", async () => {
-		const app = {
-			callServerTool: vi.fn().mockResolvedValue({ content: [] }),
-			getHostCapabilities: () => ({}),
-			updateModelContext: vi.fn().mockResolvedValue({}),
-		} as unknown as App;
+	test.each(invalidLaunches)(
+		"rejects %s and disposes its server session",
+		async (_case, payload, error) => {
+			const app = {
+				callServerTool: vi.fn().mockResolvedValue({ content: [] }),
+				getHostCapabilities: () => ({}),
+				updateModelContext: vi.fn().mockResolvedValue({}),
+			} as unknown as App;
 
-		await expect(
-			WidgetRuntime.create(
+			await expect(
+				WidgetRuntime.create(payload, new ToolCallQueue(app), app, Promise.resolve()),
+			).rejects.toThrow(error);
+			expect(app.callServerTool).toHaveBeenCalledWith(
 				{
-					instanceId: "session-1",
-					rootModelId: "root-model",
-					assetManifest: {},
-					models: {},
+					name: "anywidget_dispose",
+					arguments: { instance_id: "invalid-session" },
 				},
-				new ToolCallQueue(app),
-				app,
-				Promise.resolve(),
-			),
-		).rejects.toThrow("Widget payload protocol version undefined is incompatible with version 1");
-		expect(app.callServerTool).toHaveBeenCalledOnce();
-		expect(app.callServerTool).toHaveBeenCalledWith(
-			{
-				name: "anywidget_dispose",
-				arguments: { instance_id: "session-1" },
-			},
-			{ signal: expect.any(AbortSignal) },
-		);
-	});
-
-	test("rejects a launch without a root model and disposes its server session", async () => {
-		const app = {
-			callServerTool: vi.fn().mockResolvedValue({ content: [] }),
-			getHostCapabilities: () => ({}),
-			updateModelContext: vi.fn().mockResolvedValue({}),
-		} as unknown as App;
-
-		await expect(
-			WidgetRuntime.create(
-				{
-					protocolVersion: 1,
-					instanceId: "missing-root-session",
-					assetManifest: {},
-					models: {},
-				},
-				new ToolCallQueue(app),
-				app,
-				Promise.resolve(),
-			),
-		).rejects.toThrow("Missing root model ID");
-		expect(app.callServerTool).toHaveBeenCalledOnce();
-		expect(app.callServerTool).toHaveBeenCalledWith(
-			{
-				name: "anywidget_dispose",
-				arguments: { instance_id: "missing-root-session" },
-			},
-			{ signal: expect.any(AbortSignal) },
-		);
-	});
-
-	test("rejects inline launch sources and disposes their server session", async () => {
-		const app = {
-			callServerTool: vi.fn().mockResolvedValue({ content: [] }),
-			getHostCapabilities: () => ({}),
-			updateModelContext: vi.fn().mockResolvedValue({}),
-		} as unknown as App;
-
-		await expect(
-			WidgetRuntime.create(
-				{
-					protocolVersion: 1,
-					instanceId: "inline-session",
-					rootModelId: "root-model",
-					assetManifest: {},
-					models: {
-						"root-model": {
-							state: { _esm: "export default { render() {} }" },
-						},
-					},
-				},
-				new ToolCallQueue(app),
-				app,
-				Promise.resolve(),
-			),
-		).rejects.toThrow("Widget source _esm must use a content-addressed reference");
-		expect(app.callServerTool).toHaveBeenCalledOnce();
-		expect(app.callServerTool).toHaveBeenCalledWith(
-			{
-				name: "anywidget_dispose",
-				arguments: { instance_id: "inline-session" },
-			},
-			{ signal: expect.any(AbortSignal) },
-		);
-	});
+				{ signal: expect.any(AbortSignal) },
+			);
+		},
+	);
 
 	test("preserves the creation error when the host ignores disposal cancellation", async () => {
 		vi.useFakeTimers();
@@ -538,11 +542,7 @@ describe("WidgetRuntime asset hydration", () => {
 		).rejects.toThrow(`Widget asset response failed verification for ${esm.id}`);
 
 		expect(names).toEqual(["anywidget_assets", "anywidget_dispose"]);
-		const disposeCalls = callServerTool.mock.calls.filter(
-			([request]) => request.name === "anywidget_dispose",
-		);
-		expect(disposeCalls).toHaveLength(1);
-		expect(disposeCalls[0]?.[0]).toEqual({
+		expect(callServerTool.mock.calls.at(-1)?.[0]).toEqual({
 			name: "anywidget_dispose",
 			arguments: { instance_id: "failed-session" },
 		});

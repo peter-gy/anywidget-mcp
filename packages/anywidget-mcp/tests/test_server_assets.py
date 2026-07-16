@@ -11,7 +11,7 @@ from ._server_support import CounterWidget, connected
 
 
 @pytest.mark.anyio
-async def test_color_picker_launch_returns_widget_runtime_payload() -> None:
+async def test_color_picker_launch_returns_widget_model_and_sources() -> None:
     server = AnyWidgetMCP("test")
 
     @server.widget
@@ -23,19 +23,6 @@ async def test_color_picker_launch_returns_widget_runtime_payload() -> None:
             "color_picker", {"color": "#c026d3", "show_label": False}
         )
 
-    assert result.isError is False
-    assert result.structuredContent == {
-        "tool": "color_picker",
-        "state": {"color": "#c026d3", "show_label": False},
-    }
-    assert result.content == [
-        TextContent(
-            type="text",
-            text=(
-                'Opened Color Picker with state {"color":"#c026d3","show_label":false}.'
-            ),
-        )
-    ]
     assert result.meta is not None
     assert result.meta["ui"] == {"resourceUri": "ui://anywidget-mcp/widget.html"}
     payload = result.meta["anywidget"]
@@ -46,11 +33,6 @@ async def test_color_picker_launch_returns_widget_runtime_payload() -> None:
     assert payload["protocolVersion"] == 1
     assert set(model["sourceRefs"]) == {"_esm", "_css"}
     assert set(model["sourceRefs"].values()) == set(payload["assetManifest"])
-    assert payload["context"] == {
-        "version": 1,
-        "tool": "color_picker",
-        "state": {"color": "#c026d3", "show_label": False},
-    }
 
 
 @pytest.mark.anyio

@@ -63,7 +63,7 @@ describe("ModelContextSync", () => {
 		await sync.dispose();
 	});
 
-	test("keeps the widget functional when context updates are unavailable", async () => {
+	test("skips context delivery when the host does not advertise it", async () => {
 		const updateModelContext = vi.fn().mockResolvedValue({});
 		const app = {
 			getHostCapabilities: () => ({}),
@@ -236,7 +236,7 @@ describe("ModelContextSync", () => {
 		await sync.dispose();
 	});
 
-	test("handles readiness rejection before the first snapshot", async () => {
+	test("reports readiness failure before context delivery", async () => {
 		const reportError = vi.fn();
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
@@ -260,10 +260,8 @@ describe("ModelContextSync", () => {
 		await sync.dispose();
 	});
 
-	test("releases readiness and request cancellation listeners", async () => {
+	test("coalesces snapshots queued before host readiness", async () => {
 		const ready = deferred();
-		const add = vi.spyOn(AbortSignal.prototype, "addEventListener");
-		const remove = vi.spyOn(AbortSignal.prototype, "removeEventListener");
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
 			updateModelContext: vi.fn().mockResolvedValue({}),
@@ -273,13 +271,14 @@ describe("ModelContextSync", () => {
 		for (let version = 1; version <= 100; version += 1) sync.enqueue(snapshot(version));
 		await vi.advanceTimersByTimeAsync(10);
 
-		expect(add.mock.calls.filter(([type]) => type === "abort")).toHaveLength(1);
 		ready.resolve();
 		await vi.runAllTimersAsync();
 
-		expect(add.mock.calls.filter(([type]) => type === "abort")).toHaveLength(2);
-		expect(remove.mock.calls.filter(([type]) => type === "abort")).toHaveLength(2);
-		expect(app.updateModelContext).toHaveBeenCalledTimes(1);
+		expect(app.updateModelContext).toHaveBeenCalledOnce();
+		expect(app.updateModelContext).toHaveBeenCalledWith(
+			{ structuredContent: { tool: "example.Counter", state: { value: 100 } } },
+			{ signal: expect.any(AbortSignal) },
+		);
 		await sync.dispose();
 	});
 

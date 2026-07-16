@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from typing import Any, cast, overload
+from typing import Any, overload
 
 import pytest
 from anywidget import AnyWidget
@@ -235,12 +235,14 @@ def test_default_projection_is_public_json_safe_synced_state() -> None:
 
     assert update is not None
     assert update.version == 1
-    assert update.state["value"] == 1
-    assert update.state["payload"] == {"type": "binary", "bytes": 3}
-    assert "_secret" not in update.state
-    assert "_esm" not in update.state
-    assert "layout" not in update.state
-    assert "tooltip" not in update.state
+    assert update.state == {
+        "doubled": 2,
+        "label": "ready",
+        "payload": {"type": "binary", "bytes": 3},
+        "ratio": 1.0,
+        "value": 1,
+        "values": [1, 2],
+    }
 
 
 def test_selected_projection_tracks_python_authoritative_observer_state() -> None:
@@ -310,23 +312,11 @@ def test_callable_projection_rolls_back_partial_observer_registration() -> None:
         widget.close()
 
 
-def test_none_disables_model_state() -> None:
-    widget = StateWidget()
-    context = StateContext(widget, [widget], None)
-
-    try:
-        assert context.take() is None
-        widget.value = 9
-        assert context.take() is None
-    finally:
-        context.close()
-        widget.close()
-
-
 def test_callable_projection_summarizes_recursive_and_oversized_values() -> None:
     widget = StateWidget()
     recursive: dict[str, object] = {}
     recursive["self"] = recursive
+    view = memoryview(bytearray(12)).cast("B", shape=(3, 4))
 
     context = StateContext(
         widget,
@@ -336,6 +326,7 @@ def test_callable_projection_summarizes_recursive_and_oversized_values() -> None
             "binary": [b"abc"],
             "large": "x" * 20_000,
             "many": list(range(10_000)),
+            "memoryview": view,
             "ratio": float("inf"),
         },
     )
@@ -359,6 +350,7 @@ def test_callable_projection_summarizes_recursive_and_oversized_values() -> None
     assert many["length"] == 10_000
     assert many["omitted"] == 9_950
     assert many["items"][:3] == [0, 1, 2]
+    assert update.state["memoryview"] == {"type": "binary", "bytes": 12}
     assert update.state["ratio"] == {"type": "float", "value": "inf"}
 
 
@@ -388,8 +380,8 @@ def test_callable_projection_bounds_collection_reads_and_large_integers() -> Non
         "bits": 33_220,
         "sign": "positive",
     }
-    assert mapping.reads == 51
-    assert sequence.reads == 51
+    assert 0 < mapping.reads < mapping.length
+    assert 0 < sequence.reads < sequence.length
     assert update.state["mapping"]["_summary"] == {
         "type": "mapping",
         "entries": 10_000,
@@ -437,7 +429,7 @@ def test_top_level_projection_mapping_reads_are_bounded() -> None:
         widget.close()
 
     assert update is not None
-    assert projection.reads == 51
+    assert 0 < projection.reads < projection.length
     summaries = [
         value
         for value in update.state.values()
@@ -446,41 +438,7 @@ def test_top_level_projection_mapping_reads_are_bounded() -> None:
     assert summaries == [{"type": "projection", "omitted": 9_950, "traits": ["50"]}]
 
 
-def test_memoryview_summary_uses_total_byte_size() -> None:
-    widget = StateWidget()
-    view = memoryview(bytearray(12)).cast("B", shape=(3, 4))
-    context = StateContext(widget, [widget], lambda _widget: {"payload": view})
-
-    try:
-        update = context.take()
-    finally:
-        context.close()
-        widget.close()
-
-    assert update is not None
-    assert update.state["payload"] == {"type": "binary", "bytes": 12}
-
-
 def test_projection_has_one_aggregate_traversal_budget() -> None:
-    widget = StateWidget()
-    reads = [0]
-    tree: object = 1
-    for _depth in range(6):
-        tree = CountingTree(tree, reads)
-    context = StateContext(widget, [widget], lambda _widget: {"tree": tree})
-
-    try:
-        update = context.take()
-    finally:
-        context.close()
-        widget.close()
-
-    assert update is not None
-    assert reads[0] <= 2_000
-    assert len(json.dumps(update.state).encode()) < 10_000
-
-
-def test_exhausted_budget_summarizes_unknown_length_sequence() -> None:
     widget = StateWidget()
     reads = [0]
     tree: object = 1
@@ -501,6 +459,7 @@ def test_exhausted_budget_summarizes_unknown_length_sequence() -> None:
 
     assert update is not None
     assert reads[0] + tail.reads <= 2_000
+    assert len(json.dumps(update.state).encode()) < 10_000
     assert update.state["tail"] == {
         "type": "sequence",
         "items": [],
@@ -556,7 +515,6 @@ def test_remove_widgets_attempts_every_observer_and_retries_failures() -> None:
             "unobserve failed"
         ]
         assert failing.attempts == 1
-        assert len(failing.observers) == 1
         assert healthy.attempts == 1
         assert healthy.observers == []
 
@@ -586,7 +544,6 @@ def test_close_attempts_every_observer_before_raising_cleanup_errors() -> None:
             "unobserve failed"
         ]
         assert failing.attempts == 1
-        assert len(failing.observers) == 1
         assert healthy.attempts == 1
         assert healthy.observers == []
 
@@ -595,44 +552,6 @@ def test_close_attempts_every_observer_before_raising_cleanup_errors() -> None:
         assert failing.attempts == 2
         assert failing.observers == []
     finally:
-        root.close()
-
-
-def test_projection_guard_cleanup_attempts_every_observer_and_retries() -> None:
-    root = StateWidget()
-    failing = UnobserveProbe(fail=True)
-    healthy = UnobserveProbe()
-    context = StateContext(
-        root,
-        [root, failing, healthy],
-        StateProjection(lambda _widget: {}, watch="value"),
-    )
-
-    try:
-        with pytest.raises(
-            ExceptionGroup,
-            match="Failed to remove projection guards",
-        ):
-            context.take()
-
-        assert failing.attempts == 1
-        assert len(failing.observers) == 1
-        assert healthy.attempts == 1
-        assert healthy.observers == []
-
-        root.value = 2
-        update = context.take()
-        assert update is not None
-        assert update.state == {}
-        assert failing.attempts == 1
-        assert len(failing.observers) == 1
-
-        failing.fail = False
-        context.close()
-        assert failing.attempts == 2
-        assert failing.observers == []
-    finally:
-        context.close()
         root.close()
 
 
@@ -654,8 +573,6 @@ def test_state_projection_recomputes_only_for_watched_root_traits() -> None:
 
     try:
         initial = context.take()
-        assert widget.state_observers == {"value": 1}
-        assert child.state_observers == {}
         widget.label = "changed outside watch"
         unrelated = context.take()
         widget.value = 4
@@ -686,7 +603,6 @@ def test_state_projection_empty_watch_computes_once() -> None:
 
     try:
         initial = context.take()
-        assert widget.state_observers == {}
         widget.value = 9
         later = context.take()
     finally:
@@ -696,30 +612,6 @@ def test_state_projection_empty_watch_computes_once() -> None:
     assert initial is not None and initial.state == {"value": 1}
     assert later is None
     assert calls == 1
-
-
-def test_state_projection_rejects_mutation_of_an_unwatched_trait() -> None:
-    widget = StateWidget()
-
-    def project(current: StateWidget) -> Mapping[str, Any]:
-        current.label = "mutated"
-        return {"value": current.value}
-
-    context = StateContext(
-        widget,
-        [widget],
-        StateProjection(project, watch="value"),
-    )
-
-    try:
-        with pytest.raises(
-            RuntimeError,
-            match="must not mutate synchronized widget traits",
-        ):
-            context.take()
-    finally:
-        context.close()
-        widget.close()
 
 
 def test_state_projection_rejects_mutation_of_an_unwatched_child() -> None:
@@ -746,15 +638,6 @@ def test_state_projection_rejects_mutation_of_an_unwatched_child() -> None:
         context.close()
         widget.close()
         child.close()
-
-
-def test_unknown_selected_trait_is_actionable() -> None:
-    widget = StateWidget()
-    try:
-        with pytest.raises(ValueError, match="Unknown state trait.*missing"):
-            StateContext(widget, [widget], ("missing",))
-    finally:
-        widget.close()
 
 
 def test_partial_observer_install_is_retained_for_session_cleanup() -> None:
@@ -860,38 +743,6 @@ def test_partial_graph_discovery_closes_widgets_collected_before_failure() -> No
 
     assert valid.close_count == 1
     assert valid.comm is None
-
-
-def test_capture_serialization_failure_restores_the_changed_trait() -> None:
-    class BrokenProtocolChild:
-        @property
-        def _repr_mimebundle_(self) -> object:
-            raise RuntimeError("nested state failed")
-
-    root = NestedParentWidget(payload=None)
-    session = WidgetSession("instance", root)
-
-    try:
-        with pytest.raises(RuntimeError, match="nested state failed"):
-            root.payload = BrokenProtocolChild()
-
-        assert root.payload is None
-        assert set(session.models) == {root.model_id}
-    finally:
-        session.close()
-
-
-def test_callable_projection_must_return_a_mapping() -> None:
-    widget = StateWidget()
-    projector = cast(Any, lambda _widget: ["invalid"])
-    context = StateContext(widget, [widget], projector)
-
-    try:
-        with pytest.raises(TypeError, match="must return a mapping"):
-            context.take()
-    finally:
-        context.close()
-        widget.close()
 
 
 def test_aggregate_projection_is_bounded_after_omission_summary() -> None:

@@ -52,22 +52,22 @@ describe("WidgetRuntime command scheduling", () => {
 
 		await vi.waitFor(() => expect(callServerTool).toHaveBeenCalledTimes(1));
 		first.resolve({ content: [] });
-		await vi.waitFor(() =>
-			expect(
-				callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_comm"),
-			).toHaveLength(4),
-		);
+		await vi.waitFor(() => {
+			const comms = callServerTool.mock.calls
+				.map(([request]) => request)
+				.filter((request) => request.name === "anywidget_comm");
+			expect(comms.map((request) => request.arguments?.model_id)).toEqual([
+				"model-a",
+				"model-a",
+				"model-a",
+				"model-b",
+			]);
+		});
 
 		const comms = callServerTool.mock.calls
 			.map(([request]) => request)
 			.filter((request) => request.name === "anywidget_comm")
 			.map((request) => request.arguments);
-		expect(comms.map((args) => args?.model_id)).toEqual([
-			"model-a",
-			"model-a",
-			"model-a",
-			"model-b",
-		]);
 		expect(comms.map((args) => (args?.data as { method?: string } | undefined)?.method)).toEqual([
 			"update",
 			"update",
@@ -114,13 +114,14 @@ describe("WidgetRuntime command scheduling", () => {
 			await vi.advanceTimersByTimeAsync(500);
 
 			first.resolve({ content: [] });
-			await vi.waitFor(() => expect(callServerTool).toHaveBeenCalledTimes(3));
+			await vi.waitFor(() =>
+				expect(callServerTool.mock.calls.map(([request]) => request.name)).toEqual([
+					"anywidget_comm",
+					"anywidget_comm",
+					"anywidget_poll",
+				]),
+			);
 			const requests = callServerTool.mock.calls.map(([request]) => request);
-			expect(requests.map((request) => request.name)).toEqual([
-				"anywidget_comm",
-				"anywidget_comm",
-				"anywidget_poll",
-			]);
 			expect(
 				requests.slice(0, 2).map((request) => {
 					const data = request.arguments?.data as { method?: string };
@@ -132,109 +133,6 @@ describe("WidgetRuntime command scheduling", () => {
 		} finally {
 			vi.useRealTimers();
 		}
-	});
-
-	test("runs a dynamic initializer command inside the active protocol transaction", async () => {
-		const rootId = "root-model";
-		const childId = "dynamic-child";
-		const initialized: unknown[] = [];
-		const callServerTool = vi.fn(
-			async (request: {
-				name: string;
-				arguments?: Record<string, unknown>;
-			}): Promise<CallToolResult> => {
-				if (request.name === "anywidget_dispose") return { content: [] };
-				const data = request.arguments?.data as
-					| { method?: string; content?: Record<string, unknown> }
-					| undefined;
-				if (data?.method === "custom") {
-					return {
-						content: [],
-						_meta: {
-							anywidget: {
-								messages: [
-									{
-										modelId: childId,
-										data: {
-											method: "custom",
-											content: {
-												id: data.content?.id,
-												kind: "anywidget-command-response",
-												response: { ready: true },
-											},
-										},
-										buffers: [],
-									},
-								],
-							},
-						},
-					};
-				}
-				return {
-					content: [],
-					_meta: {
-						anywidget: {
-							models: {
-								[childId]: {
-									modelId: childId,
-									state: { _esm: "dynamic" },
-								},
-							},
-							messages: [],
-						},
-					},
-				};
-			},
-		);
-		const runtime = new WidgetRuntime(
-			{
-				instanceId: "instance-1",
-				rootModelId: rootId,
-				models: {
-					[rootId]: {
-						modelId: rootId,
-						state: { _esm: "root" },
-					},
-				},
-			},
-			new ToolCallQueue({ callServerTool } as unknown as App),
-			{
-				getHostCapabilities: () => ({}),
-				updateModelContext: vi.fn().mockResolvedValue({}),
-			} as unknown as App,
-			Promise.resolve(),
-			(bindingRuntime, model) => {
-				if (model.modelId === rootId) return new FakeBinding(model, []);
-				return new WidgetBinding(bindingRuntime, model, {
-					reportError: vi.fn(),
-					replaceCss: async () => undefined,
-					loadWidget: async () => ({
-						async initialize({ experimental }) {
-							const [result] = await experimental.invoke("initialize_child");
-							initialized.push(result);
-						},
-					}),
-				});
-			},
-		);
-
-		await expect(
-			runtime.send(rootId, { method: "update", state: {} }, [], "outer-operation"),
-		).resolves.toBeUndefined();
-
-		expect(initialized).toEqual([{ ready: true }]);
-		const comms = callServerTool.mock.calls
-			.map(([request]) => request)
-			.filter((request) => request.name === "anywidget_comm");
-		expect(comms).toHaveLength(2);
-		expect(
-			comms.map((request) => {
-				const data = request.arguments?.data as { method?: string };
-				return data.method;
-			}),
-		).toEqual(["update", "custom"]);
-
-		await runtime.dispose();
 	});
 
 	test("runs initializer cleanup once when its protocol command fails", async () => {
@@ -318,6 +216,7 @@ describe("WidgetRuntime command scheduling", () => {
 		const continueInitialize = deferred<void>();
 		const order: string[] = [];
 		const outerCustom: unknown[] = [];
+		const initialized: unknown[] = [];
 		const callServerTool = vi.fn(
 			async (request: {
 				name: string;
@@ -411,7 +310,8 @@ describe("WidgetRuntime command scheduling", () => {
 						async initialize({ model: childModel, experimental }) {
 							initializeStarted.resolve(undefined);
 							await continueInitialize.promise;
-							await experimental.invoke("initialize_child");
+							const [result] = await experimental.invoke("initialize_child");
+							initialized.push(result);
 							childModel.on("msg:custom", (content) => {
 								if (typeof content === "object" && content !== null && "source" in content)
 									outerCustom.push(content);
@@ -431,6 +331,7 @@ describe("WidgetRuntime command scheduling", () => {
 		await outer;
 
 		expect(order).toEqual(["O", "B", "C"]);
+		expect(initialized).toEqual([{ ready: true }]);
 		expect(outerCustom).toEqual([{ source: "outer" }]);
 		expect(runtime.model(childId).get("value")).toBe(2);
 		await runtime.dispose();

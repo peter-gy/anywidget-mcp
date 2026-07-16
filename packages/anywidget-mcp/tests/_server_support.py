@@ -12,6 +12,16 @@ from traitlets import Int, observe, validate
 from anywidget_mcp import AnyWidgetMCP
 
 
+def leaf_error_messages(error: BaseException) -> list[str]:
+    if isinstance(error, BaseExceptionGroup):
+        return [
+            message
+            for nested in error.exceptions
+            for message in leaf_error_messages(nested)
+        ]
+    return [str(error)]
+
+
 class CounterWidget(AnyWidget):
     _esm = "export default { render() {} }"
 

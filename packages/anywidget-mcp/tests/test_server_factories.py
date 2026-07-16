@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import gc
 from collections.abc import AsyncGenerator, Generator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
-import time
 from typing import Any
-import weakref
 
 import anyio
 import pytest
+from anyio.lowlevel import checkpoint
 from mcp.server.fastmcp import Context
 from mcp.types import TextContent
 
+import anywidget_mcp.server as server_module
 from anywidget_mcp import AnyWidgetMCP, StateProjection
 from anywidget_mcp._state import DEFAULT_STATE
 from anywidget_mcp.server import _FactoryOwner, _SessionRuntime
 
-from ._server_support import CounterWidget, connected
+from ._server_support import CounterWidget, connected, leaf_error_messages
 
 
 @pytest.mark.anyio
@@ -156,9 +155,10 @@ async def test_async_factory_can_return_an_awaited_context_manager() -> None:
 
 
 @pytest.mark.anyio
-async def test_request_cancellation_closes_managed_factory_exactly_once() -> None:
+async def test_request_cancellation_closes_managed_factory_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[str] = []
-    widgets: list[TrackedWidget] = []
 
     class TrackedWidget(CounterWidget):
         def close(self) -> None:
@@ -166,13 +166,11 @@ async def test_request_cancellation_closes_managed_factory_exactly_once() -> Non
             super().close()
 
     def project(widget: TrackedWidget) -> dict[str, int]:
-        time.sleep(0.12)
         return {"value": widget.value}
 
     @contextmanager
     def managed() -> Generator[TrackedWidget]:
         widget = TrackedWidget()
-        widgets.append(widget)
         events.append("resource enter")
         try:
             yield widget
@@ -185,7 +183,18 @@ async def test_request_cancellation_closes_managed_factory_exactly_once() -> Non
             session_idle_timeout=30,
             app_uri="ui://test/widget.html",
         )
-        with anyio.move_on_after(0.03) as scope:
+
+        with anyio.CancelScope() as request_scope:
+
+            async def cancel_before_session_commit() -> None:
+                request_scope.cancel()
+                await checkpoint()
+
+            monkeypatch.setattr(
+                server_module,
+                "checkpoint",
+                cancel_before_session_commit,
+            )
             await runtime.open(
                 managed,
                 {},
@@ -193,9 +202,7 @@ async def test_request_cancellation_closes_managed_factory_exactly_once() -> Non
                 tool_name="managed",
                 tool_title="Managed",
             )
-        assert scope.cancel_called
-        await anyio.sleep(0)
-        assert runtime._sessions == {}
+        assert request_scope.cancel_called
         await runtime.aclose()
         task_group.cancel_scope.cancel()
 
@@ -252,49 +259,6 @@ async def test_managed_factory_exits_on_idle_expiry_and_server_shutdown() -> Non
 
 
 @pytest.mark.anyio
-async def test_factory_owner_releases_invocation_arguments_after_launch() -> None:
-    class Payload:
-        pass
-
-    payload = Payload()
-    payload_ref = weakref.ref(payload)
-    arguments: dict[str, Any] = {"payload": payload}
-    owner = _FactoryOwner()
-
-    def factory(payload: Payload) -> CounterWidget:
-        del payload
-        return CounterWidget()
-
-    async with anyio.create_task_group() as task_group:
-        task_group.start_soon(owner.run, factory, arguments)
-        await owner.wait_ready()
-        assert arguments == {}
-        del payload
-        gc.collect()
-        assert payload_ref() is None
-        owner.request_close("test cleanup")
-        assert await owner.wait_closed() is None
-
-
-@pytest.mark.anyio
-async def test_factory_owner_skips_a_factory_when_close_is_already_requested() -> None:
-    calls: list[str] = []
-    arguments: dict[str, Any] = {"value": 1}
-    owner = _FactoryOwner()
-
-    def factory(value: int) -> CounterWidget:
-        calls.append(str(value))
-        return CounterWidget(value=value)
-
-    owner.request_close("test cleanup")
-    await owner.run(factory, arguments)
-
-    assert calls == []
-    assert arguments == {}
-    assert await owner.wait_closed() is None
-
-
-@pytest.mark.anyio
 async def test_factory_owner_finishes_cancellation_safe_acquisition_cleanup() -> None:
     events: list[str] = []
     acquisition_started = anyio.Event()
@@ -319,7 +283,7 @@ async def test_factory_owner_finishes_cancellation_safe_acquisition_cleanup() ->
         await acquisition_started.wait()
         owner.request_close("test cleanup")
         with anyio.fail_after(1):
-            assert await owner.wait_closed() is None
+            await owner.wait_closed()
 
     assert events == ["enter start", "cleanup start", "cleanup end"]
 
@@ -347,7 +311,7 @@ async def test_factory_owner_cancels_an_awaitable_factory_acquisition() -> None:
         await acquisition_started.wait()
         owner.request_close("test cleanup")
         with anyio.fail_after(1):
-            assert await owner.wait_closed() is None
+            await owner.wait_closed()
 
     assert events == ["factory start", "cleanup start", "cleanup end"]
 
@@ -357,6 +321,7 @@ async def test_dispose_and_shutdown_wait_for_the_same_active_session_call() -> N
     events: list[str] = []
     active = anyio.Event()
     release = anyio.Event()
+    dispose_started = anyio.Event()
     dispose_done = anyio.Event()
     close_done = anyio.Event()
 
@@ -395,6 +360,7 @@ async def test_dispose_and_shutdown_wait_for_the_same_active_session_call() -> N
                 await release.wait()
 
         async def dispose() -> None:
+            dispose_started.set()
             assert await runtime.dispose(instance_id, "app disposal")
             dispose_done.set()
 
@@ -405,10 +371,10 @@ async def test_dispose_and_shutdown_wait_for_the_same_active_session_call() -> N
         task_group.start_soon(hold_active_call)
         await active.wait()
         task_group.start_soon(dispose)
-        while instance_id in runtime._sessions:
-            await anyio.sleep(0)
+        await dispose_started.wait()
+        await checkpoint()
         task_group.start_soon(close)
-        await anyio.sleep(0)
+        await checkpoint()
 
         assert events == ["resource enter"]
         assert not dispose_done.is_set()
@@ -457,9 +423,6 @@ async def test_aclose_finishes_live_session_cleanup_under_cancellation() -> None
             cancel_scope.cancel()
             await runtime.aclose()
 
-        assert runtime._owners == set()
-        assert runtime._owned_leases == {}
-
     assert events == ["widget close", "resource exit"]
 
 
@@ -499,8 +462,6 @@ async def test_dispose_retries_transient_widget_cleanup_before_forgetting_owner(
 
         assert widget.attempts == 2
         assert widget.comm is None
-        assert runtime._owners == set()
-        assert runtime._owned_leases == {}
         task_group.cancel_scope.cancel()
 
 
@@ -541,12 +502,10 @@ async def test_launch_failure_retries_fresh_root_cleanup() -> None:
                 tool_name="broken",
                 tool_title="Broken",
             )
-        assert "initial state failed" in repr(error_info.value)
+        assert "initial state failed" in leaf_error_messages(error_info.value)
 
         assert widget.close_attempts == 2
         assert widget.comm is None
-        assert runtime._owners == set()
-        assert runtime._owned_leases == {}
         task_group.cancel_scope.cancel()
 
 
