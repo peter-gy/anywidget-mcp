@@ -1,0 +1,17 @@
+{
+	"name": "@anywidget-mcp/docs",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "vitepress build",
+		"dev": "vitepress dev",
+		"typecheck": "tsc -p tsconfig.json --noEmit"
+	},
+	"devDependencies": {
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vitepress": "catalog:",
+		"vue": "catalog:"
+	}
+}

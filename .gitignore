@@ -15,5 +15,7 @@ wheels/
 .venv
 
 # Generated workspace artifacts
+**/.vitepress/cache/
+**/.vitepress/dist/
 packages/*/dist/
 packages/anywidget-mcp/src/anywidget_mcp/static/

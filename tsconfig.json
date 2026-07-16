@@ -1,5 +1,5 @@
 {
-	"include": ["vite.config.ts", "packages/**/*.ts"],
+	"include": ["apps/**/*.ts", "vite.config.ts", "packages/**/*.ts"],
 	"compilerOptions": {
 		"target": "ES2022",
 		"module": "ESNext",

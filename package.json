@@ -3,7 +3,7 @@
 	"private": true,
 	"scripts": {
 		"build": "vp run -r build",
-		"check": "vp check --no-error-on-unmatched-pattern development_docs packages \"*.json\" \"*.md\" \"*.toml\" \"*.ts\" \"*.yaml\" \"*.yml\"",
+		"check": "vp check --no-error-on-unmatched-pattern apps development_docs docs packages \"*.json\" \"*.md\" \"*.toml\" \"*.ts\" \"*.yaml\" \"*.yml\" && vp run -r typecheck",
 		"dev": "vp run @anywidget-mcp/python#dev",
 		"test": "vp run -r test"
 	},
@@ -11,7 +11,8 @@
 		"@types/node": "catalog:",
 		"typescript": "catalog:",
 		"vite": "catalog:",
-		"vite-plus": "catalog:"
+		"vite-plus": "catalog:",
+		"vue": "catalog:"
 	},
 	"engines": {
 		"node": ">=22.18.0"

@@ -2,6 +2,8 @@ import { defineConfig } from "vite-plus";
 
 const generated = [
 	"**/*.har",
+	"**/.vitepress/cache/**",
+	"**/.vitepress/dist/**",
 	"dist/**",
 	"packages/*/dist/**",
 	"packages/anywidget-mcp/src/anywidget_mcp/static/**",
