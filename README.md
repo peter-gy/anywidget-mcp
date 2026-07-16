@@ -16,7 +16,8 @@ Expose an installed widget class:
 anywidget-mcp serve wigglystuff:ColorPicker
 ```
 
-The target may also be a synchronous or asynchronous factory:
+The target may also be a factory that returns a widget directly or yields one
+from a synchronous or asynchronous context manager:
 
 ```sh
 anywidget-mcp serve my_widgets:create_picker
@@ -32,6 +33,10 @@ Inspect that contract before starting the server:
 anywidget-mcp inspect wigglystuff:ColorPicker
 anywidget-mcp inspect my_widgets:create_picker --json
 ```
+
+Inspection reports `widget-class` or `factory` as the target kind. FastMCP
+`Context` parameters are injected at call time and stay outside the displayed
+input schema.
 
 ## Serve one widget
 
@@ -72,9 +77,9 @@ mcp.run()
 ```
 
 Class names become snake-case tool names. `ColorPicker` registers
-`color_picker`, and `Slider2D` registers `slider_2d`. Use `name=`,
-`title=`, and `description=` when the host-facing contract needs another
-label.
+`color_picker`, and `Slider2D` registers `slider_2d`. Use `name=`, `title=`,
+`description=`, `annotations=`, and `icons=` to define the host-facing tool
+contract.
 
 Every invocation creates a fresh root widget and recursively enrolls widget
 references from synchronized dicts, lists, and tuples. AnyWidget subclasses
@@ -82,8 +87,10 @@ and descriptor-backed protocol objects use the same session. Repeated
 references use one model, and container changes enroll new models before the
 parent update reaches the browser.
 
-`AnyWidgetMCP.run()` closes live sessions when its owned runtime exits. Call
-`mcp.close()` when another application owns the server lifecycle.
+`AnyWidgetMCP` composes widget cleanup into the FastMCP lifespan. Server
+shutdown closes every widget session and exits each managed factory. Inside an
+active server lifespan, `await mcp.aclose()` closes all sessions early and
+stops accepting widget calls until the next lifespan starts.
 
 ## Attach to an existing FastMCP server
 
@@ -100,7 +107,9 @@ widgets = attach(mcp)
 widgets.widget(ColorPicker, state="color")
 ```
 
-The embedding application calls `widgets.close()` during shutdown.
+`attach()` composes cleanup with the server's existing lifespan. Inside an
+active lifespan, `await widgets.aclose()` closes all widget sessions early and
+stops accepting widget calls until the next lifespan starts.
 
 ## Prepare widgets with factories
 
@@ -120,30 +129,102 @@ def pick_color(color: str = "#315efb") -> ColorPicker:
     return ColorPicker(color=color)
 ```
 
-Async factories use the same decorator:
+Async factories use the same decorator. A FastMCP `Context` parameter receives
+the active request context and stays outside the MCP input schema:
 
 ```python
+from mcp.server.fastmcp import Context
+
+
 @mcp.widget
-async def prepared_picker(color: str = "#315efb") -> ColorPicker:
+async def prepared_picker(
+    color: str = "#315efb",
+    *,
+    ctx: Context,
+) -> ColorPicker:
+    await ctx.info(f"Opening {color}")
     return ColorPicker(color=color)
 ```
 
-The class or factory signature is the complete input contract. A minimal
-AnyWidget class whose constructor is `(*args, **kwargs)` produces an empty MCP
-input schema. Register a factory with named parameters when callers need to
-configure that widget.
+Use a context-managed factory when the widget owns a database, temporary file,
+model, or another resource that must remain open for the session:
+
+```python
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from anywidget_mcp import AnyWidgetMCP
+from mcp.server.fastmcp import Context
+
+from my_widgets import DatasetExplorer, open_dataset
+
+mcp = AnyWidgetMCP("Dataset tools")
+
+
+@mcp.widget
+@asynccontextmanager
+async def explore_dataset(
+    rows: list[str],
+    ctx: Context,
+) -> AsyncIterator[DatasetExplorer]:
+    await ctx.report_progress(0, 2, "Preparing dataset")
+    dataset = await open_dataset(rows)
+    try:
+        await ctx.report_progress(1, 2, "Opening explorer")
+        yield DatasetExplorer(dataset=dataset)
+    finally:
+        await dataset.aclose()
+```
+
+Factories may return either context-manager type. Each manager must yield an
+`AnyWidget`. The manager stays active until app disposal, idle expiry,
+`aclose()`, or server shutdown. The widget graph closes before the manager
+exits. The class or factory signature defines the input contract after FastMCP
+removes its injected `Context` parameter. A minimal AnyWidget class whose
+constructor is `(*args, **kwargs)` produces an empty input schema. Register a
+factory with named parameters when callers need to configure that widget.
+
+Cancellation interrupts factory acquisition. When a manager acquires a
+resource before its final pre-yield await, shield that partial-acquisition
+cleanup with `anyio.CancelScope(shield=True)`. Cleanup after a successful yield
+runs inside the protected session teardown path. An awaitable factory owns the
+same rollback until it returns its widget or manager.
+
+## Describe tool behavior
+
+`annotations` and `icons` use the standard MCP tool metadata types:
+
+```python
+from mcp.types import Icon, ToolAnnotations
+
+mcp.widget(
+    ColorPicker,
+    state="color",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    icons=[
+        Icon(
+            src="https://example.com/color-picker.svg",
+            mimeType="image/svg+xml",
+        )
+    ],
+)
+```
+
+`WidgetTools.widget()`, `AnyWidgetMCP.widget()`, and `serve()` accept both
+options. `serve()` also applies `icons` to its MCP server.
 
 ## Choose model-visible state
 
 The `state` option controls the concise widget state available to the model:
 
-| Value                     | Projection                                              |
-| ------------------------- | ------------------------------------------------------- |
-| Omitted                   | Public synchronized root traits except display metadata |
-| `"color"`                 | One selected root trait                                 |
-| `("color", "show_label")` | Selected root traits                                    |
-| `None`                    | State projection and model-context updates are disabled |
-| `lambda widget: {...}`    | A custom mapping derived from the widget                |
+| Value                                     | Projection                                              |
+| ----------------------------------------- | ------------------------------------------------------- |
+| Omitted                                   | Public synchronized root traits except display metadata |
+| `"color"`                                 | One selected root trait                                 |
+| `("color", "show_label")`                 | Selected root traits                                    |
+| `None`                                    | State projection and model-context updates are disabled |
+| `lambda widget: {...}`                    | A custom mapping updated from the complete widget graph |
+| `StateProjection(project, watch="value")` | A custom mapping updated by selected root traits        |
 
 The default omits the widget display traits `layout`, `tabbable`, and
 `tooltip`.
@@ -160,6 +241,30 @@ mcp.widget(
 )
 ```
 
+Use `StateProjection` to name the traits that can change that mapping:
+
+```python
+from anywidget_mcp import StateProjection
+
+
+def list_summary(widget: SortableList) -> dict[str, object]:
+    return {
+        "items": widget.value,
+        "count": len(widget.value),
+    }
+
+
+mcp.widget(
+    SortableList,
+    state=StateProjection(list_summary, watch="value"),
+)
+```
+
+`watch=None` invalidates when any trait in the enrolled widget graph changes. A
+string or sequence invalidates on those root traits. `watch=()` computes the
+projection once during launch. Every `StateProjection` computes an initial
+value.
+
 Projection callables are read-only. Mutating synchronized widget traits while
 building a projection returns a state-projection error.
 
@@ -174,8 +279,12 @@ results and model context use the registered tool name through the `tool`
 field.
 
 Binary values become `{"type": "binary", "bytes": N}`. Large or recursive
-values use deterministic bounded summaries. The complete widget graph, ESM,
-CSS, buffers, and comm messages stay in app metadata.
+values use deterministic bounded summaries. Runtime metadata carries the
+widget graph, buffers, comm messages, protocol version, and content-addressed
+references for ESM and CSS. The app verifies each source digest and caches the
+source in a bounded memory cache and browser storage before rendering.
+Versioned payloads use source references for `_esm` and `_css`. Browser storage
+is best effort and never owns the render lifecycle.
 
 ## Configure the MCP App resource
 
