@@ -25,20 +25,22 @@ Use package filters while iterating:
 ```sh
 pnpm --filter @anywidget-mcp/app test
 pnpm --filter @anywidget-mcp/python build
-pnpm --filter @anywidget-mcp/python build && uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests/test_server.py
+pnpm --filter @anywidget-mcp/python build && uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests/test_server_registration.py
 ```
 
 ## Architecture
 
 - `packages/app/` owns the browser MCP App, AnyWidget Frontend Model
-  implementation, model bindings, host context, bridge calls, and
-  `updateModelContext` delivery.
+  implementation, model bindings, host context, bridge calls, content-addressed
+  source resolution and caching, and `updateModelContext` delivery.
 - `packages/anywidget-mcp/src/anywidget_mcp/server.py` owns the public
   `WidgetTools`, `attach()`, `AnyWidgetMCP`, and `serve()` APIs, MCP resources,
-  tool registration, session leases, CORS, and shutdown. Every entry point uses
-  the same registration adapter.
+  compiled target registration, injected FastMCP context, managed factory
+  lifetimes, session leases, CORS, and async shutdown. Every entry point uses the
+  same registration adapter.
 - `packages/anywidget-mcp/src/anywidget_mcp/_bridge.py` owns widget identity,
-  graph enrollment, canonical comm messages, buffers, polling, and disposal.
+  graph enrollment, canonical comm messages, buffers, content-addressed source
+  externalization, polling, and disposal.
 - `packages/anywidget-mcp/src/anywidget_mcp/_state.py` owns model-visible
   projections, observation, deterministic summaries, and projection versions.
 - `packages/anywidget-mcp/` composes the private browser app into the
@@ -58,16 +60,19 @@ Keep relative imports inside `packages/app`.
 
 Python and the browser meet through four explicit protocol surfaces:
 
-1. MCP tool arguments create a fresh Python widget graph.
-2. Tool result metadata carries the full serialized model graph, queued launch
-   messages, buffers, ESM, CSS, and one matching initial state projection.
-3. App-visible comm tools carry canonical AnyWidget messages between the
-   browser models and Python traitlets.
+1. MCP tool arguments plus an injected FastMCP `Context` create a fresh Python
+   widget graph or enter a managed factory.
+2. Versioned tool result metadata carries the serialized model graph, queued
+   launch messages, buffers, content-addressed source references, an asset
+   manifest, and one matching initial state projection.
+3. Four app-visible tools provide source assets, canonical AnyWidget comms,
+   polling, and disposal through `anywidget_assets`, `anywidget_comm`,
+   `anywidget_poll`, and `anywidget_dispose`.
 4. `updateModelContext` publishes the latest complete model-visible projection
    after Python validation and observers run.
 
 Change both runtimes and their boundary tests when a message, metadata, trait,
-buffer, resource, or projection shape changes.
+buffer, resource, asset, protocol version, or projection shape changes.
 
 ## State invariant
 
@@ -82,9 +87,19 @@ one snapshot boundary. Default and selected projections serialize the last
 notified trait values. Custom projectors run only when live traits match that
 committed shadow, and they must not mutate synchronized traits. Launch messages
 are applied before bindings initialize, render, or publish initial context.
+`StateProjection` subscribes to the selected root traits. Temporary graph
+observers guard against projector mutations, then detach when projection
+finishes.
 
 Every comm and poll cycle keeps one operation ID through bounded transport
 retries. Python replays the complete success or error for a repeated comm ID.
+Poll replay identity includes the browser's acknowledged model-removal set.
+Detached comms remain live until the browser applies their removals and a later
+poll acknowledges those IDs.
+Live model sources, the latest snapshot, and bounded replay entries retain the
+source assets needed by those responses. Superseded unpinned versions are
+released during the next snapshot. Replay eviction releases versions retained
+by that replay.
 The runtime scheduler preserves API call order across models, custom messages,
 and polls. The browser queue holds each protocol transaction until its response
 is fully applied. Dynamic model initialization reuses the active transaction
@@ -99,7 +114,9 @@ replacement enrolls the new reachable graph before the parent reference update
 reaches the browser. Rejected replacements restore the owning model. Browser
 comms invalidate callable projections for protocol objects without trait
 observers. Observable protocol objects use the session notification gate.
-Disposal closes the full enrolled graph.
+Disposal closes the full enrolled graph before exiting its factory manager.
+App disposal, idle expiry, `aclose()`, and FastMCP lifespan exit use the same
+cleanup path.
 
 Registered tool names and titles are the model-facing identity. Python class
 paths remain runtime diagnostics. Tool results and model context use the
@@ -133,16 +150,19 @@ before creating a distribution.
 ## Test ownership
 
 - Python tests exercise public registration, schemas, session lifecycle,
-  recursive trait serialization, protocol-backed composition, state
-  projections, CLI behavior, and MCP metadata.
+  FastMCP context injection, managed factory cleanup, recursive trait
+  serialization, source manifests, protocol-backed composition, state
+  projections, async close behavior, CLI behavior, and MCP metadata.
 - App tests exercise model events, binary paths, binding lifecycle, ordered
-  tool calls, host behavior, model-context delivery, and teardown.
+  tool calls, protocol-version validation, source verification and caching,
+  host behavior, model-context delivery, and teardown.
 - Packaging checks build the wheel from the sdist and import it in a fresh
   environment.
 - Runtime changes finish with mcp-use Inspector Chat and `$agent-browser`.
   Exercise browser interaction, Python observer effects, model-context
-  readback, custom commands, child replacement, and hot reload where affected.
-  Check browser errors and close every browser session and local server.
+  readback, custom commands, child replacement, source fetch and cache behavior,
+  and hot reload where affected. Check browser errors and close every browser
+  session and local server.
 
 Use observable state or protocol responses in tests. Avoid elapsed-time
 assertions when an event, message, or DOM state can prove completion.
