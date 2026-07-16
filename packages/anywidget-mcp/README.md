@@ -1,8 +1,14 @@
 # anywidget-mcp
 
+[![PyPI](https://img.shields.io/pypi/v/anywidget-mcp.svg)](https://pypi.org/project/anywidget-mcp/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/peter-gy/anywidget-mcp/blob/main/LICENSE)
+
 `anywidget-mcp` exposes an AnyWidget class or factory as an interactive MCP
 App tool. Each tool call creates a fresh widget, renders it in the host, and
 keeps browser interaction synchronized with Python traitlets.
+
+[Read the documentation](https://peter-gy.github.io/anywidget-mcp/) for the
+quickstart, factory lifecycle, state projections, and deployment options.
 
 Install the adapter and the widget package you want to serve:
 

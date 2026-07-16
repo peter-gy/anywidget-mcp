@@ -30,6 +30,8 @@ import {
 import { beginRuntimeReplacement } from "./runtime-replacement";
 import { ToolCallQueue, type QueuedToolCall } from "./tool-calls";
 
+declare const __ANYWIDGET_MCP_VERSION__: string;
+
 interface RawModelPayload {
 	modelId?: string;
 	state?: State;
@@ -75,7 +77,7 @@ function startApp(): void {
 	status = getElement<HTMLElement>("status");
 	root = getElement<HTMLElement>("widget-root");
 	app = new App(
-		{ name: "anywidget MCP App", version: "0.1.0" },
+		{ name: "anywidget MCP App", version: __ANYWIDGET_MCP_VERSION__ },
 		{},
 		{ autoResize: true, strict: true },
 	);

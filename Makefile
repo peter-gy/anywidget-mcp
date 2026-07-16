@@ -16,6 +16,7 @@ check:
 
 package:
 	cmp -s README.md packages/anywidget-mcp/README.md
+	cmp -s LICENSE packages/anywidget-mcp/LICENSE
 	rm -rf dist
 	pnpm build
 	uv build --package anywidget-mcp --out-dir dist
