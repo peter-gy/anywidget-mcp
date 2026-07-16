@@ -97,9 +97,10 @@ uv run --package anywidget-mcp anywidget-mcp inspect wigglystuff:ColorPicker --j
 ```
 
 The inspector and server resolve the same `MODULE:OBJECT` target and use the
-same registration description. A class with variadic constructor parameters
-has an empty input schema. Use an explicit factory signature when the MCP tool
-accepts arguments.
+same compiled registration description. Inspection reports `widget-class` or
+`factory`. FastMCP `Context` parameters stay outside the input schema. A class
+with variadic constructor parameters has an empty input schema. Use an explicit
+factory signature when the MCP tool accepts arguments.
 
 Run the browser fixture used for protocol checks:
 
@@ -109,7 +110,11 @@ uv run --package anywidget-mcp python packages/anywidget-mcp/tests/fixtures/brow
 
 The fixture provides `bridge_probe` for binary state, custom commands, child
 replacement, and model context. It also provides `hot_reload_probe` for ESM
-and CSS replacement.
+and CSS replacement. `large_asset_probe` renders two models backed by one shared
+three-megabyte ESM source. Every probe exercises the versioned source-asset
+protocol. Initial and dynamic sources travel as content references, and the
+browser fetches missing text through `anywidget_assets` before initializing
+bindings.
 
 ## mcp-use Inspector Chat
 
@@ -138,8 +143,15 @@ Exercise the affected scenarios:
   the later Chat turn receives the updated nested state.
 - Replace the nested container and verify that repeated references resolve to
   one enrolled model while detached models disappear.
-- Invoke `hot_reload_probe`, then verify CSS and ESM replacement.
-- Launch a second probe and verify that it starts from fresh Python state.
+- Invoke `hot_reload_probe`, then verify that CSS and ESM replacement fetch and
+  apply their new source digests.
+- Launch a second probe and verify that it starts from fresh Python state while
+  previously verified source digests come from the browser cache.
+- Invoke `large_asset_probe` twice. Verify that both child models render, one
+  three-megabyte source digest appears in the cache, and the second launch
+  reuses it.
+- Inspect bridge calls and verify that each snapshot requests each missing
+  asset ID once through `anywidget_assets`.
 - Check page errors, browser console errors, and failed requests.
 
 Use a custom session ID for every `agent-browser` command. Close that session,
