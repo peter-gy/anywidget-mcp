@@ -72,8 +72,10 @@ interface WidgetBindingOptions {
 interface ActiveView {
 	element: HTMLElement;
 	parentSignal: AbortSignal;
+	owner: object;
 	generation?: BindingGeneration;
 	remove(): void;
+	release(): void;
 }
 
 interface BindingGeneration {
@@ -88,6 +90,17 @@ interface BindingGeneration {
 
 const INITIAL_SOURCE_REVISION_MILLISECONDS = 100;
 const MAX_INITIAL_SOURCE_REVISIONS = 16;
+const viewOwners = new WeakMap<HTMLElement, object>();
+
+function ownsView(view: ActiveView): boolean {
+	return viewOwners.get(view.element) === view.owner;
+}
+
+function clearOwnedView(view: ActiveView, release: boolean): void {
+	if (!ownsView(view)) return;
+	view.element.replaceChildren();
+	if (release) viewOwners.delete(view.element);
+}
 
 export class WidgetBinding implements RuntimeBinding {
 	private readonly controller = new AbortController();
@@ -167,18 +180,25 @@ export class WidgetBinding implements RuntimeBinding {
 		if (this.disposed || parentSignal.aborted) return;
 
 		let removed = false;
+		const owner = {};
 		const view: ActiveView = {
 			element,
 			parentSignal,
+			owner,
 			remove: () => {
 				if (removed) return;
 				removed = true;
-				parentSignal.removeEventListener("abort", view.remove);
+				parentSignal.removeEventListener("abort", view.release);
 				this.views.delete(view);
 			},
+			release: () => {
+				view.remove();
+				if (ownsView(view)) viewOwners.delete(element);
+			},
 		};
+		viewOwners.set(element, owner);
 		this.views.add(view);
-		parentSignal.addEventListener("abort", view.remove, { once: true });
+		parentSignal.addEventListener("abort", view.release, { once: true });
 
 		await this.lifecycleTask.catch(() => undefined);
 		const generation = this.generation;
@@ -208,7 +228,6 @@ export class WidgetBinding implements RuntimeBinding {
 		const views = Array.from(this.views);
 		for (const view of views) view.remove();
 		this.views.clear();
-		for (const view of views) view.element.replaceChildren();
 
 		const generation = this.generation;
 		this.generation = undefined;
@@ -216,6 +235,7 @@ export class WidgetBinding implements RuntimeBinding {
 
 		await Promise.allSettled([this.lifecycleTask, this.cssTask]);
 		await this.joinTeardownTasks();
+		for (const view of views) clearOwnedView(view, true);
 		const controller = new AbortController();
 		try {
 			await waitForTask(
@@ -352,13 +372,23 @@ export class WidgetBinding implements RuntimeBinding {
 			for (const view of this.views) {
 				if (view.generation !== previous) continue;
 				view.generation = undefined;
-				view.element.replaceChildren();
 			}
 			this.trackTeardown(this.destroyGeneration(previous));
 		}
 		if (this.disposed || controller.signal.aborted) return;
 
-		const next = await this.createGeneration(source, controller, call);
+		let next: BindingGeneration;
+		try {
+			next = await this.createGeneration(source, controller, call);
+		} catch (error) {
+			if (!this.disposed && version === this.esmVersion) {
+				await this.joinTeardownTasks();
+				if (!this.disposed && version === this.esmVersion) {
+					for (const view of this.views) clearOwnedView(view, false);
+				}
+			}
+			throw error;
+		}
 		if (this.disposed || controller.signal.aborted || version !== this.esmVersion) {
 			this.trackTeardown(this.destroyGeneration(next));
 			return;
@@ -491,9 +521,13 @@ export class WidgetBinding implements RuntimeBinding {
 			view.generation === generation
 		)
 			return;
+		if (!ownsView(view)) {
+			view.remove();
+			return;
+		}
 
 		view.generation = generation;
-		view.element.replaceChildren();
+		clearOwnedView(view, false);
 		const controller = new AbortController();
 		const signal = AbortSignal.any([view.parentSignal, generation.signal, controller.signal]);
 		const task = this.runRender(view.element, generation, signal);

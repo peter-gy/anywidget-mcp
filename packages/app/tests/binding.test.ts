@@ -39,6 +39,20 @@ function element(): HTMLElement {
 	return { replaceChildren: vi.fn() } as unknown as HTMLElement;
 }
 
+function trackedElement(): HTMLElement {
+	const children = new Set<Node>();
+	return {
+		append: (...nodes: Node[]) => {
+			for (const node of nodes) children.add(node);
+		},
+		contains: (node: Node | null) => node !== null && children.has(node),
+		replaceChildren: vi.fn((...nodes: Node[]) => {
+			children.clear();
+			for (const node of nodes) children.add(node);
+		}),
+	} as unknown as HTMLElement;
+}
+
 function deferred<T>(): {
 	promise: Promise<T>;
 	resolve: (value: T) => void;
@@ -226,12 +240,166 @@ describe("WidgetBinding live source lifecycle", () => {
 			"cleanup-model:first",
 			"render:second",
 		]);
-		expect(root.replaceChildren).toHaveBeenCalledTimes(3);
 		expect(loadWidget).toHaveBeenCalledWith("second", expect.any(AbortSignal));
 
 		await binding.dispose();
 		expect(events.slice(-2)).toEqual(["cleanup-view:second", "cleanup-model:second"]);
-		expect(root.replaceChildren).toHaveBeenCalledTimes(4);
+	});
+
+	test("keeps a rendered mount present through hot-reload cleanup", async () => {
+		const model = createModel({ _esm: "first" });
+		const root = trackedElement();
+		const mount = {} as Node;
+		const cleanup = deferred<void>();
+		let cleanupStarted = false;
+		let presentAfterCleanup: boolean | undefined;
+		let replacementRendered = false;
+		const binding = new WidgetBinding(createRuntime(), model, {
+			reportError: vi.fn(),
+			replaceCss: async () => undefined,
+			loadWidget: async (source) => ({
+				render: ({ el }) => {
+					if (source === "first") {
+						el.append(mount);
+						return async () => {
+							cleanupStarted = true;
+							await cleanup.promise;
+							presentAfterCleanup = el.contains(mount);
+						};
+					}
+					replacementRendered = true;
+				},
+			}),
+		});
+
+		await binding.initialize();
+		await binding.render(root, new AbortController().signal);
+		model.receive({ method: "update", state: { _esm: "second" } }, []);
+
+		await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+		expect(root.contains(mount)).toBe(true);
+		expect(replacementRendered).toBe(false);
+		cleanup.resolve(undefined);
+		await vi.waitFor(() => expect(replacementRendered).toBe(true));
+		expect(presentAfterCleanup).toBe(true);
+		await binding.dispose();
+	});
+
+	test("keeps a rendered mount present through disposal cleanup", async () => {
+		const root = trackedElement();
+		const mount = {} as Node;
+		const cleanup = deferred<void>();
+		let cleanupStarted = false;
+		let presentAfterCleanup: boolean | undefined;
+		const binding = new WidgetBinding(createRuntime(), createModel({ _esm: "first" }), {
+			reportError: vi.fn(),
+			replaceCss: async () => undefined,
+			loadWidget: async () => ({
+				render: ({ el }) => {
+					el.append(mount);
+					return async () => {
+						cleanupStarted = true;
+						await cleanup.promise;
+						presentAfterCleanup = el.contains(mount);
+					};
+				},
+			}),
+		});
+
+		await binding.initialize();
+		await binding.render(root, new AbortController().signal);
+		const disposal = binding.dispose();
+
+		await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+		expect(root.contains(mount)).toBe(true);
+		cleanup.resolve(undefined);
+		await disposal;
+		expect(presentAfterCleanup).toBe(true);
+		expect(root.contains(mount)).toBe(false);
+	});
+
+	test("preserves replacement-owned content when an old binding finishes disposal", async () => {
+		const root = trackedElement();
+		const oldMount = {} as Node;
+		const replacementMount = {} as Node;
+		const cleanup = deferred<void>();
+		let cleanupStarted = false;
+		const oldBinding = new WidgetBinding(createRuntime(), createModel({ _esm: "old" }), {
+			reportError: vi.fn(),
+			replaceCss: async () => undefined,
+			loadWidget: async () => ({
+				render: ({ el }) => {
+					el.append(oldMount);
+					return async () => {
+						cleanupStarted = true;
+						await cleanup.promise;
+					};
+				},
+			}),
+		});
+		const replacement = new WidgetBinding(createRuntime(), createModel({ _esm: "replacement" }), {
+			reportError: vi.fn(),
+			replaceCss: async () => undefined,
+			loadWidget: async () => ({
+				render: ({ el }) => el.append(replacementMount),
+			}),
+		});
+
+		await oldBinding.initialize();
+		await oldBinding.render(root, new AbortController().signal);
+		const oldDisposal = oldBinding.dispose();
+		await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+		expect(root.contains(oldMount)).toBe(true);
+
+		await replacement.initialize();
+		await replacement.render(root, new AbortController().signal);
+		expect(root.contains(replacementMount)).toBe(true);
+
+		cleanup.resolve(undefined);
+		await oldDisposal;
+		expect(root.contains(replacementMount)).toBe(true);
+
+		await replacement.dispose();
+	});
+
+	test("clears an owned stale mount after a failed hot reload finishes cleanup", async () => {
+		const model = createModel({ _esm: "working" });
+		const root = trackedElement();
+		const mount = {} as Node;
+		const cleanup = deferred<void>();
+		const reportError = vi.fn();
+		let cleanupStarted = false;
+		let presentAfterCleanup: boolean | undefined;
+		const binding = new WidgetBinding(createRuntime(), model, {
+			reportError,
+			replaceCss: async () => undefined,
+			loadWidget: async (source) => {
+				if (source === "broken") throw new Error("broken source");
+				return {
+					render: ({ el }: { el: HTMLElement }) => {
+						el.append(mount);
+						return async () => {
+							cleanupStarted = true;
+							await cleanup.promise;
+							presentAfterCleanup = el.contains(mount);
+						};
+					},
+				};
+			},
+		});
+
+		await binding.initialize();
+		await binding.render(root, new AbortController().signal);
+		model.receive({ method: "update", state: { _esm: "broken" } }, []);
+
+		await vi.waitFor(() => expect(cleanupStarted).toBe(true));
+		expect(root.contains(mount)).toBe(true);
+		cleanup.resolve(undefined);
+		await vi.waitFor(() => expect(reportError).toHaveBeenCalledWith(expect.any(Error)));
+
+		expect(presentAfterCleanup).toBe(true);
+		expect(root.contains(mount)).toBe(false);
+		await binding.dispose();
 	});
 
 	test("scopes initialize and render experimental APIs to their generation", async () => {
@@ -312,11 +480,10 @@ describe("WidgetBinding live source lifecycle", () => {
 		);
 		model.receive({ method: "update", state: { _css: ".latest {}" } }, []);
 
-		await vi.waitFor(() => expect(rendered).toContain("latest"));
+		await vi.waitFor(() => expect(rendered).toEqual(["first", "latest"]));
 		await vi.waitFor(() =>
 			expect(replaceCss.mock.calls.some(([css]) => css === ".latest {}")).toBe(true),
 		);
-		expect(rendered).not.toContain("stalled");
 		expect(reportError).not.toHaveBeenCalled();
 
 		await binding.dispose();
@@ -425,36 +592,5 @@ describe("WidgetBinding live source lifecycle", () => {
 		await disposal;
 		expect(cleanup).toHaveBeenCalledTimes(1);
 		expect(await renderError).toBeDefined();
-	});
-
-	test("clears an old view before slow cleanup lets a replacement render", async () => {
-		const cleanup = deferred<void>();
-		const root = element();
-		const oldBinding = new WidgetBinding(createRuntime(), createModel({ _esm: "old" }), {
-			reportError: vi.fn(),
-			replaceCss: async () => undefined,
-			loadWidget: async () => ({ render: () => () => cleanup.promise }),
-			timeoutMilliseconds: 1000,
-		});
-		const replacement = new WidgetBinding(createRuntime(), createModel({ _esm: "replacement" }), {
-			reportError: vi.fn(),
-			replaceCss: async () => undefined,
-			loadWidget: async () => ({ render: () => undefined }),
-			timeoutMilliseconds: 1000,
-		});
-
-		await oldBinding.initialize();
-		await oldBinding.render(root, new AbortController().signal);
-		const oldDisposal = oldBinding.dispose();
-		expect(root.replaceChildren).toHaveBeenCalledTimes(2);
-
-		await replacement.initialize();
-		await replacement.render(root, new AbortController().signal);
-		expect(root.replaceChildren).toHaveBeenCalledTimes(3);
-		cleanup.resolve();
-		await oldDisposal;
-
-		expect(root.replaceChildren).toHaveBeenCalledTimes(3);
-		await replacement.dispose();
 	});
 });
