@@ -20,6 +20,7 @@ from ._state import (
     StateContext,
     StateSpec,
     _DefaultState,
+    _GroupedState,
     _RefreshStatus,
 )
 
@@ -154,7 +155,7 @@ class WidgetSession:
         self,
         instance_id: str,
         root: AnyWidget,
-        state: StateSpec | _DefaultState = DEFAULT_STATE,
+        state: StateSpec | _DefaultState | _GroupedState = DEFAULT_STATE,
     ) -> None:
         self.instance_id = instance_id
         self.root = root
@@ -1501,6 +1502,31 @@ def _collect_widgets(
         for value in _synchronized_values(widget, controllers):
             _collect_nested_widgets(value, pending, controllers)
     return widgets
+
+
+def _close_unclaimed_widget_graphs(roots: Iterable[AnyWidget]) -> None:
+    """Close fresh widget graphs while preserving models owned by live sessions."""
+    controllers: dict[int, ReprMimeBundle] = {}
+    widgets: list[object] = []
+    seen: set[int] = set()
+    for root in roots:
+        for widget in _collect_widgets(root, controllers):
+            identity = id(widget)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            widgets.append(widget)
+
+    errors: list[Exception] = []
+    for widget in reversed(widgets):
+        if _safe_claim_for(widget, controllers) is not None:
+            continue
+        try:
+            _close_widget(widget, controllers)
+        except Exception as error:
+            errors.append(error)
+    if errors:
+        raise ExceptionGroup("Failed to close unclaimed widget graphs", errors)
 
 
 def _safe_claim_for(

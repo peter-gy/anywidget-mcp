@@ -61,6 +61,31 @@ class _DefaultState:
 
 DEFAULT_STATE = _DefaultState()
 
+
+@dataclass(frozen=True)
+class _GroupedState:
+    roots: tuple[AnyWidget, ...]
+    state: StateSpec | _DefaultState
+
+    def __post_init__(self) -> None:
+        if not self.roots:
+            raise ValueError("A widget sequence must contain at least one AnyWidget")
+        invalid = next(
+            (
+                (index, root)
+                for index, root in enumerate(self.roots)
+                if not isinstance(root, AnyWidget)
+            ),
+            None,
+        )
+        if invalid is not None:
+            index, root = invalid
+            raise TypeError(
+                f"Widget sequence item {index} must be an AnyWidget, "
+                f"got {type(root).__name__}"
+            )
+
+
 _MAX_CONTEXT_BYTES = 8_000
 _MAX_VALUE_BYTES = 2_000
 _MAX_STRING_CHARS = 1_000
@@ -97,9 +122,16 @@ class StateContext:
         self,
         root: AnyWidget,
         widgets: Sequence[object],
-        state: StateSpec | _DefaultState,
+        state: StateSpec | _DefaultState | _GroupedState,
     ) -> None:
         self._root = root
+        if isinstance(state, _GroupedState):
+            self._projection_roots = state.roots
+            state = state.state
+            self._grouped = True
+        else:
+            self._projection_roots = (root,)
+            self._grouped = False
         self._lock = threading.RLock()
         self._dirty_generation = 1 if state is not None else 0
         self._projected_generation = 0
@@ -120,35 +152,48 @@ class StateContext:
         self._tracked_widgets: list[object] = []
         self._invalidates_on_comm = False
         self._dirty_traits: set[tuple[int, str]] | None = set()
-        self._trait_names: tuple[str, ...] | None = None
+        self._trait_selections: tuple[tuple[AnyWidget, tuple[str, ...]], ...] | None = (
+            None
+        )
 
         if state is None:
             self._projector: StateProjector | None = None
             return
 
         if isinstance(state, _DefaultState):
-            names = tuple(
-                name
-                for name, trait in root.traits().items()
-                if trait.metadata.get("sync")
-                and not name.startswith("_")
-                and name not in _EXCLUDED_DEFAULT_TRAITS
+            selections = tuple(
+                (current, _default_trait_names(current))
+                for current in self._projection_roots
             )
-            self._projector = _traits_projector(names)
-            self._trait_names = names
-            self._dirty_traits = {(id(root), name) for name in names}
-            self._observe(root, names)
+            self._projector = _traits_projector(selections[0][1])
+            self._trait_selections = selections
+            self._dirty_traits = {
+                (id(current), name) for current, names in selections for name in names
+            }
+            for current, names in _unique_trait_selections(selections):
+                self._observe(current, names)
             return
 
         if isinstance(state, tuple):
             if not all(isinstance(name, str) for name in state):
                 raise TypeError("state trait names must be strings")
             names = tuple(name for name in state if isinstance(name, str))
-            _validate_trait_names(root, names)
+            selections = tuple((current, names) for current in self._projection_roots)
+            for index, (current, selected) in enumerate(selections):
+                _validate_grouped_trait_names(
+                    current,
+                    selected,
+                    index=index if self._grouped else None,
+                )
             self._projector = _traits_projector(names)
-            self._trait_names = names
-            self._dirty_traits = {(id(root), name) for name in names}
-            self._observe(root, names)
+            self._trait_selections = selections
+            self._dirty_traits = {
+                (id(current), name)
+                for current, selected in selections
+                for name in selected
+            }
+            for current, selected in _unique_trait_selections(selections):
+                self._observe(current, selected)
             return
 
         if isinstance(state, StateProjection):
@@ -160,11 +205,24 @@ class StateContext:
                 self._invalidates_on_comm = True
                 self.add_widgets(widgets)
             else:
-                _validate_trait_names(root, state.watch)
-                self._dirty_traits = {(id(root), name) for name in state.watch}
+                selections = tuple(
+                    (current, state.watch) for current in self._projection_roots
+                )
+                for index, (current, selected) in enumerate(selections):
+                    _validate_grouped_trait_names(
+                        current,
+                        selected,
+                        index=index if self._grouped else None,
+                    )
+                self._dirty_traits = {
+                    (id(current), name)
+                    for current, selected in selections
+                    for name in selected
+                }
                 self._guards_projection_mutations = True
                 self.add_widgets(widgets)
-                self._observe(root, state.watch)
+                for current, selected in _unique_trait_selections(selections):
+                    self._observe(current, selected)
             return
 
         if not callable(state):
@@ -271,7 +329,7 @@ class StateContext:
                 return _RefreshStatus.BUSY
             generation = self._dirty_generation
             projector = self._projector
-            trait_names = self._trait_names
+            trait_selections = self._trait_selections
             notified_values = tuple(
                 (widget, name, value)
                 for (_identity, name), (widget, value) in self._notified_values.items()
@@ -280,7 +338,7 @@ class StateContext:
             self._refresh_thread_id = threading.get_ident()
             self._mutated_during_refresh = False
 
-        if trait_names is None and not _matches_notified_values(notified_values):
+        if trait_selections is None and not _matches_notified_values(notified_values):
             with self._lock:
                 changed_during_refresh = self._dirty_generation != generation
                 self._finish_refresh()
@@ -298,13 +356,24 @@ class StateContext:
             try:
                 if self._guards_projection_mutations:
                     projection_guards = self._install_projection_guards()
-                if trait_names is None:
-                    projected = projector(self._root)
+                if trait_selections is None:
+                    projected = _project_roots(
+                        projector,
+                        self._projection_roots,
+                        grouped=self._grouped,
+                    )
                 else:
-                    projected = _project_notified_traits(
-                        self._root,
-                        trait_names,
-                        notified_values,
+                    states = [
+                        _project_notified_traits(
+                            current,
+                            names,
+                            notified_values,
+                        )
+                        for current, names in trait_selections
+                    ]
+                    projected = _aggregate_states(
+                        states,
+                        grouped=self._grouped,
                     )
                 if not isinstance(projected, Mapping):
                     raise TypeError(
@@ -322,8 +391,8 @@ class StateContext:
                 self._finish_refresh()
             raise
 
-        notified_values_match = trait_names is not None or _matches_notified_values(
-            notified_values
+        notified_values_match = (
+            trait_selections is not None or _matches_notified_values(notified_values)
         )
         with self._lock:
             changed_during_refresh = self._dirty_generation != generation
@@ -568,11 +637,51 @@ def validate_state_spec(state: object) -> None:
     )
 
 
+def _default_trait_names(widget: AnyWidget) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name, trait in widget.traits().items()
+        if trait.metadata.get("sync")
+        and not name.startswith("_")
+        and name not in _EXCLUDED_DEFAULT_TRAITS
+    )
+
+
 def _traits_projector(names: tuple[str, ...]) -> StateProjector:
     def project(widget: AnyWidget) -> Mapping[str, object]:
         return widget.get_state(key=names)
 
     return project
+
+
+def _project_roots(
+    projector: StateProjector,
+    roots: tuple[AnyWidget, ...],
+    *,
+    grouped: bool,
+) -> Mapping[str, object]:
+    states: list[Mapping[str, object]] = []
+    for index, root in enumerate(roots):
+        projected = projector(root)
+        if not isinstance(projected, Mapping):
+            if not grouped:
+                return cast(Mapping[str, object], projected)
+            raise TypeError(
+                "The widget state projection for sequence item "
+                f"{index} must return a mapping, got {type(projected).__name__}"
+            )
+        states.append(projected)
+    return _aggregate_states(states, grouped=grouped)
+
+
+def _aggregate_states(
+    states: Sequence[Mapping[str, object]],
+    *,
+    grouped: bool,
+) -> Mapping[str, object]:
+    if grouped:
+        return {"widgets": list(states)}
+    return states[0]
 
 
 def _project_notified_traits(
@@ -590,6 +699,20 @@ def _project_notified_traits(
         to_json = widget.trait_metadata(name, "to_json", widget._trait_to_json)
         state[name] = to_json(values[name], widget)
     return state
+
+
+def _unique_trait_selections(
+    selections: Sequence[tuple[AnyWidget, tuple[str, ...]]],
+) -> tuple[tuple[AnyWidget, tuple[str, ...]], ...]:
+    unique: list[tuple[AnyWidget, tuple[str, ...]]] = []
+    seen: set[tuple[int, tuple[str, ...]]] = set()
+    for widget, names in selections:
+        key = (id(widget), names)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((widget, names))
+    return tuple(unique)
 
 
 def _matches_notified_values(
@@ -631,6 +754,23 @@ def _validate_trait_names(widget: AnyWidget, names: tuple[str, ...]) -> None:
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"Unknown state trait for {type(widget).__name__}: {joined}")
+
+
+def _validate_grouped_trait_names(
+    widget: AnyWidget,
+    names: tuple[str, ...],
+    *,
+    index: int | None,
+) -> None:
+    try:
+        _validate_trait_names(widget, names)
+    except ValueError as error:
+        if index is None:
+            raise
+        raise ValueError(
+            f"Invalid state selection for widget sequence item {index} "
+            f"({type(widget).__name__}): {error}"
+        ) from error
 
 
 def _bounded_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
@@ -829,6 +969,41 @@ def _value_summary(value: Any, normalized: Any, encoded: str) -> dict[str, Any]:
         length = _safe_len(value)
         if length is not None:
             summary["length"] = length
+        normalized_items: list[Any] = []
+        source_omitted = 0
+        if isinstance(normalized, list):
+            normalized_items = normalized
+        elif isinstance(normalized, Mapping):
+            items = normalized.get("items")
+            if isinstance(items, list):
+                normalized_items = items
+            omitted = normalized.get("omitted")
+            if isinstance(omitted, int):
+                source_omitted = omitted
+
+        retained: list[Any] = []
+        for item in normalized_items:
+            candidate_items = [*retained, item]
+            candidate = {**summary, "items": candidate_items}
+            omitted = (
+                max(length - len(candidate_items), 0)
+                if length is not None
+                else source_omitted + len(normalized_items) - len(candidate_items)
+            )
+            if omitted:
+                candidate["omitted"] = omitted
+            if len(_canonical_json(candidate).encode("utf-8")) > _MAX_VALUE_BYTES:
+                break
+            retained = candidate_items
+        if retained:
+            summary["items"] = retained
+            omitted = (
+                max(length - len(retained), 0)
+                if length is not None
+                else source_omitted + len(normalized_items) - len(retained)
+            )
+            if omitted:
+                summary["omitted"] = omitted
         return summary
     return {
         "type": type(value).__name__,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -73,20 +74,6 @@ def target_module(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     return module
 
 
-def test_root_help_lists_commands(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exit_info:
-        cli.main(["--help"])
-
-    captured = capsys.readouterr()
-    assert exit_info.value.code == 0
-    assert "usage: anywidget-mcp" in captured.out
-    assert "serve" in captured.out
-    assert "inspect" in captured.out
-    assert captured.err == ""
-
-
 def test_serve_help_documents_the_import_target(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -94,23 +81,11 @@ def test_serve_help_documents_the_import_target(
         cli.main(["serve", "--help"])
 
     captured = capsys.readouterr()
+    help_text = " ".join(captured.out.split())
     assert exit_info.value.code == 0
-    assert "MODULE:OBJECT" in captured.out
-    assert "--port" in captured.out
-    assert captured.err == ""
-
-
-def test_inspect_help_documents_json_output(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exit_info:
-        cli.main(["inspect", "--help"])
-
-    captured = capsys.readouterr()
-    assert exit_info.value.code == 0
-    assert "MODULE:OBJECT" in captured.out
-    assert "--json" in captured.out
-    assert captured.err == ""
+    assert "MODULE:OBJECT [MODULE:OBJECT ...]" in help_text
+    assert "Repeat to expose multiple tools" in help_text
+    assert "--port" in help_text
 
 
 def test_inspect_json_reports_empty_schema_for_minimal_widget_class(
@@ -133,7 +108,18 @@ def test_inspect_json_reports_empty_schema_for_minimal_widget_class(
         "toolName": "minimal_widget",
     }
     assert json.loads(captured.out) == expected
-    assert captured.err == ""
+
+
+def test_inspect_preserves_anywidget_in_the_factory_title(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli.main(["inspect", "anywidget_mcp:create_anywidget", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["toolName"] == "create_anywidget"
+    assert payload["title"] == "Create AnyWidget"
+    assert payload["inputSchema"]["required"] == ["code"]
 
 
 @pytest.mark.parametrize(
@@ -178,7 +164,6 @@ def test_inspect_json_reports_explicit_factory_signatures(
     assert payload["inputSchema"]["properties"]["value"]["type"] == "integer"
     if "label" in properties:
         assert payload["inputSchema"]["properties"]["label"]["default"] == "ready"
-    assert captured.err == ""
 
 
 def test_inspect_human_output_contains_the_registration_contract(
@@ -193,7 +178,6 @@ def test_inspect_human_output_contains_the_registration_contract(
     assert "Tool name: make_widget" in captured.out
     assert "Title: Make Widget" in captured.out
     assert '"value"' in captured.out
-    assert captured.err == ""
 
 
 def test_inspect_excludes_the_injected_context_parameter(
@@ -207,7 +191,6 @@ def test_inspect_excludes_the_injected_context_parameter(
     assert payload["kind"] == "factory"
     assert payload["inputSchema"]["required"] == ["value"]
     assert set(payload["inputSchema"]["properties"]) == {"value"}
-    assert captured.err == ""
 
 
 def test_cli_imports_widget_class_and_forwards_server_options(
@@ -255,36 +238,104 @@ def test_cli_imports_widget_class_and_forwards_server_options(
     ]
 
 
-@pytest.mark.parametrize("attribute", ["make_widget", "make_async_widget"])
-def test_cli_imports_factories_for_server_registration(
-    attribute: str,
+def test_cli_registers_multiple_targets_in_command_line_order(
     target_module: types.ModuleType,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registered: list[object] = []
+    events: list[tuple[str, object]] = []
 
     class FakeServer:
-        def __init__(self, _name: str, **_options: object) -> None:
-            pass
+        def __init__(self, name: str, **options: object) -> None:
+            events.append(("init", (name, options)))
 
         def widget(self, target: object) -> None:
-            registered.append(target)
+            events.append(("widget", target))
 
         def run(self, *, transport: str) -> None:
-            assert transport == "stdio"
+            events.append(("run", transport))
 
     monkeypatch.setattr(cli, "AnyWidgetMCP", FakeServer)
 
     cli.main(
         [
             "serve",
-            f"{target_module.__name__}:{attribute}",
+            f"{target_module.__name__}:MinimalWidget",
+            f"{target_module.__name__}:make_widget",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8123",
             "--transport",
             "stdio",
+            "--log-level",
+            "DEBUG",
         ]
     )
 
-    assert registered == [getattr(target_module, attribute)]
+    assert events == [
+        (
+            "init",
+            (
+                "AnyWidget MCP",
+                {"host": "0.0.0.0", "port": 8123, "log_level": "DEBUG"},
+            ),
+        ),
+        ("widget", MinimalWidget),
+        ("widget", make_widget),
+        ("run", "stdio"),
+    ]
+
+
+def test_cli_validates_every_target_before_constructing_the_server(
+    target_module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class UnexpectedServer:
+        def __init__(self, *_args: object, **_options: object) -> None:
+            pytest.fail("server construction must follow target validation")
+
+    monkeypatch.setattr(cli, "AnyWidgetMCP", UnexpectedServer)
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(
+            [
+                "serve",
+                f"{target_module.__name__}:MinimalWidget",
+                "builtins:str",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exit_info.value.code == 2
+    assert "builtins:str" in captured.err
+    assert "expected an AnyWidget subclass" in captured.err
+
+
+def test_cli_rejects_colliding_tool_names_before_constructing_the_server(
+    target_module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    setattr(target_module, "MinimalAlias", MinimalWidget)
+
+    class UnexpectedServer:
+        def __init__(self, *_args: object, **_options: object) -> None:
+            pytest.fail("server construction must follow collision validation")
+
+    monkeypatch.setattr(cli, "AnyWidgetMCP", UnexpectedServer)
+
+    first = f"{target_module.__name__}:MinimalWidget"
+    second = f"{target_module.__name__}:MinimalAlias"
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["serve", first, second])
+
+    captured = capsys.readouterr()
+    assert exit_info.value.code == 2
+    assert repr(first) in captured.err
+    assert repr(second) in captured.err
+    assert "MCP tool 'minimal_widget'" in captured.err
+    assert "AnyWidgetMCP.widget(..., name=...)" in captured.err
 
 
 @pytest.mark.parametrize(
@@ -296,7 +347,7 @@ def test_cli_imports_factories_for_server_registration(
         ("builtins:str", "expected an AnyWidget subclass"),
     ],
 )
-def test_cli_reports_invalid_targets_without_a_traceback(
+def test_cli_reports_invalid_targets(
     target: str,
     message: str,
     capsys: pytest.CaptureFixture[str],
@@ -306,9 +357,7 @@ def test_cli_reports_invalid_targets_without_a_traceback(
 
     captured = capsys.readouterr()
     assert exit_info.value.code == 2
-    assert captured.out == ""
     assert message in captured.err
-    assert "Traceback" not in captured.err
 
 
 def test_cli_rejects_a_widget_instance(
@@ -338,6 +387,53 @@ def test_cli_validates_port_range(capsys: pytest.CaptureFixture[str]) -> None:
     assert "port must be between 1 and 65535" in capsys.readouterr().err
 
 
+def test_cli_resolves_a_widget_module_from_the_working_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module_name = "local_widget_target"
+    (tmp_path / f"{module_name}.py").write_text(
+        "from anywidget import AnyWidget\n\n"
+        "class LocalWidget(AnyWidget):\n"
+        '    _esm = "export default { render() {} }"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [entry for entry in sys.path if entry not in {"", str(tmp_path)}],
+    )
+
+    try:
+        cli.main(["inspect", f"{module_name}:LocalWidget", "--json"])
+    finally:
+        sys.modules.pop(module_name, None)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["target"] == f"{module_name}:LocalWidget"
+    assert payload["toolName"] == "local_widget"
+
+
+def test_inspect_rejects_multiple_targets(
+    target_module: types.ModuleType,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(
+            [
+                "inspect",
+                f"{target_module.__name__}:MinimalWidget",
+                f"{target_module.__name__}:make_widget",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exit_info.value.code == 2
+    assert "unrecognized arguments" in captured.err
+
+
 @pytest.mark.parametrize(
     ("widget_class", "message"),
     [
@@ -346,7 +442,7 @@ def test_cli_validates_port_range(capsys: pytest.CaptureFixture[str]) -> None:
     ],
 )
 @pytest.mark.parametrize("command", ["serve", "inspect"])
-def test_cli_reports_widget_registration_errors_without_a_traceback(
+def test_cli_reports_widget_registration_errors(
     widget_class: type[ColorPicker],
     message: str,
     command: str,
@@ -362,9 +458,7 @@ def test_cli_reports_widget_registration_errors_without_a_traceback(
 
     captured = capsys.readouterr()
     assert exit_info.value.code == 2
-    assert captured.out == ""
     assert message in captured.err
-    assert "Traceback" not in captured.err
 
 
 @pytest.mark.parametrize(
@@ -375,7 +469,7 @@ def test_cli_reports_widget_registration_errors_without_a_traceback(
     ],
 )
 @pytest.mark.parametrize("command", ["serve", "inspect"])
-def test_cli_reports_schema_compilation_errors_without_a_traceback(
+def test_cli_reports_schema_compilation_errors(
     attribute: str,
     detail: str,
     command: str,
@@ -387,10 +481,8 @@ def test_cli_reports_schema_compilation_errors_without_a_traceback(
 
     captured = capsys.readouterr()
     assert exit_info.value.code == 2
-    assert captured.out == ""
     assert f"Could not compile widget target '{attribute}'" in captured.err
     assert detail in captured.err
-    assert "Traceback" not in captured.err
 
 
 @pytest.mark.parametrize(

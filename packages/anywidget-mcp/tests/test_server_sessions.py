@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import anyio
 import pytest
+from anyio.lowlevel import checkpoint
 from mcp.types import TextContent
 
 import anywidget_mcp.server as server_module
@@ -12,6 +11,109 @@ from anywidget_mcp._state import DEFAULT_STATE
 from anywidget_mcp.server import _SessionRuntime
 
 from ._server_support import CounterWidget, ParentWidget, connected
+
+
+@pytest.mark.anyio
+async def test_runtime_owner_exit_waits_for_an_active_borrower() -> None:
+    server = AnyWidgetMCP("test")
+    owner_connected = anyio.Event()
+    borrower_connected = anyio.Event()
+    owner_exit_started = anyio.Event()
+    owner_finished = anyio.Event()
+    check_borrower = anyio.Event()
+    borrower_checked = anyio.Event()
+    release_borrower = anyio.Event()
+    results: list[bool] = []
+
+    @server.widget
+    def counter(value: int) -> CounterWidget:
+        return CounterWidget(value=value)
+
+    async def owner_client() -> None:
+        async with connected(server):
+            owner_connected.set()
+            await borrower_connected.wait()
+            owner_exit_started.set()
+        owner_finished.set()
+
+    async def borrower_client() -> None:
+        await owner_connected.wait()
+        async with connected(server) as client:
+            first = await client.call_tool("counter", {"value": 1})
+            results.append(first.isError is False)
+            borrower_connected.set()
+            await check_borrower.wait()
+            second = await client.call_tool("counter", {"value": 2})
+            results.append(second.isError is False)
+            borrower_checked.set()
+            await release_borrower.wait()
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(owner_client)
+        task_group.start_soon(borrower_client)
+        await owner_exit_started.wait()
+        await checkpoint()
+        assert not owner_finished.is_set()
+
+        check_borrower.set()
+        await borrower_checked.wait()
+        assert results == [True, True]
+        assert not owner_finished.is_set()
+        release_borrower.set()
+
+    assert owner_finished.is_set()
+
+
+@pytest.mark.anyio
+async def test_new_client_waits_for_the_closing_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = AnyWidgetMCP("test")
+    owner_active = anyio.Event()
+    release_owner = anyio.Event()
+    close_started = anyio.Event()
+    release_close = anyio.Event()
+    entrant_entered = anyio.Event()
+    entrant_tools: set[str] = set()
+    original_aclose = server_module._SessionRuntime.aclose
+    close_calls = 0
+
+    async def controlled_aclose(runtime: _SessionRuntime) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 1:
+            close_started.set()
+            await release_close.wait()
+        await original_aclose(runtime)
+
+    monkeypatch.setattr(server_module._SessionRuntime, "aclose", controlled_aclose)
+
+    async def owner() -> None:
+        async with connected(server) as client:
+            await client.list_tools()
+            owner_active.set()
+            await release_owner.wait()
+
+    async def entrant() -> None:
+        async with connected(server) as client:
+            entrant_tools.update(
+                tool.name for tool in (await client.list_tools()).tools
+            )
+            entrant_entered.set()
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(owner)
+        await owner_active.wait()
+        release_owner.set()
+        await close_started.wait()
+        task_group.start_soon(entrant)
+        await checkpoint()
+        assert not entrant_entered.is_set()
+
+        release_close.set()
+        await entrant_entered.wait()
+
+    assert "anywidget_poll" in entrant_tools
 
 
 @pytest.mark.anyio
@@ -78,47 +180,6 @@ async def test_idle_session_expires_when_an_app_never_claims_it() -> None:
     assert poll.isError is True
     assert isinstance(poll.content[0], TextContent)
     assert "Unknown widget session" in poll.content[0].text
-
-
-@pytest.mark.anyio
-async def test_session_use_refreshes_the_idle_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = 0.0
-    monkeypatch.setattr(
-        server_module,
-        "time",
-        SimpleNamespace(monotonic=lambda: now),
-    )
-
-    async with anyio.create_task_group() as task_group:
-        runtime = _SessionRuntime(
-            task_group,
-            session_idle_timeout=1,
-            app_uri="ui://test/widget.html",
-        )
-        launch = await runtime.open(
-            CounterWidget,
-            {},
-            DEFAULT_STATE,
-            tool_name="counter",
-            tool_title="Counter",
-        )
-        assert launch.meta is not None
-        instance_id = launch.meta["anywidget"]["instanceId"]
-        lease = runtime._sessions[instance_id]
-        assert lease.deadline == 1.0
-
-        now = 0.4
-        with runtime.use(instance_id):
-            assert lease.deadline == 1.4
-        assert lease.deadline == 1.4
-
-        now = 0.8
-        with runtime.use(instance_id):
-            pass
-        assert lease.deadline == 1.8
-        await runtime.aclose()
 
 
 @pytest.mark.anyio

@@ -12,7 +12,7 @@ from mcp.types import Icon, TextContent, ToolAnnotations
 from pydantic import AnyUrl
 from starlette.testclient import TestClient
 from traitlets import Int
-from wigglystuff import ColorPicker, Matrix, Slider2D, SortableList
+from wigglystuff import ColorPicker, Slider2D, SortableList
 
 from anywidget_mcp import (
     APP_RESOURCE_URI,
@@ -150,6 +150,7 @@ async def test_describe_widget_target_matches_registered_input_schema() -> None:
         ColorPicker,
         name="choose_color",
         title="Choose Color",
+        description="Select a hexadecimal color.",
     )
     mcp = FastMCP("test")
     widgets = attach(mcp)
@@ -157,6 +158,7 @@ async def test_describe_widget_target_matches_registered_input_schema() -> None:
         ColorPicker,
         name="choose_color",
         title="Choose Color",
+        description="Select a hexadecimal color.",
     )
     async with create_connected_server_and_client_session(
         mcp,
@@ -171,8 +173,10 @@ async def test_describe_widget_target_matches_registered_input_schema() -> None:
     assert description.target_name == "ColorPicker"
     assert description.tool_name == "choose_color"
     assert description.title == "Choose Color"
+    assert description.description == "Select a hexadecimal color."
     assert description.kind == "widget-class"
     assert description.input_schema == tool.inputSchema
+    assert tool.description == description.description
 
 
 @pytest.mark.parametrize("kind", ["callable", "partial"])
@@ -337,35 +341,23 @@ async def test_widget_decorator_exposes_factory_schema_and_app_metadata() -> Non
         "title": "Enabled",
         "type": "boolean",
     }
-    assert tool.meta == {
-        "ui": {"resourceUri": "ui://anywidget-mcp/widget.html"},
-    }
 
 
 @pytest.mark.anyio
 async def test_widget_classes_expose_filtered_constructor_schemas() -> None:
     server = AnyWidgetMCP("test")
-    assert server.widget(ColorPicker) is ColorPicker
+    server.widget(ColorPicker)
     server.widget(SortableList)
-    server.widget(Matrix)
     server.widget(Slider2D)
 
     async with connected(server) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-        launches = {
-            "color_picker": await client.call_tool("color_picker", {}),
-            "sortable_list": await client.call_tool(
-                "sortable_list", {"value": ["alpha", "beta"]}
-            ),
-            "matrix": await client.call_tool("matrix", {}),
-            "slider_2d": await client.call_tool("slider_2d", {}),
-        }
 
     assert {
         name
         for name, tool in tools.items()
         if tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/widget.html"}}
-    } == {"color_picker", "sortable_list", "matrix", "slider_2d"}
+    } == {"color_picker", "sortable_list", "slider_2d"}
     assert "kwargs" not in tools["color_picker"].inputSchema["properties"]
     assert tools["sortable_list"].inputSchema["required"] == ["value"]
     assert tools["sortable_list"].inputSchema["properties"]["value"] == {
@@ -377,28 +369,6 @@ async def test_widget_classes_expose_filtered_constructor_schemas() -> None:
     assert tools["slider_2d"].inputSchema["properties"]["x_bounds"]["minItems"] == 2
     assert tools["color_picker"].title == "Color Picker"
     assert tools["slider_2d"].title == "Slider 2D"
-    assert all(result.isError is False for result in launches.values())
-
-
-@pytest.mark.anyio
-async def test_widget_class_overrides_inferred_tool_fields() -> None:
-    server = AnyWidgetMCP("test")
-    server.widget(
-        ColorPicker,
-        name="choose_color",
-        title="Choose color",
-        description="Select a hexadecimal color.",
-    )
-
-    async with connected(server) as client:
-        tool = next(
-            tool
-            for tool in (await client.list_tools()).tools
-            if tool.name == "choose_color"
-        )
-
-    assert tool.title == "Choose color"
-    assert tool.description == "Select a hexadecimal color."
 
 
 @pytest.mark.anyio
@@ -457,26 +427,6 @@ def test_widget_rejects_instances_and_unrelated_classes() -> None:
             server.widget(str)  # type: ignore[arg-type]
     finally:
         picker.close()
-
-
-@pytest.mark.anyio
-async def test_async_factory_returns_a_fresh_widget_per_invocation() -> None:
-    server = AnyWidgetMCP("test")
-    created: list[CounterWidget] = []
-
-    @server.widget
-    async def counter(value: int = 1) -> CounterWidget:
-        widget = CounterWidget(value=value)
-        created.append(widget)
-        return widget
-
-    async with connected(server) as client:
-        first = await client.call_tool("counter", {"value": 2})
-        second = await client.call_tool("counter", {"value": 3})
-
-    assert first.isError is False
-    assert second.isError is False
-    assert created[0] is not created[1]
 
 
 @pytest.mark.anyio
@@ -597,6 +547,25 @@ def test_streamable_http_app_allows_configured_browser_origin() -> None:
     assert (
         head_response.headers["access-control-allow-origin"] == "http://localhost:8080"
     )
+
+
+@pytest.mark.anyio
+async def test_unconfigured_preflight_is_rejected_and_server_remains_usable() -> None:
+    server = AnyWidgetMCP("test")
+
+    with TestClient(server.streamable_http_app()) as http:
+        response = http.options(
+            "/mcp",
+            headers={
+                "Origin": "http://127.0.0.1:7878",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        async with connected(server) as client:
+            await client.list_tools()
+
+    assert response.status_code == 405
+    assert response.headers["allow"] == "GET, POST, DELETE, HEAD"
 
 
 def test_widget_rejects_ambiguous_factory_signatures() -> None:

@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from .server import AnyWidgetMCP, WidgetTargetDescription, describe_widget_target
@@ -13,27 +15,32 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     arguments = parser.parse_args(argv)
 
-    try:
-        target = _resolve_target(arguments.target)
-    except ValueError as error:
-        parser.error(str(error))
-
     if arguments.command == "inspect":
         try:
+            target = _resolve_target(arguments.target)
             description = describe_widget_target(target)
         except (TypeError, ValueError) as error:
             parser.error(str(error))
         _print_inspection(arguments.target, description, as_json=arguments.json)
         return
 
+    try:
+        targets = _prepare_targets(arguments.targets)
+    except (TypeError, ValueError) as error:
+        parser.error(str(error))
+
+    server_name = (
+        f"{_target_name(targets[0])} MCP" if len(targets) == 1 else "AnyWidget MCP"
+    )
     server = AnyWidgetMCP(
-        f"{_target_name(target)} MCP",
+        server_name,
         host=arguments.host,
         port=arguments.port,
         log_level=arguments.log_level,
     )
     try:
-        server.widget(target)
+        for target in targets:
+            server.widget(target)
     except (TypeError, ValueError) as error:
         parser.error(str(error))
     try:
@@ -52,10 +59,18 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     serve_command = commands.add_parser(
         "serve",
-        help="import and serve a widget target",
-        description="Import MODULE:OBJECT and serve it as an MCP App tool.",
+        help="import and serve widget targets",
+        description=(
+            "Import one or more MODULE:OBJECT targets and serve each as an "
+            "MCP App tool."
+        ),
     )
-    serve_command.add_argument("target", metavar="MODULE:OBJECT")
+    serve_command.add_argument(
+        "targets",
+        nargs="+",
+        metavar="MODULE:OBJECT",
+        help=("AnyWidget class or factory to serve. Repeat to expose multiple tools."),
+    )
     serve_command.add_argument(
         "--host",
         default="127.0.0.1",
@@ -95,6 +110,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _resolve_target(target: str) -> Any:
+    _prioritize_working_directory()
     module_name, separator, attribute_path = target.partition(":")
     if not separator or not module_name or not attribute_path:
         raise ValueError(f"Invalid widget target {target!r}. Use module:object.")
@@ -114,6 +130,40 @@ def _resolve_target(target: str) -> Any:
                 f"Module {module_name!r} has no target {attribute_path!r}."
             ) from error
     return value
+
+
+def _prepare_targets(targets: Sequence[str]) -> list[Any]:
+    prepared: list[Any] = []
+    tool_sources: dict[str, str] = {}
+
+    for source in targets:
+        try:
+            target = _resolve_target(source)
+            description = describe_widget_target(target)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Widget target {source!r} is invalid: {error}") from error
+        previous_source = tool_sources.get(description.tool_name)
+        if previous_source is not None:
+            raise ValueError(
+                f"Targets {previous_source!r} and {source!r} both resolve to MCP "
+                f"tool {description.tool_name!r}. Use "
+                "AnyWidgetMCP.widget(..., name=...) to assign explicit names."
+            )
+        tool_sources[description.tool_name] = source
+        prepared.append(target)
+
+    return prepared
+
+
+def _prioritize_working_directory() -> None:
+    working_directory = str(Path.cwd())
+    if sys.path and sys.path[0] == working_directory:
+        return
+    try:
+        sys.path.remove(working_directory)
+    except ValueError:
+        pass
+    sys.path.insert(0, working_directory)
 
 
 def _print_inspection(

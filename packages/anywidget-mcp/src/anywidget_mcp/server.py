@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence, Set
 from contextlib import (
     AbstractAsyncContextManager,
     AbstractContextManager,
@@ -21,7 +21,16 @@ from contextlib import (
 )
 from dataclasses import dataclass, field
 from importlib.resources import files
-from typing import Any, Literal, TypeVar, TypedDict, cast, get_type_hints, overload
+from typing import (
+    Any,
+    Literal,
+    NoReturn,
+    TypeVar,
+    TypedDict,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 import anyio
 from anywidget import AnyWidget
@@ -43,7 +52,9 @@ from ._bridge import (
     WidgetInUseError,
     WidgetSession,
     WidgetSessionInitializationError,
+    _close_unclaimed_widget_graphs,
 )
+from ._group import _WidgetGroup, _group_state
 from ._state import (
     DEFAULT_STATE,
     ProjectionUpdate,
@@ -60,10 +71,11 @@ _SESSION_TOOL_NAMES = frozenset(
     {"anywidget_assets", "anywidget_comm", "anywidget_poll", "anywidget_dispose"}
 )
 
+WidgetFactoryValue = AnyWidget | Sequence[AnyWidget]
 WidgetFactoryResult = (
-    AnyWidget
-    | AbstractContextManager[AnyWidget]
-    | AbstractAsyncContextManager[AnyWidget]
+    WidgetFactoryValue
+    | AbstractContextManager[WidgetFactoryValue]
+    | AbstractAsyncContextManager[WidgetFactoryValue]
 )
 WidgetFactory = Callable[..., WidgetFactoryResult | Awaitable[WidgetFactoryResult]]
 WidgetTarget = type[AnyWidget] | WidgetFactory
@@ -138,17 +150,130 @@ class _PollReplay:
     asset_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _WidgetOutput:
+    render_root: AnyWidget
+    state_roots: tuple[AnyWidget, ...]
+    sequence: bool
+
+
+def _normalize_widget_output(value: object, *, origin: str) -> _WidgetOutput:
+    if isinstance(value, AnyWidget):
+        return _WidgetOutput(
+            render_root=value,
+            state_roots=(value,),
+            sequence=False,
+        )
+
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise ToolError(
+            f"Widget factory {origin} {type(value).__name__}, expected AnyWidget "
+            "or a non-empty sequence of AnyWidget instances"
+        )
+
+    snapshot: list[object] = []
+    try:
+        snapshot.extend(value)
+    except BaseException as error:
+        _raise_after_output_cleanup(error, snapshot)
+    widgets = tuple(snapshot)
+    if not widgets:
+        raise ToolError(f"Widget factory {origin} an empty widget sequence")
+
+    invalid = next(
+        (
+            (index, widget)
+            for index, widget in enumerate(widgets)
+            if not isinstance(widget, AnyWidget)
+        ),
+        None,
+    )
+    if invalid is not None:
+        index, item = invalid
+        error = ToolError(
+            f"Widget factory {origin} {type(item).__name__} at sequence index "
+            f"{index}, expected AnyWidget"
+        )
+        _raise_after_output_cleanup(error, widgets)
+
+    typed_widgets = cast(tuple[AnyWidget, ...], widgets)
+    try:
+        render_root = _WidgetGroup(typed_widgets)
+    except Exception as error:
+        _raise_after_output_cleanup(error, typed_widgets)
+    return _WidgetOutput(
+        render_root=render_root,
+        state_roots=typed_widgets,
+        sequence=True,
+    )
+
+
+def _raise_after_output_cleanup(
+    error: BaseException,
+    values: Sequence[object],
+) -> NoReturn:
+    widgets = _returned_widgets(values)
+    try:
+        _close_unclaimed_widget_graphs(widgets)
+    except Exception as cleanup_error:
+        errors = [error, cleanup_error]
+        if all(isinstance(item, Exception) for item in errors):
+            raise ExceptionGroup(
+                "Widget factory result validation and cleanup failed",
+                cast(list[Exception], errors),
+            ) from error
+        raise BaseExceptionGroup(
+            "Widget factory result validation and cleanup failed",
+            errors,
+        ) from error
+    raise error
+
+
+def _returned_widgets(values: Sequence[object]) -> tuple[AnyWidget, ...]:
+    widgets: list[AnyWidget] = []
+    pending = list(reversed(values))
+    seen_containers: set[int] = set()
+    while pending:
+        value = pending.pop()
+        if isinstance(value, AnyWidget):
+            widgets.append(value)
+            continue
+        if isinstance(value, (str, bytes, bytearray, memoryview)):
+            continue
+        if not isinstance(value, (Mapping, Sequence, Set)):
+            continue
+        identity = id(value)
+        if identity in seen_containers:
+            continue
+        seen_containers.add(identity)
+
+        nested: list[object] = []
+        try:
+            items = value.values() if isinstance(value, Mapping) else value
+            iterator = iter(items)
+            while True:
+                nested.append(next(iterator))
+        except StopIteration:
+            pass
+        except Exception:
+            # A malformed result must not prevent already discovered widgets from
+            # closing. Treat the unread portion as opaque and continue cleanup.
+            pass
+        pending.extend(reversed(nested))
+    return tuple(widgets)
+
+
 class _FactoryOwner:
     def __init__(self) -> None:
         self.ready = anyio.Event()
         self.close_requested = anyio.Event()
         self.closed = anyio.Event()
-        self.widget: AnyWidget | None = None
+        self.output: _WidgetOutput | None = None
         self.session: WidgetSession | None = None
         self.error: BaseException | None = None
         self.cleanup_error: BaseException | None = None
         self._acquisition_scope: anyio.CancelScope | None = None
-        self._close_unowned_widget = True
+        self._close_unowned_output = True
         self._close_reason = "session cleanup"
 
     async def run(
@@ -164,7 +289,7 @@ class _FactoryOwner:
                     if self.close_requested.is_set():
                         arguments.clear()
                         return
-                    widget: object | None = None
+                    output: _WidgetOutput | None = None
                     with anyio.CancelScope() as acquisition_scope:
                         self._acquisition_scope = acquisition_scope
                         try:
@@ -184,32 +309,33 @@ class _FactoryOwner:
                             finally:
                                 del created
                             if isinstance(value, AbstractAsyncContextManager):
-                                widget = await stack.enter_async_context(value)
+                                value = await stack.enter_async_context(value)
+                                origin = "context manager yielded"
                             elif isinstance(value, AbstractContextManager):
-                                widget = stack.enter_context(value)
-                            elif isinstance(value, AnyWidget):
-                                widget = value
+                                value = stack.enter_context(value)
+                                origin = "context manager yielded"
                             else:
-                                raise ToolError(
-                                    "Widget factory returned "
-                                    f"{type(value).__name__}, expected AnyWidget "
-                                    "or a context manager"
-                                )
+                                origin = "returned"
+                            output = _normalize_widget_output(value, origin=origin)
                         finally:
                             self._acquisition_scope = None
                     if acquisition_scope.cancel_called:
+                        if output is not None:
+                            self.output = output
+                            self._cleanup_once()
                         return
-                    await self._hold(widget)
+                    assert output is not None
+                    await self._hold(output)
         except BaseException as error:
             self.error = error
         finally:
             self.ready.set()
             self.closed.set()
 
-    async def wait_ready(self) -> AnyWidget:
+    async def wait_ready(self) -> _WidgetOutput:
         await self.ready.wait()
-        if self.widget is not None:
-            return self.widget
+        if self.output is not None:
+            return self.output
         if self.error is not None:
             raise self.error
         raise RuntimeError("Widget factory closed before yielding a widget")
@@ -217,9 +343,9 @@ class _FactoryOwner:
     def assign_session(self, session: WidgetSession) -> None:
         self.session = session
 
-    def leave_unowned_widget_open(self) -> None:
-        """Keep a widget owned by another live session open during cleanup."""
-        self._close_unowned_widget = False
+    def leave_unowned_output_open(self) -> None:
+        """Keep a widget graph owned by another live session open during cleanup."""
+        self._close_unowned_output = False
 
     def request_close(self, reason: str) -> None:
         if not self.close_requested.is_set():
@@ -232,18 +358,14 @@ class _FactoryOwner:
         await self.closed.wait()
         return self.error
 
-    async def _hold(self, widget: object) -> None:
-        if not isinstance(widget, AnyWidget):
-            raise ToolError(
-                "Widget factory context manager yielded "
-                f"{type(widget).__name__}, expected AnyWidget"
-            )
-        self.widget = widget
+    async def _hold(self, output: _WidgetOutput) -> None:
+        self.output = output
         self.ready.set()
         try:
             await self.close_requested.wait()
         finally:
             self._cleanup_once()
+            self.retry_cleanup()
 
     def retry_cleanup(self) -> BaseException | None:
         if self.cleanup_error is not None:
@@ -255,10 +377,10 @@ class _FactoryOwner:
             if self.session is not None:
                 self.session.close()
                 self.session = None
-                self.widget = None
-            elif self._close_unowned_widget and self.widget is not None:
-                self.widget.close()
-                self.widget = None
+                self.output = None
+            elif self._close_unowned_output and self.output is not None:
+                _close_unclaimed_widget_graphs((self.output.render_root,))
+                self.output = None
         except BaseException as error:
             self.cleanup_error = error
         else:
@@ -319,25 +441,33 @@ class _SessionRuntime:
         self._task_group.start_soon(owner.run, candidate, arguments)
 
         try:
-            widget = await owner.wait_ready()
+            output = await owner.wait_ready()
             with self._lock:
                 if not self._accepting:
                     raise ToolError("The AnyWidget MCP server runtime is closing")
 
             instance_id = uuid.uuid4().hex
             try:
-                session = WidgetSession(instance_id, widget, state)
+                session_state = (
+                    _group_state(state, output.state_roots)
+                    if output.sequence
+                    else state
+                )
+            except (TypeError, ValueError) as error:
+                raise ToolError(str(error)) from error
+            try:
+                session = WidgetSession(instance_id, output.render_root, session_state)
             except WidgetInUseError as error:
-                owner.leave_unowned_widget_open()
+                owner.leave_unowned_output_open()
                 raise ToolError(str(error)) from error
             except WidgetSessionInitializationError as error:
                 owner.assign_session(error.session)
                 raise
             except (TypeError, ValueError) as error:
-                owner.leave_unowned_widget_open()
+                owner.leave_unowned_output_open()
                 raise ToolError(str(error)) from error
             except Exception:
-                owner.leave_unowned_widget_open()
+                owner.leave_unowned_output_open()
                 raise
             owner.assign_session(session)
 
@@ -551,23 +681,42 @@ class _SessionRuntime:
             scope.cancel()
 
 
-class _MCPHeadMiddleware:
+@dataclass
+class _RuntimeGeneration:
+    references: int = 1
+    runtime: _SessionRuntime | None = None
+    closing: bool = False
+    ready: anyio.Event = field(default_factory=anyio.Event)
+    drained: anyio.Event = field(default_factory=anyio.Event)
+    closed: anyio.Event = field(default_factory=anyio.Event)
+
+
+class _MCPMethodMiddleware:
     def __init__(self, app: ASGIApp, path: str) -> None:
         self._app = app
         self._path = path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and scope["method"] == "HEAD"
-            and scope["path"] == self._path
-        ):
+        if scope["type"] != "http" or scope["path"] != self._path:
+            await self._app(scope, receive, send)
+            return
+
+        if scope["method"] == "HEAD":
             response = Response(
                 status_code=200,
                 headers={"Allow": "GET, POST, DELETE, HEAD"},
             )
             await response(scope, receive, send)
             return
+
+        if scope["method"] == "OPTIONS":
+            response = Response(
+                status_code=405,
+                headers={"Allow": "GET, POST, DELETE, HEAD"},
+            )
+            await response(scope, receive, send)
+            return
+
         await self._app(scope, receive, send)
 
 
@@ -608,6 +757,7 @@ class WidgetTools:
         self._session_idle_timeout = float(session_idle_timeout)
         self._runtime_lock = threading.RLock()
         self._runtime: _SessionRuntime | None = None
+        self._runtime_generation: _RuntimeGeneration | None = None
         self._register_app_resource()
         self._register_session_tools()
         self._install_lifespan()
@@ -656,7 +806,8 @@ class WidgetTools:
 
         Args:
             target: An ``AnyWidget`` subclass or a callable that creates a fresh
-                widget. Omit it to use this method as a decorator.
+                widget or a non-empty widget sequence. Omit it to use this method
+                as a decorator.
             name: Tool name. Widget classes default to their snake-case class name.
             title: Human-facing tool title. Defaults to a title derived from the
                 tool name.
@@ -680,10 +831,11 @@ class WidgetTools:
 
         The target signature becomes the MCP input schema. FastMCP injects a
         ``Context`` parameter without exposing it in that schema. A factory may
-        return a widget directly or through a synchronous or asynchronous context
-        manager. The context manager remains active for the widget session. Factory
-        acquisition is cancellable, so the manager owns rollback for resources
-        acquired before it yields.
+        return one widget or a non-empty widget sequence, directly or through a
+        synchronous or asynchronous context manager. A sequence renders in order
+        and projects state as ``{"widgets": [state, ...]}``. The context manager
+        remains active for the widget session. Factory acquisition is cancellable,
+        so the manager owns rollback for resources acquired before it yields.
 
         Example:
             ``widgets.widget(ColorPicker, state="color")``
@@ -761,29 +913,90 @@ class WidgetTools:
 
     @asynccontextmanager
     async def _runtime_lifespan(self):
-        async with anyio.create_task_group() as task_group:
-            runtime = _SessionRuntime(
-                task_group,
-                session_idle_timeout=self._session_idle_timeout,
-                app_uri=self._app_uri,
-            )
-            with self._runtime_lock:
-                if self._runtime is not None:
-                    raise RuntimeError(
-                        "The AnyWidget MCP server runtime is already active"
-                    )
-                self._runtime = runtime
+        generation, owner = await self._join_runtime_generation()
+        if not owner:
             try:
                 yield
             finally:
-                with anyio.CancelScope(shield=True):
-                    try:
-                        await runtime.aclose()
-                    finally:
-                        with self._runtime_lock:
-                            if self._runtime is runtime:
-                                self._runtime = None
-                        task_group.cancel_scope.cancel()
+                self._release_runtime_generation(generation)
+            return
+
+        # AnyIO task groups must exit in the task that entered them. The first
+        # lifespan owns that scope while later lifespans borrow its runtime.
+        try:
+            async with anyio.create_task_group() as task_group:
+                runtime = _SessionRuntime(
+                    task_group,
+                    session_idle_timeout=self._session_idle_timeout,
+                    app_uri=self._app_uri,
+                )
+                self._activate_runtime_generation(generation, runtime)
+                try:
+                    yield
+                finally:
+                    with anyio.CancelScope(shield=True):
+                        self._release_runtime_generation(generation)
+                        await generation.drained.wait()
+                        try:
+                            await runtime.aclose()
+                        finally:
+                            task_group.cancel_scope.cancel()
+        finally:
+            with anyio.CancelScope(shield=True):
+                self._finish_runtime_generation(generation)
+
+    async def _join_runtime_generation(
+        self,
+    ) -> tuple[_RuntimeGeneration, bool]:
+        while True:
+            with self._runtime_lock:
+                generation = self._runtime_generation
+                if generation is None:
+                    generation = _RuntimeGeneration()
+                    self._runtime_generation = generation
+                    return generation, True
+                if generation.runtime is not None and not generation.closing:
+                    generation.references += 1
+                    return generation, False
+                wait_for = generation.closed if generation.closing else generation.ready
+            await wait_for.wait()
+
+    def _activate_runtime_generation(
+        self,
+        generation: _RuntimeGeneration,
+        runtime: _SessionRuntime,
+    ) -> None:
+        with self._runtime_lock:
+            if self._runtime_generation is not generation or generation.closing:
+                raise RuntimeError("The AnyWidget MCP server runtime failed to start")
+            generation.runtime = runtime
+            self._runtime = runtime
+            generation.ready.set()
+
+    def _release_runtime_generation(
+        self,
+        generation: _RuntimeGeneration,
+    ) -> None:
+        with self._runtime_lock:
+            if generation.references <= 0:
+                raise RuntimeError("The AnyWidget MCP server lifespan is unbalanced")
+            generation.references -= 1
+            if generation.references == 0:
+                generation.closing = True
+                generation.drained.set()
+
+    def _finish_runtime_generation(self, generation: _RuntimeGeneration) -> None:
+        with self._runtime_lock:
+            if generation.references:
+                generation.references = 0
+                generation.closing = True
+                generation.drained.set()
+            generation.ready.set()
+            if self._runtime is generation.runtime:
+                self._runtime = None
+            if self._runtime_generation is generation:
+                self._runtime_generation = None
+            generation.closed.set()
 
     def _register_app_resource(self) -> None:
         ui_meta: dict[str, Any] = {
@@ -1044,7 +1257,7 @@ class AnyWidgetMCP(FastMCP):
     def streamable_http_app(self) -> Starlette:
         app = super().streamable_http_app()
         app.add_middleware(
-            _MCPHeadMiddleware,
+            _MCPMethodMiddleware,
             path=self.settings.streamable_http_path,
         )
         if self._cors_origins:
@@ -1077,7 +1290,7 @@ def serve(
     log_level: LogLevel = "INFO",
     **fastmcp_options: Any,
 ) -> None:
-    """Register one widget and run its MCP server until the transport exits.
+    """Register one widget target and run its MCP server until the transport exits.
 
     Args:
         target: An ``AnyWidget`` subclass or factory registered as the sole widget
@@ -1456,7 +1669,8 @@ def _direct_doc(candidate: Callable[..., Any]) -> str | None:
 
 
 def _tool_title(name: str) -> str:
-    return _snake_case(name).replace("_", " ").title()
+    title = _snake_case(name).replace("_", " ").title()
+    return re.sub(r"\bAnywidget\b", "AnyWidget", title)
 
 
 def _canonical_json(value: Any) -> str:
