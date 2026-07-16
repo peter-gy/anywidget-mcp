@@ -21,8 +21,8 @@ Install the adapter:
 pip install anywidget-mcp
 ```
 
-[Wigglystuff](https://koaning.github.io/wigglystuff/) is one concrete library
-of expressive AnyWidgets. Install it to try a range of existing widgets:
+[Wigglystuff](https://koaning.github.io/wigglystuff/) is an AnyWidget library.
+Install it to run its widgets:
 
 ```sh
 pip install wigglystuff
@@ -66,8 +66,8 @@ anywidget-mcp serve \
   --port 8010
 ```
 
-The [AnyWidget gallery](https://try.anywidget.dev/) lists more reusable widget
-packages that can be registered the same way.
+The [AnyWidget gallery](https://try.anywidget.dev/) lists widgets that can be
+registered the same way.
 
 The target may also be a factory that returns one widget, returns a non-empty
 sequence of widgets, or yields either form from a synchronous or asynchronous
@@ -93,10 +93,10 @@ Inspection reports `widget-class` or `factory` as the target kind. FastMCP
 `Context` parameters are injected at call time and stay outside the displayed
 input schema.
 
-## Create bespoke widgets at runtime
+## Create widgets at runtime
 
-Serve the package's built-in `create_anywidget` factory when the model should
-construct an interface for the current question:
+Serve `create_anywidget` when the model should construct an interface for the
+current question:
 
 ```sh
 anywidget-mcp serve anywidget_mcp:create_anywidget --port 8010
@@ -104,11 +104,12 @@ anywidget-mcp serve anywidget_mcp:create_anywidget --port 8010
 
 The tool accepts Python source plus an ordered `classnames` list. Each name
 must resolve to a zero-argument AnyWidget class after the code executes. One
-selected class renders directly. Several selected classes render together in
-the requested order. If `classnames` is omitted, the tool selects the last
+selected class renders as the root widget. Several selected classes render
+together in the requested order. If `classnames` is omitted, the tool selects
+the last
 final namespace binding to a source-defined top-level AnyWidget class. See the
 [generated widget
-example](https://peter-gy.github.io/anywidget-mcp/factories#create-bespoke-widgets-at-runtime)
+example](https://peter-gy.github.io/anywidget-mcp/factories#create-anywidgets-from-source-at-runtime)
 for a retry-budget explorer and its model-visible state.
 
 > `create_anywidget` executes supplied Python in the server process and loads
@@ -262,8 +263,8 @@ summary may also include retained `items`, an `omitted` count, and `jsonBytes`.
 Set `state=None` to disable the aggregate projection. The manager stays active
 until app disposal, idle expiry, `aclose()`, or server shutdown. The widget
 graph closes before the manager exits. The class or factory signature defines
-the input contract after FastMCP removes its injected `Context` parameter. A
-minimal AnyWidget class whose constructor is `(*args, **kwargs)` produces an
+the input contract after FastMCP removes its injected `Context` parameter. An
+AnyWidget class whose constructor is `(*args, **kwargs)` produces an
 empty input schema. Register a factory with named parameters when callers need
 to configure that widget.
 
@@ -275,7 +276,7 @@ same rollback until it returns its widget or manager.
 
 ## Describe tool behavior
 
-`annotations` and `icons` use the standard MCP tool metadata types:
+`annotations` and `icons` use MCP tool metadata types:
 
 ```python
 from mcp.types import Icon, ToolAnnotations
@@ -298,7 +299,7 @@ options. `serve()` also applies `icons` to its MCP server.
 
 ## Choose model-visible state
 
-The `state` option controls the concise widget state available to the model:
+The `state` option controls the widget state available to the model:
 
 | Value                                     | Projection                                              |
 | ----------------------------------------- | ------------------------------------------------------- |
@@ -312,7 +313,7 @@ The `state` option controls the concise widget state available to the model:
 The default omits the widget display traits `layout`, `tabbable`, and
 `tooltip`.
 
-A custom projection can expose an intent-focused view of a larger widget model:
+A custom projection can derive a mapping from widget traits:
 
 ```python
 mcp.widget(

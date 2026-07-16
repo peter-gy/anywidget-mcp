@@ -12,7 +12,7 @@ The CLI binds to `127.0.0.1:8000` by default:
 anywidget-mcp serve my_widgets:ColorPicker
 ```
 
-Set the bind address, port, and log level explicitly for a deployed process:
+Set the bind address, port, and log level for a deployed process:
 
 ```sh
 anywidget-mcp serve my_widgets:ColorPicker \

@@ -8,7 +8,7 @@ validation, and observers it uses in Jupyter or marimo.
 
 ## One widget, four contracts
 
-Consider a small counter:
+Consider a counter:
 
 ```python
 # counter.py
@@ -56,10 +56,10 @@ defines four related contracts:
 | `Counter` and its docstring | MCP tool identity and description                     |
 | `_esm` and optional `_css`  | Browser presentation                                  |
 | Traits tagged `sync=True`   | Live AnyWidget model shared by Python and the browser |
-| `state="value"`             | Concise state sent to the model                       |
+| `state="value"`             | Selected state sent to the model                      |
 
-These contracts travel together when the tool runs, but each controls a
-different part of the experience.
+These contracts travel together when the tool runs. Each maps to a different
+MCP or AnyWidget contract.
 
 ## How Python maps to MCP
 
@@ -74,12 +74,13 @@ Registration derives the MCP tool contract from the class or factory:
 | Target docstring                           | Tool description                                     |
 | Explicit constructor or factory parameters | Tool input schema                                    |
 | Parameter annotations and defaults         | JSON Schema types, required fields, and defaults     |
-| `annotations=` and `icons=`                | Standard MCP tool metadata                           |
+| `annotations=` and `icons=`                | MCP tool metadata                                    |
 | `app_uri`                                  | Tool `_meta.ui.resourceUri`                          |
 | `csp`, `permissions`, and `prefers_border` | MCP App resource metadata                            |
 
 `title=` and `description=` override the derived title and target docstring.
-Run the inspector command to see the exact contract before starting a server:
+Run the inspector command to see the generated contract before starting a
+server:
 
 ```sh
 anywidget-mcp inspect counter:Counter --json
@@ -87,7 +88,7 @@ anywidget-mcp inspect counter:Counter --json
 
 Traits do not become tool arguments. A class constructor or factory signature
 defines the arguments supplied when the model invokes the tool. Use a factory
-for runtime input. This alternative server module reuses `Counter`:
+for runtime input. This factory module reuses `Counter`:
 
 ```python
 # counter_factory.py
@@ -128,7 +129,7 @@ Each server registers one HTML resource at
 `_meta.ui.resourceUri`, which lets an MCP host preload and render the app in a
 sandboxed iframe.
 
-The HTML resource contains the generic AnyWidget runtime. Widget-specific
+The HTML resource contains the AnyWidget runtime. Widget-specific
 `_esm` and `_css` sources travel as content-addressed session assets. The app
 verifies and loads those assets before it creates the frontend model. This lets
 one server render different AnyWidget classes through the same resource.
@@ -143,7 +144,7 @@ Resource metadata controls the host boundary:
 
 External JavaScript, CSS, images, and APIs must be allowed by the corresponding
 resource policy. See [Deployment](./deployment#configure-browser-and-app-policy)
-for the complete configuration.
+for the policy options.
 
 ## What happens when the tool runs
 
@@ -156,7 +157,7 @@ for the complete configuration.
 4. Python captures the synchronized widget graph and binary buffers. It
    externalizes `_esm` and `_css` as content-addressed session assets and adds
    the initial messages and selected model-visible state.
-5. The tool result gives the model concise text and optional projected state.
+5. The tool result gives the model a launch message and optional projected state.
    Private `_meta.anywidget` data gives the bundled app its session and render
    payload.
 6. The app verifies the widget sources, creates the frontend model graph,
@@ -177,7 +178,7 @@ The initial result has separate fields for separate consumers:
 
 | Result field           | Consumer       | Contents                                              |
 | ---------------------- | -------------- | ----------------------------------------------------- |
-| `content`              | Model and host | A concise launch message                              |
+| `content`              | Model and host | Widget launch message                                 |
 | `structuredContent`    | Model and host | Registered tool name and projected state when enabled |
 | `_meta.ui.resourceUri` | MCP host       | App resource to render                                |
 | `_meta.anywidget`      | Bundled app    | Session, model graph, messages, and source manifest   |
@@ -188,8 +189,8 @@ bundled app. Application code should use AnyWidget traits, messages, and the
 
 ## Synchronized state and model context
 
-Trait synchronization makes the widget work. Model context gives the language
-model a concise, current description of the interaction.
+Trait synchronization carries browser updates to Python. Model context gives
+the language model a selected projection of the current interaction.
 
 | Declaration                        | Browser model                         | Default model context |
 | ---------------------------------- | ------------------------------------- | --------------------- |
@@ -224,9 +225,9 @@ snapshots through MCP Apps `updateModelContext` when the host supports it. See
 [Model-visible state](./state) for trait selection, `StateProjection`, sequence
 results, and projection limits.
 
-## The AnyWidget contract stays portable
+## AnyWidget frontend methods
 
-The frontend continues to use the standard AnyWidget model methods:
+The frontend uses the AnyWidget model methods:
 
 - `model.get()` reads a synchronized trait.
 - `model.set()` changes browser state and fires local change listeners.

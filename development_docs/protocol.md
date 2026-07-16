@@ -14,15 +14,16 @@ canonical comm messages.
 
 ## Prototype results
 
-The comparison used wigglystuff 0.5.13 with `ColorPicker` and `SortableList` plus focused binary and custom-message widgets.
+The comparison used wigglystuff 0.5.13 with `ColorPicker` and `SortableList`
+plus test widgets for binary state and custom messages.
 
-| Prototype           | Observed behavior                                                                                                                                                                          | Result                          |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
-| Snapshot export     | Rendered initial JSON. Browser edits left Python state unchanged. The ColorPicker snapshot was 2,628 bytes and the SortableList snapshot was 12,677 bytes.                                 | Suitable for static rendering   |
-| Direct trait mirror | Updated simple strings and lists. It bypassed trait serializers, emitted redundant updates for inbound values, failed JSON encoding for a `Bytes` trait, and lacked a custom-message path. | Too narrow for existing widgets |
-| Comm tunnel         | Preserved serialized state, binary paths, echo locking, observers, state requests, and custom messages.                                                                                    | Selected                        |
+| Prototype           | Observed behavior                                                                                                                                                                        | Result                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Snapshot export     | Rendered initial JSON. Browser edits left Python state unchanged. The ColorPicker snapshot was 2,628 bytes and the SortableList snapshot was 12,677 bytes.                               | Suitable for static rendering   |
+| Direct trait mirror | Updated string and list values. It bypassed trait serializers, emitted redundant updates for inbound values, failed JSON encoding for a `Bytes` trait, and lacked a custom-message path. | Too narrow for existing widgets |
+| Comm tunnel         | Preserved serialized state, binary paths, echo locking, observers, state requests, and custom messages.                                                                                  | Selected                        |
 
-The comm prototype produced these concrete traces:
+The comm prototype produced these traces:
 
 - Updating `ColorPicker.color` to `#abcdef` stored the value in Python, fired its observer once, emitted `echo_update` for `color`, then emitted an `update` for the observer-derived trait.
 - Reordering `SortableList.value` updated Python with the new list and fired its observer once.
@@ -47,7 +48,7 @@ The comm prototype produced these concrete traces:
 | App teardown             | `anywidget_dispose` closes every enrolled model and exits the factory manager                                                                           |
 | MCP App discovery        | Tool `_meta.ui.resourceUri` points to `ui://anywidget-mcp/widget.html`                                                                                  |
 | Internal tool discovery  | `_meta.ui.visibility=["app"]` keeps session tools app-facing                                                                                            |
-| Live model context       | `ui/update-model-context` replaces the previous concise state projection                                                                                |
+| Live model context       | `ui/update-model-context` replaces the previous state projection                                                                                        |
 
 The runtime payload lives in the tool result `_meta`. `content` gives the model
 an initial state projection. `structuredContent` identifies the registered tool
@@ -77,8 +78,9 @@ and the Cache API first, batches the missing IDs through `anywidget_assets`, and
 verifies each returned digest and byte length before caching the source. Every
 referenced ID must appear in the manifest, and every manifest entry must be
 referenced by that snapshot. Inline `_esm` and `_css` values are invalid in a
-versioned wire payload. Cache reads are abortable and bounded, while cache
-writes stay outside the critical render path.
+versioned wire payload. Cache reads accept the runtime abort signal and have a
+500 ms deadline. Cache writes start after verified source enters memory and do
+not delay source hydration.
 
 The browser memory cache retains at most 32 MiB of verified UTF-8 source text
 and evicts the least-recently-used entries. A larger source still hydrates the

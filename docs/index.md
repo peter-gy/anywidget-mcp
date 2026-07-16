@@ -4,7 +4,7 @@ layout: home
 hero:
   name: anywidget-mcp
   text: Bring Python widgets into the conversation.
-  tagline: Register one widget or compose many. Keep browser interaction synchronized with Python.
+  tagline: Register one widget or several. Browser interactions update Python traitlets.
   actions:
     - theme: brand
       text: Get started
@@ -14,12 +14,12 @@ hero:
       link: ./api
 
 features:
-  - title: Build once
-    details: Develop the interface as a portable Python widget, then use it in notebooks and MCP hosts.
-  - title: Reuse the ecosystem
-    details: Turn an installed widget class into an interactive tool without creating a separate frontend project.
+  - title: Use one widget class
+    details: Run the same AnyWidget class in notebooks and MCP hosts.
+  - title: Register installed widgets
+    details: Register an installed widget class as an MCP App tool. anywidget-mcp provides the MCP App frontend.
   - title: Compose servers
-    details: Combine widget factories, ordinary MCP tools, runtime inputs, and model-visible state on one server.
+    details: Combine widget factories, FastMCP tools, runtime inputs, and model-visible state on one server.
 ---
 
 `anywidget-mcp` turns an [AnyWidget](https://anywidget.dev/) class or factory
@@ -28,26 +28,26 @@ into an interactive
 call creates a fresh Python-backed widget and keeps browser changes synchronized
 with traitlets.
 
-## Why build this way
+## What the adapter handles
 
 MCP Apps render interactive interfaces inside the conversation. Compared with
 sending a standalone web app link, the UI preserves conversational context,
 exchanges data through MCP, can use host-mediated capabilities, and runs in a
 host-controlled sandbox.
 
-A direct MCP App implementation coordinates tool metadata, an HTML resource,
-host communication, session state, and packaging. `anywidget-mcp` owns those
+Building an MCP App coordinates tool metadata, an HTML resource, host
+communication, session state, and packaging. `anywidget-mcp` implements those
 boundaries for AnyWidget. [How it works](./how-it-works) maps Python classes,
 docstrings, signatures, traits, and widget sources to their MCP contracts.
 
-This gives you three paths:
+Use the adapter to:
 
-- **Build from scratch.** Express application logic in Python and develop the
-  bespoke interface as a reusable AnyWidget.
-- **Reuse any existing AnyWidget.** Import a package from the
+- **Author a widget.** Express application logic in Python and implement the
+  interface as an AnyWidget.
+- **Register a widget package.** Import a class from the
   [AnyWidget gallery](https://try.anywidget.dev/) and register its class or a
   factory around it.
-- **Compose a custom server.** Register several widgets alongside ordinary MCP
+- **Compose a server.** Register several widgets alongside FastMCP
   tools, with typed runtime inputs and model-visible state. See
   [Factories and composition](./factories).
 
@@ -61,8 +61,8 @@ pip install anywidget-mcp
 
 ## Try an existing widget library
 
-[Wigglystuff](https://koaning.github.io/wigglystuff/) is a rich collection of
-expressive AnyWidgets. Install it as one concrete example:
+[Wigglystuff](https://koaning.github.io/wigglystuff/) is an AnyWidget library.
+Install it to run the `ColorPicker` example:
 
 ```sh
 pip install wigglystuff
@@ -93,7 +93,7 @@ model provider, and ask: `Use color_picker so I can choose a color.` The widget
 renders in the conversation, and later turns receive its latest synchronized
 state. Keeping `--no-open` lets browser automation drive the same flow.
 
-For richer runtime-input examples, [serve `LiveEdit`
-directly](./factories#turn-an-explanation-into-an-interactive-trace) or [let the
-model create a bespoke AnyWidget](./factories#create-bespoke-widgets-at-runtime)
-for the current conversation.
+For runtime-input examples, [serve
+`LiveEdit`](./factories#turn-an-explanation-into-an-interactive-trace) or [let
+the model create an AnyWidget from
+source](./factories#create-anywidgets-from-source-at-runtime).

@@ -33,13 +33,13 @@ Build the packaged browser app:
 pnpm --filter @anywidget-mcp/python build
 ```
 
-Run the complete local gate:
+Run the local gate:
 
 ```sh
 make check
 ```
 
-## Focused commands
+## Iteration checks
 
 Run browser checks while editing `packages/app`:
 
@@ -87,13 +87,13 @@ missing.
 
 ## Local MCP server
 
-Serve a widget package directly:
+Serve a widget package:
 
 ```sh
 uv run --package anywidget-mcp anywidget-mcp serve wigglystuff:ColorPicker
 ```
 
-Inspect the exact tool contract produced by a class or factory:
+Inspect the tool contract produced by a class or factory:
 
 ```sh
 uv run --package anywidget-mcp anywidget-mcp inspect wigglystuff:ColorPicker --json

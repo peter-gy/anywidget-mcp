@@ -31,7 +31,7 @@ MCP server until the transport exits.
   AnyWidget or non-empty `Sequence[AnyWidget]`.
 - `name`, `title`, and `description` define the host-facing tool identity.
 - `state` accepts the forms documented in [Model-visible state](./state).
-- `annotations` and `icons` accept standard MCP tool metadata values.
+- `annotations` and `icons` accept MCP tool metadata values.
 - `transport` accepts `"streamable-http"` or `"stdio"`.
 - `host`, `port`, and `log_level` configure streamable HTTP.
 - `fastmcp_options` are forwarded to `AnyWidgetMCP`.

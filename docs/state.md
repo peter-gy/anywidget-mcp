@@ -7,8 +7,8 @@ Python, the app publishes the latest complete projection through
 `updateModelContext` when the host supports that method.
 
 The examples use `ColorPicker` and `SortableList` from
-[Wigglystuff](https://koaning.github.io/wigglystuff/) as concrete widgets. The
-same state API applies to other [AnyWidget](https://anywidget.dev/) classes.
+[Wigglystuff](https://koaning.github.io/wigglystuff/). The same state API
+applies to other [AnyWidget](https://anywidget.dev/) classes.
 
 ## Select synchronized traits
 
@@ -35,9 +35,9 @@ The `state` option accepts these forms:
 
 Unknown trait names raise `ValueError` when the first widget session opens.
 
-## Project an intent-focused mapping
+## Define a projected mapping
 
-A projection callable can summarize a larger widget model:
+A projection callable can select and derive fields from a widget model:
 
 ```python
 from wigglystuff import SortableList

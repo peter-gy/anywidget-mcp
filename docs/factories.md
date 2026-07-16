@@ -8,7 +8,7 @@ session.
 The examples use widgets from
 [Wigglystuff](https://koaning.github.io/wigglystuff/). The factory and
 composition APIs accept AnyWidget classes from other packages and widgets you
-author yourself.
+author.
 
 ## Accept runtime input
 
@@ -41,7 +41,7 @@ they cannot define object properties in the tool schema.
 
 ## Return several widgets from one call
 
-Return a non-empty sequence when one answer benefits from several interfaces:
+Return a non-empty sequence when one tool call should render several interfaces:
 
 ```python
 import anywidget
@@ -50,7 +50,7 @@ from wigglystuff import ColorPicker, SortableList
 
 @mcp.widget
 def review_palette(colors: list[str]) -> list[anywidget.AnyWidget]:
-    """Choose a primary color and reorder the complete palette."""
+    """Choose a primary color and reorder the supplied palette."""
     return [
         ColorPicker(color=colors[0]),
         SortableList(value=colors, editable=True),
@@ -86,15 +86,15 @@ and `jsonBytes`.
 ## Turn an explanation into an interactive trace
 
 [LiveEdit](https://koaning.github.io/wigglystuff/reference/live-edit/) renders a
-step-through trace of a Python function. Its constructor already accepts the
-runtime input a model should provide, so serve the widget class directly:
+step-through trace of a Python function. Its constructor accepts Python source
+through the required `code` argument, so serve the widget class:
 
 ```sh
 anywidget-mcp serve wigglystuff:LiveEdit --port 8010
 ```
 
 `anywidget-mcp` derives the `live_edit` tool schema from the constructor. The
-required `code` argument carries the Python source for each new widget.
+required `code` argument carries the Python source used to create the widget.
 
 ::: warning
 `LiveEdit` executes `code` in the MCP server process to collect the trace. Run
@@ -106,17 +106,16 @@ Open [Inspector Chat](./getting-started#see-it-in-inspector-chat) and ask:
 > Explain insertion sort for `[5, 2, 4, 1]`. Call `live_edit` with a
 > self-contained, zero-argument Python function so I can step through it.
 
-The model supplies Python source as ordinary tool input. Each call constructs a
-fresh `LiveEdit` instance, and the user steps through the rendered trace in the
+The model supplies Python source as tool input. Each call constructs a fresh
+`LiveEdit` instance, and the user steps through the rendered trace in the
 conversation. `LiveEdit` owns the tracing interface and can render through
 AnyWidget support in Jupyter and marimo. `anywidget-mcp` supplies the MCP tool,
 widget session, and host bridge.
 
-## Create bespoke widgets at runtime
+## Create AnyWidgets from source at runtime
 
-A factory can accept complete AnyWidget class definitions as tool input. The
-package exports `create_anywidget` for constructing an interactive answer that
-fits the current question.
+A factory can accept AnyWidget class definitions as tool input. The package
+exports `create_anywidget` to execute the source and construct selected classes.
 
 ::: danger Run generated code in a sandbox
 `create_anywidget` executes the supplied Python with the MCP server's
@@ -125,7 +124,7 @@ server inside a disposable sandbox with scoped filesystem, network, credential,
 and process access.
 :::
 
-Serve the built-in factory on the Inspector endpoint:
+Serve `create_anywidget` on the Inspector endpoint:
 
 ```sh
 anywidget-mcp serve anywidget_mcp:create_anywidget --port 8010
@@ -134,8 +133,8 @@ anywidget-mcp serve anywidget_mcp:create_anywidget --port 8010
 Pass `code` and an ordered `classnames` list. After the code executes, every
 name must resolve to an AnyWidget subclass constructible without arguments.
 Missing names and non-widget bindings fail the tool call. One selected class
-renders directly. Several selected classes render as a vertical group in the
-requested order. If `classnames` is omitted, `create_anywidget` selects the
+renders as the root widget. Several selected classes render as a vertical group
+in the requested order. If `classnames` is omitted, `create_anywidget` selects the
 last final namespace binding to a source-defined top-level AnyWidget class.
 
 Open [Inspector Chat](./getting-started#see-it-in-inspector-chat) and ask:
@@ -252,10 +251,9 @@ class RetryBudget(anywidget.AnyWidget):
 :::
 
 Moving either slider sends `attempts`, `base_delay`, and `total_wait` through
-the ordinary AnyWidget comm path. The latest values become model-visible state
-for the next chat turn. The same `RetryBudget` class can be instantiated in a
-Jupyter or marimo notebook while `anywidget-mcp` carries each generated
-instance into MCP App hosts.
+the AnyWidget comm path. The latest values become model-visible state for the
+next chat turn. The `RetryBudget` class also runs in Jupyter or marimo.
+`anywidget-mcp` renders each generated instance in MCP App hosts.
 
 ## Register several widget tools
 
@@ -272,7 +270,7 @@ The command registers `manim_web` and `color_picker` in argument order. Use the
 Python API when two targets derive the same tool name and assign explicit
 `name=` values.
 
-`AnyWidgetMCP` extends `FastMCP` and keeps ordinary tools and widget tools on
+`AnyWidgetMCP` extends `FastMCP` and keeps FastMCP tools and widget tools on
 one server:
 
 ```python
@@ -291,7 +289,7 @@ Widget class names become snake-case tool names. `ColorPicker` registers
 
 Registration accepts a class or factory. Pass a factory when each tool call
 needs arguments that differ from the widget constructor. Pass a class when its
-constructor already defines the intended tool schema.
+constructor defines the intended tool schema.
 
 ## Attach to an existing server
 

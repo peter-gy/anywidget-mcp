@@ -139,10 +139,11 @@ polls remain ordering barriers.
 sources from a process-local memory cache and the browser Cache API, then asks
 `anywidget_assets` for the remaining IDs. A complete transaction is hydrated
 before any model update is applied, so source changes retain the same ordering
-as trait updates and dynamic model enrollment. Cache reads are abortable and
-bounded. The memory cache uses a 32 MiB least-recently-used budget measured from
-UTF-8 source bytes. Cache writes run as bounded best-effort work after verified
-source is available in memory.
+as trait updates and dynamic model enrollment. Cache reads honor the runtime
+abort signal. The memory cache uses a 32 MiB least-recently-used budget measured
+from UTF-8 source bytes. Cache reads and writes have a 500 ms deadline. A
+fetched source enters memory before its Cache API write begins, and a write
+failure does not fail asset hydration.
 
 Polling starts at 500 ms after activity and backs off through 1 s, 2 s, 5 s,
 10 s, and 15 s while idle. Any returned activity resets the next delay. A

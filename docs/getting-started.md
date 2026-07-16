@@ -13,15 +13,16 @@ pip install anywidget-mcp
 
 ## Try an existing widget library
 
-[Wigglystuff](https://koaning.github.io/wigglystuff/) is a rich library of
-expressive AnyWidgets. Install it to follow the examples in this guide:
+The `ColorPicker` examples use
+[Wigglystuff](https://koaning.github.io/wigglystuff/), an AnyWidget library.
+Install it with:
 
 ```sh
 pip install wigglystuff
 ```
 
-The [AnyWidget gallery](https://try.anywidget.dev/) contains many other widget
-packages that can be registered through the same class or factory API.
+The [AnyWidget gallery](https://try.anywidget.dev/) lists other widget packages
+that can be registered through the same class or factory API.
 
 ## Serve a Wigglystuff widget
 
@@ -137,7 +138,7 @@ Serve the class from the module:
 anywidget-mcp serve counter:Counter
 ```
 
-A button click updates `Counter.value` through the widget's normal comm path.
+A button click updates `Counter.value` through the AnyWidget comm path.
 The default model-visible state includes `value`.
 
 [How it works](./how-it-works) explains how the class name, docstring,
@@ -151,22 +152,22 @@ as tool input. The `code` argument executes with the server process permissions,
 and each widget's JavaScript loads in the app iframe. Run this factory in a
 sandbox with scoped filesystem, network, credential, and process access.
 
-Serve the built-in factory directly:
+Serve the factory:
 
 ```sh
 anywidget-mcp serve anywidget_mcp:create_anywidget --port 8010
 ```
 
 Pass an ordered `classnames` list with the code. Each name must resolve to a
-zero-argument AnyWidget class after execution. One selected class renders
-directly. Several selected classes render in the requested order through the
-same MCP App result. If `classnames` is omitted, the last source-defined
+zero-argument AnyWidget class after execution. One selected class renders as
+the root widget. Several selected classes render in the requested order through
+the same MCP App result. If `classnames` is omitted, the last source-defined
 top-level AnyWidget class binding in the final namespace is selected. Within
 projection limits, the default model-visible state for several widgets is
 `{"widgets": [state, ...]}`. Larger lists use a bounded sequence summary under
 `widgets`.
 
-See [Factories](./factories#create-bespoke-widgets-at-runtime) for a complete
+See [Factories](./factories#create-anywidgets-from-source-at-runtime) for a
 retry-budget explorer generated from a chat request.
 
 ## Develop in marimo
