@@ -1,7 +1,8 @@
 # API reference
 
-The Python package exports registration, composition, state projection, and MCP
-App resource types from `anywidget_mcp`.
+The Python package exports registration, composition, state projection, and
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview) resource
+types from `anywidget_mcp`.
 
 ## `serve()`
 
@@ -23,8 +24,8 @@ serve(
 ) -> None
 ```
 
-Registers one AnyWidget class or factory and runs its MCP server until the
-transport exits.
+Registers one [AnyWidget](https://anywidget.dev/) class or factory and runs its
+MCP server until the transport exits.
 
 - `target` accepts an `AnyWidget` subclass or a factory that creates a fresh
   widget.

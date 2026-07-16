@@ -2,8 +2,13 @@
 
 The `state` option selects the widget data sent to the model. The initial tool
 result includes one complete projection. After browser interaction reaches
-Python, the app publishes the latest complete projection through MCP Apps
+Python, the app publishes the latest complete projection through
+[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview)
 `updateModelContext` when the host supports that method.
+
+The examples use `ColorPicker` and `SortableList` from
+[Wigglystuff](https://koaning.github.io/wigglystuff/) as concrete widgets. The
+same state API applies to other [AnyWidget](https://anywidget.dev/) classes.
 
 ## Select synchronized traits
 

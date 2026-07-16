@@ -1,8 +1,14 @@
 # Factories and composition
 
-A widget factory turns typed MCP tool input into a fresh AnyWidget. Use one
-when a tool call needs to validate arguments, load data, configure a widget, or
-hold a resource for the widget session.
+A widget factory turns typed MCP tool input into a fresh
+[AnyWidget](https://anywidget.dev/). Use one when a tool call needs to validate
+arguments, load data, configure a widget, or hold a resource for the widget
+session.
+
+The examples use widgets from
+[Wigglystuff](https://koaning.github.io/wigglystuff/). The factory and
+composition APIs accept AnyWidget classes from other packages and widgets you
+author yourself.
 
 ## Accept runtime input
 

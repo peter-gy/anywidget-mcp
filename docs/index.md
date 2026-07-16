@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: anywidget-mcp
-  text: Turn an AnyWidget into an MCP App.
-  tagline: Register an AnyWidget class or factory. Each tool call creates a fresh Python-backed widget and keeps browser changes synchronized with traitlets.
+  text: Bring Python widgets into the conversation.
+  tagline: Register one widget or compose many. Keep browser interaction synchronized with Python.
   actions:
     - theme: brand
       text: Get started
@@ -14,21 +14,58 @@ hero:
       link: ./api
 
 features:
-  - title: Existing AnyWidgets
-    details: Serve an installed AnyWidget class from the command line or register the same class in Python.
-  - title: Runtime inputs
-    details: Use a typed factory when an MCP tool call needs to validate input, load data, or hold a resource for the widget session.
-  - title: Model-visible state
-    details: Select synchronized traits or define a read-only projection that the host can add to later model context.
+  - title: Build once
+    details: Develop the interface as a portable Python widget, then use it in notebooks and MCP hosts.
+  - title: Reuse the ecosystem
+    details: Turn an installed widget class into an interactive tool without creating a separate frontend project.
+  - title: Compose servers
+    details: Combine widget factories, ordinary MCP tools, runtime inputs, and model-visible state on one server.
 ---
 
-Install the adapter and a widget package:
+`anywidget-mcp` turns an [AnyWidget](https://anywidget.dev/) class or factory
+into an interactive
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview). Each tool
+call creates a fresh Python-backed widget and keeps browser changes synchronized
+with traitlets.
+
+## Why build this way
+
+MCP Apps render interactive interfaces inside the conversation. Compared with
+sending a standalone web app link, the UI preserves conversational context,
+exchanges data through MCP, can use host-mediated capabilities, and runs in a
+host-controlled sandbox.
+
+A direct MCP App implementation coordinates tool metadata, an HTML resource,
+host communication, session state, and packaging. `anywidget-mcp` owns those
+boundaries for AnyWidget, which gives you three paths:
+
+- **Build from scratch.** Express application logic in Python and develop the
+  bespoke interface as a reusable AnyWidget.
+- **Reuse any existing AnyWidget.** Import a package from the
+  [AnyWidget gallery](https://try.anywidget.dev/) and register its class or a
+  factory around it.
+- **Compose a custom server.** Register several widgets alongside ordinary MCP
+  tools, with typed runtime inputs and model-visible state. See
+  [Factories and composition](./factories).
+
+## Install
+
+Install the adapter:
 
 ```sh
-pip install anywidget-mcp wigglystuff
+pip install anywidget-mcp
 ```
 
-Expose an installed widget class:
+## Try an existing widget library
+
+[Wigglystuff](https://koaning.github.io/wigglystuff/) is a rich collection of
+expressive AnyWidgets. Install it as one concrete example:
+
+```sh
+pip install wigglystuff
+```
+
+Expose one of its widget classes:
 
 ```sh
 anywidget-mcp serve wigglystuff:ColorPicker

@@ -1,17 +1,29 @@
 # Getting started
 
-`anywidget-mcp` registers an AnyWidget class or factory as an MCP App tool. A
-tool invocation creates a fresh widget, renders it in the host, and keeps its
+`anywidget-mcp` registers an [AnyWidget](https://anywidget.dev/) class or factory
+as an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) tool.
+A tool invocation creates a fresh widget, renders it in the host, and keeps its
 synchronized traits connected to Python.
 
-Install Python 3.12 or newer, the adapter, and the widget package you want to
-serve:
+Install Python 3.12 or newer and the adapter:
 
 ```sh
-pip install anywidget-mcp wigglystuff
+pip install anywidget-mcp
 ```
 
-## Serve an installed widget
+## Try an existing widget library
+
+[Wigglystuff](https://koaning.github.io/wigglystuff/) is a rich library of
+expressive AnyWidgets. Install it to follow the examples in this guide:
+
+```sh
+pip install wigglystuff
+```
+
+The [AnyWidget gallery](https://try.anywidget.dev/) contains many other widget
+packages that can be registered through the same class or factory API.
+
+## Serve a Wigglystuff widget
 
 Start a streamable HTTP server for `ColorPicker`:
 

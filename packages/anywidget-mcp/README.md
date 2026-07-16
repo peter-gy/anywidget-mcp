@@ -3,24 +3,39 @@
 [![PyPI](https://img.shields.io/pypi/v/anywidget-mcp.svg)](https://pypi.org/project/anywidget-mcp/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/peter-gy/anywidget-mcp/blob/main/LICENSE)
 
-`anywidget-mcp` exposes an AnyWidget class or factory as an interactive MCP
-App tool. Each tool call creates a fresh widget, renders it in the host, and
-keeps browser interaction synchronized with Python traitlets.
+`anywidget-mcp` exposes an [AnyWidget](https://anywidget.dev/) class or factory
+as an interactive [MCP App](https://modelcontextprotocol.io/extensions/apps/overview)
+tool. Each tool call creates a fresh widget, renders it in the host, and keeps
+browser interaction synchronized with Python traitlets.
+
+MCP Apps keep interactive interfaces inside the conversation. `anywidget-mcp`
+packages the MCP tool, HTML resource, widget session, and model-context bridge
+so the same widget can run in notebooks and MCP hosts.
 
 [Read the documentation](https://peter-gy.github.io/anywidget-mcp/) for the
 quickstart, factory lifecycle, state projections, and deployment options.
 
-Install the adapter and the widget package you want to serve:
+Install the adapter:
 
 ```sh
-pip install anywidget-mcp wigglystuff
+pip install anywidget-mcp
 ```
 
-Expose an installed widget class:
+[Wigglystuff](https://koaning.github.io/wigglystuff/) is one concrete library
+of expressive AnyWidgets. Install it to try a range of existing widgets:
+
+```sh
+pip install wigglystuff
+```
+
+Expose one of its widget classes:
 
 ```sh
 anywidget-mcp serve wigglystuff:ColorPicker
 ```
+
+The [AnyWidget gallery](https://try.anywidget.dev/) lists more reusable widget
+packages that can be registered the same way.
 
 The target may also be a factory that returns a widget directly or yields one
 from a synchronous or asynchronous context manager:
