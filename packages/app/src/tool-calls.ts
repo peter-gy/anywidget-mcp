@@ -5,6 +5,7 @@ type ServerToolCaller = Pick<App, "callServerTool">;
 export type QueuedToolCall = (
 	name: string,
 	args: Record<string, unknown>,
+	signal?: AbortSignal,
 ) => Promise<CallToolResult>;
 
 export class ToolCallQueue {
@@ -19,7 +20,11 @@ export class ToolCallQueue {
 	transaction<T>(task: (call: QueuedToolCall) => Promise<T>, signal?: AbortSignal): Promise<T> {
 		const result = this.tail.then(() => {
 			signal?.throwIfAborted();
-			const active = Promise.resolve(task((name, args) => this.invoke(name, args, signal)));
+			const active = Promise.resolve(
+				task((name, args, callSignal) =>
+					this.invoke(name, args, combineSignals(signal, callSignal)),
+				),
+			);
 			return signal ? abortable(active, signal) : active;
 		});
 		this.tail = result.then(
@@ -46,6 +51,14 @@ export class ToolCallQueue {
 		signal?.throwIfAborted();
 		return this.app.callServerTool({ name, arguments: args }, signal ? { signal } : undefined);
 	}
+}
+
+function combineSignals(
+	outer: AbortSignal | undefined,
+	inner: AbortSignal | undefined,
+): AbortSignal | undefined {
+	if (outer && inner && outer !== inner) return AbortSignal.any([outer, inner]);
+	return inner ?? outer;
 }
 
 function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {

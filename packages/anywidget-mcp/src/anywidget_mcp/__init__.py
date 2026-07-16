@@ -1,3 +1,4 @@
+from ._state import StateProjection
 from .server import (
     APP_MIME_TYPE,
     APP_RESOURCE_URI,
@@ -15,6 +16,7 @@ __all__ = [
     "AnyWidgetMCP",
     "AppCSP",
     "AppPermissions",
+    "StateProjection",
     "WidgetTools",
     "attach",
     "serve",

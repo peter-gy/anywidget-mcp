@@ -1,150 +1,27 @@
 from __future__ import annotations
 
 import threading
-from typing import Any
 
 import anywidget
 import pytest
-import traitlets
-from anywidget._descriptor import MimeBundleDescriptor
-from anywidget.experimental import command
 
 import anywidget_mcp._bridge as bridge
-from anywidget_mcp._bridge import SessionSnapshot, WidgetInUseError, WidgetSession
-from anywidget_mcp._state import _RefreshStatus
+from anywidget_mcp._bridge import SessionSnapshot, WidgetSession
 
-
-class BinaryWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    payload = traitlets.Bytes(bytes([0, 255])).tag(sync=True)
-    size = traitlets.Int(2).tag(sync=True)
-
-    @traitlets.observe("payload")
-    def _update_size(self, change: traitlets.Bunch) -> None:
-        self.size = len(change.new)
-
-
-class CommandWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    @command
-    def reverse(
-        self,
-        message: object,
-        buffers: list[bytes],
-    ) -> tuple[dict[str, object], list[bytes]]:
-        return {"seen": message}, [buffer[::-1] for buffer in buffers]
-
-
-class ChildWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    value = traitlets.Int(7).tag(sync=True)
-
-
-class ParentWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    child = anywidget.WidgetTrait().tag(sync=True)
-
-
-class NestedParentWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    payload = traitlets.Any().tag(sync=True)
-
-
-class ProtocolChild(traitlets.HasTraits):
-    _repr_mimebundle_ = MimeBundleDescriptor(
-        _esm="export default { render() {} }",
-    )
-
-    value = traitlets.Int(3).tag(sync=True)
-
-
-class ProtocolContainer(traitlets.HasTraits):
-    _repr_mimebundle_ = MimeBundleDescriptor(
-        _esm="export default { render() {} }",
-    )
-
-    payload = traitlets.Any().tag(sync=True)
-
-
-class ManualProtocolContainer:
-    _repr_mimebundle_ = MimeBundleDescriptor(
-        _esm="export default { render() {} }",
-        autodetect_observer=False,
-    )
-
-    def __init__(self, payload: object) -> None:
-        self.payload = payload
-
-    def _get_anywidget_state(self, include: set[str] | None) -> dict[str, object]:
-        if include is not None and "payload" not in include:
-            return {}
-        return {"payload": self.payload}
-
-
-class HybridProtocolContainer(traitlets.HasTraits):
-    _repr_mimebundle_ = MimeBundleDescriptor(
-        _esm="export default { render() {} }",
-    )
-
-    marker = traitlets.Int(0).tag(sync=True)
-
-    def __init__(self, payload: object) -> None:
-        super().__init__()
-        self.payload = payload
-
-    def _get_anywidget_state(self, include: set[str] | None) -> dict[str, object]:
-        state = {"marker": self.marker, "payload": self.payload}
-        if include is None:
-            return state
-        return {name: value for name, value in state.items() if name in include}
-
-
-class UnhashableWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    __hash__ = None
-
-
-class EqualWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, EqualWidget)
-
-    def __hash__(self) -> int:
-        return 1
-
-
-class PausedNotifyWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    trigger = traitlets.Int(0).tag(sync=True)
-    value = traitlets.Int(0).tag(sync=True)
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.pause_value_notification = False
-        self.value_stored = threading.Event()
-        self.resume_value_notification = threading.Event()
-
-    def _notify_trait(self, name: str, old_value: Any, new_value: Any) -> None:
-        if name == "value" and self.pause_value_notification:
-            self.value_stored.set()
-            if not self.resume_value_notification.wait(1):
-                raise RuntimeError("value notification test did not resume")
-        super()._notify_trait(name, old_value, new_value)
-
-
-class ProjectionWidget(anywidget.AnyWidget):
-    _esm = "export default { render() {} }"
-
-    a = traitlets.Int(0).tag(sync=True)
-    b = traitlets.Int(0).tag(sync=True)
+from .bridge_test_widgets import (
+    BinaryWidget,
+    ChildWidget,
+    CommandWidget,
+    HotSourceWidget,
+    HybridProtocolContainer,
+    ManualProtocolContainer,
+    NestedParentWidget,
+    ParentWidget,
+    PausedNotifyWidget,
+    ProtocolChild,
+    ProtocolContainer,
+    SharedSourceChild,
+)
 
 
 def test_initial_state_separates_binary_buffers() -> None:
@@ -157,6 +34,141 @@ def test_initial_state_separates_binary_buffers() -> None:
         assert "payload" not in model["state"]
         assert model["bufferPaths"] == [["payload"]]
         assert model["buffers"] == ["AP8="]
+    finally:
+        session.close()
+
+
+def test_reused_child_cleanup_failure_retries_fresh_sibling_close() -> None:
+    class TransientCloseChild(ChildWidget):
+        close_attempts = 0
+
+        def close(self) -> None:
+            self.close_attempts += 1
+            if self.close_attempts == 1:
+                raise RuntimeError("fresh child close failed")
+            super().close()
+
+    foreign = ChildWidget(value=1)
+    foreign_session = WidgetSession("foreign", foreign)
+    original = ChildWidget(value=2)
+    parent = NestedParentWidget(payload=[original])
+    session = WidgetSession("instance", parent)
+    fresh = TransientCloseChild(value=3)
+
+    try:
+        with pytest.raises(ExceptionGroup) as error_info:
+            parent.payload = [foreign, fresh]
+
+        assert "fresh child close failed" in repr(error_info.value)
+        assert parent.payload == [original]
+        assert fresh.close_attempts == 2
+        assert fresh.comm is None
+        assert foreign_session.receive(
+            foreign.model_id,
+            {"method": "request_state"},
+        ).messages
+        assert session.snapshot() == SessionSnapshot([], {}, {}, [], None, None)
+    finally:
+        session.close()
+        foreign_session.close()
+
+
+def test_asset_registry_retains_live_sources_and_the_latest_snapshot() -> None:
+    widget = HotSourceWidget()
+    session = WidgetSession("instance", widget)
+
+    try:
+        launch = session.launch_snapshot()
+        initial_id = launch.models[widget.model_id]["sourceRefs"]["_esm"]
+
+        widget._esm = "export default { render() { return 'middle'; } }"
+        widget._esm = "export default { render() { return 'current'; } }"
+        update = session.snapshot()
+        update_ids = [
+            message["sourceRefs"]["_esm"]
+            for message in update.messages
+            if "sourceRefs" in message
+        ]
+
+        assert len(update_ids) == 2
+        assert set(update.asset_manifest) == set(update_ids)
+        assert session.asset_contents(update_ids)[update_ids[0]]["text"].endswith(
+            "return 'middle'; } }"
+        )
+        assert session.asset_contents(update_ids)[update_ids[1]]["text"].endswith(
+            "return 'current'; } }"
+        )
+        with pytest.raises(KeyError, match="Unknown widget asset"):
+            session.asset_contents([initial_id])
+
+        following = session.snapshot()
+        assert following.asset_manifest == {}
+        with pytest.raises(KeyError, match="Unknown widget asset"):
+            session.asset_contents([update_ids[0]])
+        assert session.asset_contents([update_ids[1]])[update_ids[1]]["text"].endswith(
+            "return 'current'; } }"
+        )
+
+        widget._esm = "export default { render() { return 'middle'; } }"
+        repeated = session.snapshot()
+        assert set(repeated.asset_manifest) == {update_ids[0]}
+        assert session.asset_contents([update_ids[0]])[update_ids[0]]["text"].endswith(
+            "return 'middle'; } }"
+        )
+    finally:
+        session.close()
+
+
+def test_failed_asset_snapshot_preserves_the_committed_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    widget = HotSourceWidget()
+    session = WidgetSession("instance", widget)
+    original_asset_id = bridge._asset_id
+
+    try:
+        launch = session.launch_snapshot()
+        initial_id = launch.models[widget.model_id]["sourceRefs"]["_esm"]
+
+        def fail_new_source(kind: str, source: str) -> str:
+            if "broken" in source:
+                raise RuntimeError("asset hashing failed")
+            return original_asset_id(kind, source)
+
+        monkeypatch.setattr(bridge, "_asset_id", fail_new_source)
+        widget._esm = "export default { render() { return 'broken'; } }"
+
+        with pytest.raises(RuntimeError, match="asset hashing failed"):
+            session.snapshot()
+        assert session.asset_contents([initial_id])[initial_id]["text"].endswith(
+            "return 'initial'; } }"
+        )
+    finally:
+        session.close()
+
+
+def test_asset_registry_releases_sources_after_the_last_live_model_detaches() -> None:
+    first = SharedSourceChild()
+    second = SharedSourceChild()
+    root = NestedParentWidget(payload=[first, second])
+    session = WidgetSession("instance", root)
+
+    try:
+        launch = session.launch_snapshot()
+        first_id = launch.models[first.model_id]["sourceRefs"]["_esm"]
+        second_id = launch.models[second.model_id]["sourceRefs"]["_esm"]
+        assert first_id == second_id
+
+        root.payload = [second]
+        session.snapshot()
+        assert session.asset_contents([first_id])[first_id]["text"].endswith(
+            "return 'shared'; } }"
+        )
+
+        root.payload = []
+        session.snapshot()
+        with pytest.raises(KeyError, match="Unknown widget asset"):
+            session.asset_contents([first_id])
     finally:
         session.close()
 
@@ -528,7 +540,7 @@ def test_widget_trait_replacement_adds_new_model_and_disposes_detached_child() -
 
         assert snapshot.models[second.model_id]["state"]["value"] == 9
         assert snapshot.removed_model_ids == [first_model_id]
-        assert first.comm is None
+        assert first.comm is not None
         assert any(
             message["modelId"] == parent.model_id
             and message["data"].get("state", {}).get("child")
@@ -536,10 +548,101 @@ def test_widget_trait_replacement_adds_new_model_and_disposes_detached_child() -
             for message in snapshot.messages
         )
 
+        session.acknowledge_model_removals([first_model_id])
+        assert first.comm is None
+
         response = session.receive(second.model_id, {"method": "request_state"})
         assert any(
             message["modelId"] == second.model_id for message in response.messages
         )
+    finally:
+        session.close()
+
+
+def test_detached_child_accepts_browser_update_until_removal_snapshot() -> None:
+    first = ChildWidget(value=7)
+    parent = ParentWidget(child=first)
+    session = WidgetSession("instance", parent)
+    second = ChildWidget(value=9)
+    first_model_id = first.model_id
+    first_comm = first.comm
+
+    try:
+        session.launch_snapshot()
+        parent.child = second
+
+        assert first.comm is first_comm
+        snapshot = session.receive(
+            first_model_id,
+            {
+                "method": "update",
+                "state": {"value": 11},
+                "buffer_paths": [],
+            },
+        )
+
+        assert first.value == 11
+        assert snapshot.removed_model_ids == [first_model_id]
+        assert any(
+            message["modelId"] == first_model_id
+            and message["data"].get("state") == {"value": 11}
+            for message in snapshot.messages
+        )
+        assert first.comm is first_comm
+        with pytest.raises(KeyError, match="not awaiting acknowledgment"):
+            session.acknowledge_model_removals(["unknown-model"])
+
+        session.acknowledge_model_removals([first_model_id])
+        assert first.comm is None
+        with pytest.raises(KeyError, match="Unknown widget model"):
+            session.receive(first_model_id, {"method": "request_state"})
+    finally:
+        session.close()
+
+
+def test_close_disposes_child_detached_before_removal_snapshot() -> None:
+    first = ChildWidget(value=7)
+    parent = ParentWidget(child=first)
+    session = WidgetSession("instance", parent)
+    second = ChildWidget(value=9)
+
+    parent.child = second
+    session.close()
+
+    assert first.comm is None
+    assert second.comm is None
+    assert parent.comm is None
+
+
+def test_close_disposes_child_awaiting_removal_acknowledgment() -> None:
+    first = ChildWidget(value=7)
+    parent = ParentWidget(child=first)
+    session = WidgetSession("instance", parent)
+    second = ChildWidget(value=9)
+
+    parent.child = second
+    session.snapshot()
+    session.close()
+
+    assert first.comm is None
+    assert second.comm is None
+    assert parent.comm is None
+
+
+def test_launch_snapshot_finalizes_models_never_exposed_to_the_browser() -> None:
+    first = ChildWidget(value=7)
+    parent = ParentWidget(child=first)
+    session = WidgetSession("instance", parent)
+    second = ChildWidget(value=9)
+    first_model_id = first.model_id
+
+    try:
+        parent.child = second
+        launch = session.launch_snapshot()
+
+        assert first_model_id not in launch.models
+        assert launch.removed_model_ids == []
+        assert first.comm is None
     finally:
         session.close()
 
@@ -849,542 +952,3 @@ def test_custom_projection_cannot_commit_a_pre_notify_value() -> None:
     finally:
         widget.resume_value_notification.set()
         session.close()
-
-
-def test_deferred_projection_retries_when_notification_finishes_before_drain() -> None:
-    widget = PausedNotifyWidget()
-    projection_started = threading.Event()
-    mutation_done = threading.Event()
-    calls = 0
-
-    def project(current: anywidget.AnyWidget) -> dict[str, int]:
-        nonlocal calls
-        assert isinstance(current, PausedNotifyWidget)
-        calls += 1
-        if calls == 2:
-            projection_started.set()
-            if not current.value_stored.wait(1):
-                raise RuntimeError("value storage test did not start")
-        return {"trigger": current.trigger, "value": current.value}
-
-    session = WidgetSession("instance", widget, project)
-    context = session._state_context
-    assert context is not None
-    original_refresh = context.refresh
-
-    def finish_notification_after_defer() -> _RefreshStatus:
-        status = original_refresh()
-        if status is _RefreshStatus.DEFERRED:
-            widget.resume_value_notification.set()
-            if not mutation_done.wait(1):
-                raise RuntimeError("value notification test did not finish")
-        return status
-
-    setattr(context, "refresh", finish_notification_after_defer)
-
-    def change_value() -> None:
-        try:
-            widget.value = 8
-        finally:
-            mutation_done.set()
-
-    try:
-        assert session.take_projection() is not None
-        widget.trigger = 1
-        widget.pause_value_notification = True
-        snapshots: list[SessionSnapshot] = []
-        capture = threading.Thread(target=lambda: snapshots.append(session.snapshot()))
-        capture.start()
-        assert projection_started.wait(1)
-        mutation = threading.Thread(target=change_value)
-        mutation.start()
-        assert mutation_done.wait(1)
-        capture.join()
-        mutation.join()
-
-        assert len(snapshots) == 1
-        snapshot = snapshots[0]
-        assert snapshot.projection is not None
-        assert snapshot.projection.state == {"trigger": 1, "value": 8}
-        assert [message["data"]["state"] for message in snapshot.messages] == [
-            {"trigger": 1},
-            {"value": 8},
-        ]
-    finally:
-        widget.resume_value_notification.set()
-        session.close()
-
-
-def test_projection_mutation_returns_one_context_error() -> None:
-    widget = ProjectionWidget()
-
-    def project(current: anywidget.AnyWidget) -> dict[str, int]:
-        assert isinstance(current, ProjectionWidget)
-        if current.a == 1 and current.b == 0:
-            current.b = 2
-        return {"a": current.a, "b": current.b}
-
-    session = WidgetSession("instance", widget, project)
-    try:
-        assert session.take_projection() is not None
-        widget.a = 1
-
-        snapshot = session.snapshot()
-
-        assert snapshot.projection is None
-        assert snapshot.projection_error == (
-            "State projection callables must not mutate synchronized widget traits"
-        )
-        assert [message["data"]["state"] for message in snapshot.messages] == [
-            {"a": 1},
-            {"b": 2},
-        ]
-        assert session.snapshot() == SessionSnapshot([], {}, [], None, None)
-    finally:
-        session.close()
-
-
-def test_blocking_projection_does_not_block_close_or_commit_late_state() -> None:
-    widget = ProjectionWidget()
-    projection_started = threading.Event()
-    release_projection = threading.Event()
-    snapshot_done = threading.Event()
-    close_done = threading.Event()
-    snapshots: list[SessionSnapshot] = []
-    errors: list[BaseException] = []
-    calls = 0
-
-    def project(current: anywidget.AnyWidget) -> dict[str, int]:
-        nonlocal calls
-        assert isinstance(current, ProjectionWidget)
-        calls += 1
-        if calls == 2:
-            projection_started.set()
-            release_projection.wait()
-        return {"a": current.a, "b": current.b}
-
-    session = WidgetSession("instance", widget, project)
-    context = session._state_context
-
-    def take_snapshot() -> None:
-        try:
-            snapshots.append(session.snapshot())
-        except BaseException as error:
-            errors.append(error)
-        finally:
-            snapshot_done.set()
-
-    def close_session() -> None:
-        try:
-            session.close()
-        except BaseException as error:
-            errors.append(error)
-        finally:
-            close_done.set()
-
-    try:
-        assert session.take_projection() is not None
-        widget.a = 1
-        capture = threading.Thread(target=take_snapshot)
-        capture.start()
-        assert projection_started.wait(1)
-
-        closing = threading.Thread(target=close_session)
-        closing.start()
-        assert close_done.wait(0.1)
-        closing.join()
-        assert session.snapshot() == SessionSnapshot([], {}, [], None, None)
-
-        release_projection.set()
-        assert snapshot_done.wait(1)
-        capture.join()
-
-        assert errors == []
-        assert snapshots == [SessionSnapshot([], {}, [], None, None)]
-        assert context is not None
-        assert context.take_cached() is None
-    finally:
-        release_projection.set()
-        session.close()
-
-
-def test_snapshot_times_out_for_stalled_notification(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(bridge, "_NOTIFICATION_WAIT_SECONDS", 0.01)
-    notification_started = threading.Event()
-    resume_notification = threading.Event()
-    mutation_done = threading.Event()
-    widget = ChildWidget()
-
-    def stall_notification(_change: object) -> None:
-        notification_started.set()
-        resume_notification.wait()
-
-    widget.observe(stall_notification, names="value")
-    session = WidgetSession("instance", widget)
-
-    def mutate() -> None:
-        try:
-            widget.value = 8
-        finally:
-            mutation_done.set()
-
-    mutation = threading.Thread(target=mutate)
-    mutation.start()
-    try:
-        assert notification_started.wait(1)
-        with pytest.raises(TimeoutError, match="before snapshot"):
-            session.snapshot()
-        resume_notification.set()
-        assert mutation_done.wait(1)
-        mutation.join()
-        assert session.snapshot().messages
-    finally:
-        resume_notification.set()
-        mutation.join()
-        session.close()
-
-
-def test_snapshot_rejects_active_notification_thread() -> None:
-    errors: list[Exception] = []
-    widget = ChildWidget()
-
-    def take_reentrant_snapshot(_change: object) -> None:
-        try:
-            session.snapshot()
-        except Exception as error:
-            errors.append(error)
-
-    widget.observe(take_reentrant_snapshot, names="value")
-    session = WidgetSession("instance", widget)
-    try:
-        widget.value = 8
-
-        assert len(errors) == 1
-        assert isinstance(errors[0], RuntimeError)
-        assert "inside an active widget notification" in str(errors[0])
-        assert session.snapshot().messages
-    finally:
-        session.close()
-
-
-def test_close_cleans_up_after_stalled_notification(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(bridge, "_NOTIFICATION_WAIT_SECONDS", 0.01)
-    notification_started = threading.Event()
-    resume_notification = threading.Event()
-    mutation_done = threading.Event()
-    widget_closed = threading.Event()
-
-    class TrackedWidget(ChildWidget):
-        def close(self) -> None:
-            widget_closed.set()
-            super().close()
-
-    widget = TrackedWidget()
-    original_notify_change = widget.notify_change
-
-    def stall_notification(_change: object) -> None:
-        notification_started.set()
-        resume_notification.wait()
-
-    widget.observe(stall_notification, names="value")
-    session = WidgetSession("instance", widget)
-    comm = widget.comm
-
-    def mutate() -> None:
-        try:
-            widget.value = 8
-        finally:
-            mutation_done.set()
-
-    mutation = threading.Thread(target=mutate)
-    mutation.start()
-    try:
-        assert notification_started.wait(1)
-        with pytest.raises(ExceptionGroup) as error_info:
-            session.close()
-
-        assert any(
-            isinstance(error, TimeoutError) for error in error_info.value.exceptions
-        )
-        assert widget_closed.is_set()
-        assert widget.notify_change == original_notify_change
-        assert session.snapshot() == SessionSnapshot([], {}, [], None, None)
-        assert comm is not None
-        with pytest.raises(RuntimeError, match="widget session is closed"):
-            comm.receive({"method": "request_state"})
-    finally:
-        resume_notification.set()
-        assert mutation_done.wait(1)
-        mutation.join()
-        session.close()
-
-
-def test_reentrant_close_cleans_up_before_raising() -> None:
-    errors: list[BaseException] = []
-    widget_closed = False
-
-    class TrackedWidget(ChildWidget):
-        def close(self) -> None:
-            nonlocal widget_closed
-            widget_closed = True
-            super().close()
-
-    widget = TrackedWidget()
-
-    def close_from_notification(_change: object) -> None:
-        try:
-            session.close()
-        except BaseException as error:
-            errors.append(error)
-
-    widget.observe(close_from_notification, names="value")
-    session = WidgetSession("instance", widget)
-    comm = widget.comm
-    widget.value = 8
-
-    assert widget_closed
-    assert len(errors) == 1
-    assert isinstance(errors[0], ExceptionGroup)
-    assert any(
-        isinstance(error, RuntimeError)
-        and "inside an active widget notification" in str(error)
-        for error in errors[0].exceptions
-    )
-    assert session.snapshot() == SessionSnapshot([], {}, [], None, None)
-    assert comm is not None
-    with pytest.raises(RuntimeError, match="widget session is closed"):
-        comm.receive({"method": "request_state"})
-    session.close()
-
-
-def test_widget_trait_replacement_survives_detached_cleanup_failure() -> None:
-    replacement_closed = False
-
-    class BrokenDetachedChild(ChildWidget):
-        def close(self) -> None:
-            if getattr(self, "_fail_close", True):
-                self._fail_close = False
-                raise RuntimeError("detached child close failed")
-            super().close()
-
-    class TrackedReplacement(ChildWidget):
-        def close(self) -> None:
-            nonlocal replacement_closed
-            replacement_closed = True
-            super().close()
-
-    first = BrokenDetachedChild(value=1)
-    parent = ParentWidget(child=first)
-    session = WidgetSession("instance", parent)
-    first_comm = first.comm
-    second = TrackedReplacement(value=2)
-
-    try:
-        parent.child = second
-
-        assert set(session.models) == {parent.model_id, second.model_id}
-        assert session.receive(
-            second.model_id,
-            {"method": "request_state"},
-        ).messages
-        assert first_comm is not None
-        with pytest.raises(RuntimeError, match="widget session is closed"):
-            first_comm.receive({"method": "request_state"})
-    finally:
-        session.close()
-        first.close()
-
-    assert replacement_closed
-
-
-def test_rapid_widget_trait_replacement_preserves_transient_model_messages() -> None:
-    first = ChildWidget(value=1)
-    parent = ParentWidget(child=first)
-    session = WidgetSession("instance", parent)
-    second = ChildWidget(value=2)
-    third = ChildWidget(value=3)
-    first_model_id = first.model_id
-    second_model_id = second.model_id
-
-    try:
-        parent.child = second
-        second.value = 20
-        parent.child = third
-        snapshot = session.snapshot()
-
-        assert set(snapshot.models) == {second_model_id, third.model_id}
-        assert snapshot.removed_model_ids == [first_model_id, second_model_id]
-        assert any(
-            message["modelId"] == second_model_id
-            and message["data"].get("state", {}).get("value") == 20
-            for message in snapshot.messages
-        )
-    finally:
-        session.close()
-
-
-def test_reused_dynamic_child_rolls_back_without_foreign_messages() -> None:
-    foreign = ChildWidget(value=4)
-    foreign_session = WidgetSession("foreign", foreign)
-    original = ChildWidget(value=5)
-    parent = ParentWidget(child=original)
-    session = WidgetSession("instance", parent)
-    foreign_model_id = foreign.model_id
-
-    try:
-        with pytest.raises(WidgetInUseError, match="fresh nested widgets"):
-            parent.child = foreign
-
-        assert parent.child is original
-        assert foreign.comm is not None
-        assert foreign_session.receive(
-            foreign_model_id,
-            {"method": "request_state"},
-        ).messages
-        snapshot = session.snapshot()
-        assert all(
-            f"anywidget:{foreign_model_id}" not in str(message["data"].get("state", {}))
-            for message in snapshot.messages
-        )
-        assert snapshot.models == {}
-        assert snapshot.removed_model_ids == []
-    finally:
-        session.close()
-        foreign_session.close()
-
-
-def test_protocol_container_reused_child_rolls_back_without_closing_session() -> None:
-    foreign = ChildWidget(value=4)
-    foreign_session = WidgetSession("foreign", foreign)
-    original = ChildWidget(value=5)
-    container = ProtocolContainer(payload=[original])
-    root = NestedParentWidget(payload=[container])
-    session = WidgetSession("instance", root)
-    foreign_model_id = foreign.model_id
-
-    try:
-        with pytest.raises(WidgetInUseError, match="fresh nested widgets"):
-            container.payload = [foreign]
-
-        assert container.payload == [original]
-        assert foreign.comm is not None
-        assert foreign_session.receive(
-            foreign_model_id,
-            {"method": "request_state"},
-        ).messages
-        snapshot = session.snapshot()
-        assert all(
-            f"anywidget:{foreign_model_id}" not in str(message["data"].get("state", {}))
-            for message in snapshot.messages
-        )
-        assert snapshot.models == {}
-        assert snapshot.removed_model_ids == []
-    finally:
-        session.close()
-        foreign_session.close()
-
-
-def test_close_disposes_every_model_and_rejects_messages() -> None:
-    child = ChildWidget()
-    parent = ParentWidget(child=child)
-    session = WidgetSession("instance", parent)
-    parent_id = session.root_model_id
-
-    session.close()
-    session.close()
-
-    assert parent.comm is None
-    assert child.comm is None
-    assert session.snapshot().messages == []
-    with pytest.raises(RuntimeError, match="widget session is closed"):
-        session.receive(parent_id, {"method": "request_state"})
-
-
-def test_close_attempts_every_widget_after_one_cleanup_fails() -> None:
-    closed: list[str] = []
-
-    class BrokenChild(ChildWidget):
-        def close(self) -> None:
-            fail = getattr(self, "_fail_close", True)
-            self._fail_close = False
-            super().close()
-            closed.append("child")
-            if fail:
-                raise RuntimeError("child close failed")
-
-    class TrackedParent(ParentWidget):
-        def close(self) -> None:
-            super().close()
-            closed.append("parent")
-
-    child = BrokenChild()
-    parent = TrackedParent(child=child)
-    session = WidgetSession("instance", parent)
-
-    with pytest.raises(ExceptionGroup, match="Failed to close widget session"):
-        session.close()
-
-    assert closed == ["child", "parent"]
-    assert child.comm is None
-    assert parent.comm is None
-    session.close()
-
-
-def test_close_closes_comm_when_widget_fails_before_base_cleanup() -> None:
-    class BrokenWidget(ChildWidget):
-        def close(self) -> None:
-            raise RuntimeError("widget close failed")
-
-    widget = BrokenWidget()
-    session = WidgetSession("instance", widget)
-    comm = widget.comm
-
-    with pytest.raises(ExceptionGroup, match="Failed to close widget session"):
-        session.close()
-
-    assert comm is not None
-    with pytest.raises(RuntimeError, match="widget session is closed"):
-        comm.receive({"method": "request_state"})
-    session.close()
-
-
-def test_closed_widget_cannot_be_returned_by_another_tool_call() -> None:
-    widget = ChildWidget()
-    session = WidgetSession("first", widget)
-    session.close()
-
-    with pytest.raises(WidgetInUseError, match="fresh root"):
-        WidgetSession("second", widget)
-
-
-def test_closed_child_cannot_be_reused_in_a_fresh_root() -> None:
-    child = ChildWidget()
-    first_root = ParentWidget(child=child)
-    second_root = ParentWidget(child=child)
-    first = WidgetSession("first", first_root)
-    first.close()
-
-    with pytest.raises(WidgetInUseError, match="fresh nested widgets"):
-        WidgetSession("second", second_root)
-
-    assert second_root.comm is None
-
-
-def test_fresh_instance_tracking_accepts_unhashable_widgets() -> None:
-    first = WidgetSession("first", UnhashableWidget())
-    second = WidgetSession("second", UnhashableWidget())
-
-    first.close()
-    second.close()
-
-
-def test_fresh_instance_tracking_uses_identity_for_equal_widgets() -> None:
-    first = WidgetSession("first", EqualWidget())
-    second = WidgetSession("second", EqualWidget())
-
-    first.close()
-    second.close()

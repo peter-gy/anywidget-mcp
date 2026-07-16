@@ -7,6 +7,7 @@ import {
 } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "./app.css";
+import { AssetStore, hydrateSources, requireProtocolVersion } from "./assets";
 import {
 	WidgetBinding,
 	type Experimental,
@@ -26,18 +27,22 @@ import {
 	type ModelPayload,
 	type State,
 } from "./model";
+import { beginRuntimeReplacement } from "./runtime-replacement";
 import { ToolCallQueue, type QueuedToolCall } from "./tool-calls";
 
 interface RawModelPayload {
 	modelId?: string;
 	state?: State;
+	sourceRefs?: unknown;
 	buffers?: unknown[];
 	bufferPaths?: JsonPath[];
 }
 
 interface RawRuntimePayload {
+	protocolVersion?: unknown;
 	instanceId?: string;
 	rootModelId?: string;
+	assetManifest?: unknown;
 	models?: Record<string, RawModelPayload>;
 	messages?: unknown;
 	context?: ModelContextSnapshot;
@@ -46,6 +51,7 @@ interface RawRuntimePayload {
 interface RawCommMessage {
 	modelId?: string;
 	data?: CommData;
+	sourceRefs?: unknown;
 	buffers?: unknown[];
 }
 
@@ -56,6 +62,13 @@ let app: App;
 let calls: ToolCallQueue;
 let runtime: WidgetRuntime | undefined;
 let connected: Promise<void>;
+let pendingAttempt:
+	| {
+			controller: AbortController;
+			promise: Promise<WidgetRuntime>;
+	  }
+	| undefined;
+let latestResultController: AbortController | undefined;
 
 function startApp(): void {
 	shell = getElement<HTMLElement>("app-shell");
@@ -79,14 +92,22 @@ function startApp(): void {
 	// Ext Apps delivers the first tool result during connect, so handlers must be
 	// installed before the bridge starts receiving host notifications.
 	app.addEventListener("toolresult", (result) => {
-		renderRequest = renderRequest.then(() => mountToolResult(result)).catch(showError);
+		if (!runtimePayload(result)) return;
+		latestResultController?.abort(new DOMException("Widget result superseded", "AbortError"));
+		const controller = new AbortController();
+		latestResultController = controller;
+		renderRequest = renderRequest.then(() => mountToolResult(result, controller)).catch(showError);
 	});
 	app.addEventListener("toolcancelled", (params) => {
+		latestResultController?.abort(new DOMException("Widget call cancelled", "AbortError"));
 		showStatus(params.reason ? `Widget call cancelled: ${params.reason}` : "Widget call cancelled");
 	});
 	app.addEventListener("hostcontextchanged", applyHostContext);
 	app.onerror = (error) => showError(error);
 	app.onteardown = async () => {
+		latestResultController?.abort(new DOMException("Widget app is closing", "AbortError"));
+		await disposeRuntime();
+		await renderRequest;
 		await disposeRuntime();
 		return {};
 	};
@@ -106,31 +127,61 @@ function startApp(): void {
 
 if (typeof document !== "undefined") startApp();
 
-async function mountToolResult(result: CallToolResult): Promise<void> {
+async function mountToolResult(result: CallToolResult, controller: AbortController): Promise<void> {
 	const payload = runtimePayload(result);
 	if (!payload) return;
-
-	await disposeRuntime();
-	showStatus("Loading widget…");
-	root.replaceChildren();
-	root.hidden = true;
-
-	const next = new WidgetRuntime(payload, calls, app, connected);
-	runtime = next;
+	const instanceId = requiredString(payload.instanceId, "instance ID");
+	const replacement = beginRuntimeReplacement(
+		(signal) => disposeRuntime(signal),
+		async (signal) => {
+			showStatus("Loading widget…");
+			root.replaceChildren();
+			root.hidden = true;
+			return await WidgetRuntime.create(payload, calls, app, connected, undefined, signal);
+		},
+		async () => {
+			await disposeServerSession(
+				calls,
+				instanceId,
+				"Timed out while disposing cancelled widget creation",
+			).catch(reportRuntimeError);
+		},
+		controller,
+	);
+	const { promise: creation } = replacement;
+	pendingAttempt = replacement;
+	let next: WidgetRuntime | undefined;
 	try {
-		await next.mount(root);
-	} catch (error) {
-		if (runtime === next) runtime = undefined;
-		await next.dispose();
-		throw error;
-	}
-	if (runtime !== next) return;
+		next = await creation;
+		controller.signal.throwIfAborted();
+		runtime = next;
+		await abortable(next.mount(root, controller.signal), controller.signal);
+		controller.signal.throwIfAborted();
 
-	root.hidden = false;
-	status.hidden = true;
+		root.hidden = false;
+		status.hidden = true;
+	} catch (error) {
+		if (next !== undefined) {
+			if (runtime === next) runtime = undefined;
+			await next.dispose(controller.signal.reason);
+		}
+		root.replaceChildren();
+		root.hidden = true;
+		if (controller.signal.aborted) return;
+		throw error;
+	} finally {
+		if (pendingAttempt?.controller === controller) pendingAttempt = undefined;
+	}
 }
 
-async function disposeRuntime(): Promise<void> {
+async function disposeRuntime(preserve?: AbortSignal): Promise<void> {
+	const pending = pendingAttempt;
+	if (pending && pending.controller.signal !== preserve) {
+		pendingAttempt = undefined;
+		pending.controller.abort(new DOMException("Widget runtime is closing", "AbortError"));
+		const prepared = await pending.promise.catch(() => undefined);
+		if (prepared) await prepared.dispose(pending.controller.signal.reason);
+	}
 	const current = runtime;
 	runtime = undefined;
 	if (current) await current.dispose();
@@ -190,6 +241,10 @@ interface CustomProtocolOperation {
 	data: CommData;
 	buffers: string[];
 	operationId: string;
+	signal: AbortSignal;
+	dispatched: boolean;
+	completed: boolean;
+	abortDeadline?: ReturnType<typeof globalThis.setTimeout>;
 	resolve?: () => void;
 	reject?: (error: unknown) => void;
 }
@@ -215,6 +270,7 @@ export class WidgetRuntime {
 	private readonly initialContext?: ModelContextSnapshot;
 	private readonly createBinding: BindingFactory;
 	private readonly protocolOperations: ProtocolOperation[] = [];
+	private readonly pendingRemovalAcknowledgments = new Set<string>();
 	private protocolSequence = 0;
 	private protocolTask?: Promise<void>;
 	private activeProtocolCall?: QueuedToolCall;
@@ -223,6 +279,46 @@ export class WidgetRuntime {
 	private pollTask?: Promise<void>;
 	private pollActivityVersion = 0;
 	private pollWake?: () => void;
+	private readonly assetStore?: AssetStore;
+
+	static async create(
+		payload: RawRuntimePayload,
+		calls: ToolCallQueue,
+		app: App,
+		connected: Promise<void>,
+		createBinding?: BindingFactory,
+		signal?: AbortSignal,
+	): Promise<WidgetRuntime> {
+		const instanceId = requiredString(payload.instanceId, "instance ID");
+		try {
+			requireProtocolVersion(payload.protocolVersion);
+			signal?.throwIfAborted();
+			const assetStore = new AssetStore(instanceId);
+			const assets = await assetStore.resolve(
+				payload.assetManifest,
+				sourceRefValues(payload.models, payload.messages),
+				(name, args) => calls.call(name, args, signal),
+				signal,
+			);
+			signal?.throwIfAborted();
+			return new WidgetRuntime(
+				hydrateRuntimePayload(payload, assets),
+				calls,
+				app,
+				connected,
+				createBinding,
+				assetStore,
+			);
+		} catch (error) {
+			await disposeServerSession(
+				calls,
+				instanceId,
+				"Timed out while disposing failed widget creation",
+				RUNTIME_LIFECYCLE_TIMEOUT_MS,
+			).catch(() => undefined);
+			throw error;
+		}
+	}
 
 	constructor(
 		payload: RawRuntimePayload,
@@ -230,12 +326,14 @@ export class WidgetRuntime {
 		app: App,
 		connected: Promise<void>,
 		createBinding?: BindingFactory,
+		assetStore?: AssetStore,
 	) {
 		this.instanceId = requiredString(payload.instanceId, "instance ID");
 		this.rootModelId = requiredString(payload.rootModelId, "root model ID");
 		this.createBinding =
 			createBinding ??
 			((runtime, model) => new WidgetBinding(runtime, model, { reportError: showError }));
+		this.assetStore = assetStore;
 
 		for (const modelPayload of normalizeModels(payload.models)) {
 			this.registerModel(modelPayload);
@@ -250,16 +348,20 @@ export class WidgetRuntime {
 		this.initialContext = normalizeContext(payload.context);
 	}
 
-	async mount(element: HTMLElement): Promise<void> {
-		const initialized = await Promise.allSettled(
-			Array.from(this.bindings.values(), (binding) => binding.initialize()),
+	async mount(element: HTMLElement, signal = this.controller.signal): Promise<void> {
+		const initialized = await abortable(
+			Promise.allSettled(Array.from(this.bindings.values(), (binding) => binding.initialize())),
+			signal,
 		);
 		const failed = initialized.find(
 			(result): result is PromiseRejectedResult => result.status === "rejected",
 		);
 		if (failed) throw failed.reason;
+		signal.throwIfAborted();
 		this.controller.signal.throwIfAborted();
-		await this.binding(this.rootModelId).render(element, this.controller.signal);
+		await abortable(this.binding(this.rootModelId).render(element, signal), signal);
+		signal.throwIfAborted();
+		this.controller.signal.throwIfAborted();
 		if (this.initialContext) this.contextSync.enqueue(this.initialContext);
 		this.pollTask = this.poll();
 	}
@@ -314,12 +416,9 @@ export class WidgetRuntime {
 	}
 
 	private async finishDispose(): Promise<void> {
-		const disposeSignal = AbortSignal.timeout(3000);
-		const disposeRequest = withTimeout(
-			Promise.resolve().then(() =>
-				this.calls.callNow("anywidget_dispose", { instance_id: this.instanceId }, disposeSignal),
-			),
-			3000,
+		const disposeRequest = disposeServerSession(
+			this.calls,
+			this.instanceId,
 			"Timed out while disposing widget session",
 		).then(
 			() => ({ error: undefined }),
@@ -332,9 +431,12 @@ export class WidgetRuntime {
 			"Timed out while stopping widget protocol work",
 		).catch((error) => console.error(error));
 
-		await Promise.allSettled(
+		const bindingDisposals = await Promise.allSettled(
 			Array.from(this.bindings.values(), (binding) => this.disposeBinding(binding)),
 		);
+		for (const disposal of bindingDisposals) {
+			if (disposal.status === "rejected") console.error(disposal.reason);
+		}
 		void this.pollTask?.catch(() => undefined);
 
 		const { error } = await disposeRequest;
@@ -394,6 +496,7 @@ export class WidgetRuntime {
 				const result = new Promise<[T, DataView[]]>((resolve, reject) => {
 					let settled = false;
 					let response: [T, DataView[]] | undefined;
+					let operation: CustomProtocolOperation | undefined;
 					let removeResponseHandler: () => void = () => undefined;
 					const finish = (callback: () => void): void => {
 						if (settled) return;
@@ -405,7 +508,19 @@ export class WidgetRuntime {
 					const handler = (content: Record<string, unknown>, buffers: DataView[]) => {
 						response = [content.response as T, buffers];
 					};
-					const abort = () => finish(() => reject(abortReason(signal)));
+					const abort = () => {
+						const error = abortReason(signal);
+						if (operation) {
+							const index = this.protocolOperations.indexOf(operation);
+							if (index >= 0) {
+								this.protocolOperations.splice(index, 1);
+								this.rejectProtocolOperation(operation, error);
+							} else if (operation.dispatched) {
+								this.scheduleCancelledCommandDeadline(operation);
+							}
+						}
+						finish(() => reject(error));
+					};
 
 					if (signal.aborted) {
 						abort();
@@ -422,12 +537,13 @@ export class WidgetRuntime {
 							complete = resolveCompletion;
 							fail = rejectCompletion;
 						});
-						const operation = this.appendCustom(
+						operation = this.appendCustom(
 							model,
 							serialized.data,
 							serialized.buffers,
 							complete,
 							fail,
+							signal,
 						);
 						if (!operation) throw abortReason(this.controller.signal);
 						void completion.then(
@@ -555,6 +671,9 @@ export class WidgetRuntime {
 				await this.processProtocolOperation(operation);
 			} catch (error) {
 				this.rejectProtocolOperation(operation, error);
+				if (operation.kind === "custom" && operation.signal.aborted && !operation.dispatched) {
+					continue;
+				}
 				if (!this.controller.signal.aborted) this.fail(error);
 				return;
 			}
@@ -566,19 +685,50 @@ export class WidgetRuntime {
 		call?: QueuedToolCall,
 		signal = this.controller.signal,
 	): Promise<void> {
+		signal.throwIfAborted();
+		if (operation.kind === "custom") operation.signal.throwIfAborted();
+		const beforeDispatch =
+			operation.kind === "custom"
+				? () => {
+						if (operation.dispatched) return;
+						operation.signal.throwIfAborted();
+						operation.dispatched = true;
+					}
+				: undefined;
+		const suppressFailure =
+			operation.kind === "custom"
+				? () => operation.signal.aborted && !operation.dispatched
+				: undefined;
 		const process = (name: string, args: Record<string, unknown>): Promise<number> =>
-			call ? this.processProtocolCall(call, name, args, signal) : this.callAndProcess(name, args);
+			call
+				? this.processProtocolCall(call, name, args, signal, beforeDispatch, suppressFailure)
+				: this.callAndProcess(name, args, signal, beforeDispatch, suppressFailure);
 		if (operation.kind === "poll") {
-			const count = await process("anywidget_poll", {
-				instance_id: this.instanceId,
-				operation_id: operation.operationId,
-			});
-			operation.resolve(count);
+			const acknowledgedModelIds = Array.from(this.pendingRemovalAcknowledgments);
+			for (const modelId of acknowledgedModelIds) {
+				this.pendingRemovalAcknowledgments.delete(modelId);
+			}
+			try {
+				const count = await process("anywidget_poll", {
+					instance_id: this.instanceId,
+					operation_id: operation.operationId,
+					acknowledged_model_ids: acknowledgedModelIds,
+				});
+				operation.resolve(count);
+			} catch (error) {
+				for (const modelId of acknowledgedModelIds) {
+					this.pendingRemovalAcknowledgments.add(modelId);
+				}
+				throw error;
+			}
 			return;
 		}
 		if (this.models.get(operation.model.modelId) !== operation.model) {
 			if (operation.kind === "custom") {
-				operation.reject?.(new Error(`Unknown anywidget model ${operation.model.modelId}`));
+				this.rejectProtocolOperation(
+					operation,
+					new Error(`Unknown anywidget model ${operation.model.modelId}`),
+				);
 			}
 			return;
 		}
@@ -594,7 +744,10 @@ export class WidgetRuntime {
 			operation_id: operation.operationId,
 		});
 		this.noteProtocolActivity();
-		if (operation.kind === "custom") operation.resolve?.();
+		if (operation.kind === "custom") {
+			this.completeCustomOperation(operation);
+			operation.resolve?.();
+		}
 	}
 
 	private appendCustom(
@@ -603,6 +756,7 @@ export class WidgetRuntime {
 		buffers: string[],
 		resolve?: () => void,
 		reject?: (error: unknown) => void,
+		signal = this.controller.signal,
 	): CustomProtocolOperation | undefined {
 		if (this.disposed || this.models.get(model.modelId) !== model) return undefined;
 		const operation: CustomProtocolOperation = {
@@ -612,6 +766,9 @@ export class WidgetRuntime {
 			data,
 			buffers,
 			operationId: randomId(),
+			signal,
+			dispatched: false,
+			completed: false,
 			resolve,
 			reject,
 		};
@@ -634,7 +791,7 @@ export class WidgetRuntime {
 				scope.error ??= error;
 				const index = this.protocolOperations.indexOf(operation);
 				if (index >= 0) this.protocolOperations.splice(index, 1);
-				operation.reject?.(error);
+				this.rejectProtocolOperation(operation, error);
 				throw error;
 			}
 		});
@@ -671,13 +828,36 @@ export class WidgetRuntime {
 	}
 
 	private rejectProtocolOperation(operation: ProtocolOperation, error: unknown): void {
+		if (operation.kind === "custom") this.completeCustomOperation(operation);
 		if (operation.kind === "poll" || operation.kind === "custom") operation.reject?.(error);
 	}
 
-	private callAndProcess(name: string, args: Record<string, unknown>): Promise<number> {
+	private completeCustomOperation(operation: CustomProtocolOperation): void {
+		operation.completed = true;
+		if (operation.abortDeadline !== undefined) {
+			globalThis.clearTimeout(operation.abortDeadline);
+			operation.abortDeadline = undefined;
+		}
+	}
+
+	private scheduleCancelledCommandDeadline(operation: CustomProtocolOperation): void {
+		if (this.disposed || operation.completed || operation.abortDeadline !== undefined) return;
+		operation.abortDeadline = globalThis.setTimeout(() => {
+			if (operation.completed || this.disposed) return;
+			this.fail(new Error("Timed out while waiting for a cancelled widget command"));
+		}, RUNTIME_LIFECYCLE_TIMEOUT_MS);
+	}
+
+	private callAndProcess(
+		name: string,
+		args: Record<string, unknown>,
+		signal = this.controller.signal,
+		beforeDispatch?: () => void,
+		suppressFailure?: () => boolean,
+	): Promise<number> {
 		return this.calls.transaction(
-			(call) => this.processProtocolCall(call, name, args),
-			this.controller.signal,
+			(call) => this.processProtocolCall(call, name, args, signal, beforeDispatch, suppressFailure),
+			signal,
 		);
 	}
 
@@ -686,16 +866,20 @@ export class WidgetRuntime {
 		name: string,
 		args: Record<string, unknown>,
 		signal = this.controller.signal,
+		beforeDispatch?: () => void,
+		suppressFailure?: () => boolean,
 	): Promise<number> {
 		const previousCall = this.activeProtocolCall;
 		this.activeProtocolCall = call;
 		try {
-			const result = await this.callWithRetry(call, name, args, signal);
+			const result = await this.callWithRetry(call, name, args, signal, beforeDispatch);
 			signal.throwIfAborted();
 			if (result.isError) throw new Error(toolErrorText(result));
-			return await this.processResult(result, call);
+			return await this.processResult(result, call, signal);
 		} catch (error) {
-			if (!this.controller.signal.aborted && !signal.aborted) this.fail(error);
+			if (!suppressFailure?.() && !this.controller.signal.aborted && !signal.aborted) {
+				this.fail(error);
+			}
 			throw error;
 		} finally {
 			this.activeProtocolCall = previousCall;
@@ -708,11 +892,13 @@ export class WidgetRuntime {
 		name: string,
 		args: Record<string, unknown>,
 		signal = this.controller.signal,
+		beforeDispatch?: () => void,
 	): Promise<CallToolResult> {
 		for (let attempt = 0; ; attempt += 1) {
 			try {
 				signal.throwIfAborted();
-				return await abortable(call(name, args), signal);
+				beforeDispatch?.();
+				return await abortable(call(name, args, signal), signal);
 			} catch (error) {
 				signal.throwIfAborted();
 				const retryDelay = TRANSPORT_RETRY_DELAYS_MS[attempt];
@@ -728,13 +914,36 @@ export class WidgetRuntime {
 		void this.dispose(error).catch(reportRuntimeError);
 	}
 
-	private processResult(result: CallToolResult, call?: QueuedToolCall): Promise<number> {
-		return this.applyMessages(result, call);
+	private processResult(
+		result: CallToolResult,
+		call?: QueuedToolCall,
+		signal = this.controller.signal,
+	): Promise<number> {
+		return this.applyMessages(result, call, signal);
 	}
 
-	private async applyMessages(result: CallToolResult, call?: QueuedToolCall): Promise<number> {
+	private async applyMessages(
+		result: CallToolResult,
+		call?: QueuedToolCall,
+		signal = this.controller.signal,
+	): Promise<number> {
 		if (this.disposed) return 0;
-		const added = normalizeModelChanges(resultModels(result));
+		let rawModels = resultModels(result);
+		let rawMessages: unknown = resultMessages(result);
+		if (this.assetStore) {
+			const payload = resultAnywidget(result);
+			requireProtocolVersion(payload?.protocolVersion);
+			const assets = await this.assetStore.resolve(
+				payload?.assetManifest,
+				sourceRefValues(rawModels, rawMessages),
+				call ?? ((name, args) => this.calls.call(name, args, signal)),
+				signal,
+			);
+			signal.throwIfAborted();
+			rawModels = hydrateRawModels(rawModels, assets);
+			rawMessages = hydrateRawMessages(rawMessages, assets);
+		}
+		const added = normalizeModelChanges(rawModels);
 		const registered: string[] = [];
 		try {
 			for (const payload of added) {
@@ -742,7 +951,7 @@ export class WidgetRuntime {
 				registered.push(payload.modelId);
 			}
 
-			const messages = resultMessages(result);
+			const messages = normalizeMessages(rawMessages);
 			for (const message of messages) {
 				const modelId = message.modelId;
 				if (!modelId || !message.data) continue;
@@ -760,9 +969,19 @@ export class WidgetRuntime {
 			for (const modelId of registered) await this.binding(modelId).initialize(call);
 			if (this.disposed) return 0;
 			await this.removeModels(removedModelIds);
+			for (const modelId of removedModelIds) {
+				this.pendingRemovalAcknowledgments.add(modelId);
+			}
 			return messages.length + added.length + removedModelIds.length + (context ? 1 : 0);
 		} catch (error) {
-			await this.removeModels(registered);
+			try {
+				await this.removeModels(registered);
+			} catch (cleanupError) {
+				throw new AggregateError(
+					[error, cleanupError],
+					"Failed to apply and roll back widget model changes",
+				);
+			}
 			throw error;
 		}
 	}
@@ -807,7 +1026,16 @@ export class WidgetRuntime {
 			this.models.delete(modelId);
 			if (binding) bindings.push(binding);
 		}
-		await Promise.allSettled(bindings.map((binding) => this.disposeBinding(binding)));
+		const disposals = await Promise.allSettled(
+			bindings.map((binding) => this.disposeBinding(binding)),
+		);
+		const errors = disposals.flatMap((result) =>
+			result.status === "rejected" ? [result.reason] : [],
+		);
+		if (errors.length === 1) throw errors[0];
+		if (errors.length > 1) {
+			throw new AggregateError(errors, "Failed to dispose removed anywidget bindings");
+		}
 	}
 
 	private async disposeBinding(binding: RuntimeBinding): Promise<void> {
@@ -815,8 +1043,24 @@ export class WidgetRuntime {
 			Promise.resolve().then(() => binding.dispose()),
 			RUNTIME_LIFECYCLE_TIMEOUT_MS,
 			"Timed out while disposing anywidget binding",
-		).catch((error) => console.error(error));
+		);
 	}
+}
+
+function disposeServerSession(
+	calls: ToolCallQueue,
+	instanceId: string,
+	message: string,
+	timeout = RUNTIME_LIFECYCLE_TIMEOUT_MS,
+): Promise<CallToolResult> {
+	const signal = AbortSignal.timeout(timeout);
+	return withTimeout(
+		Promise.resolve().then(() =>
+			calls.callNow("anywidget_dispose", { instance_id: instanceId }, signal),
+		),
+		timeout,
+		message,
+	);
 }
 
 function toolErrorText(result: CallToolResult): string {
@@ -829,19 +1073,21 @@ function runtimePayload(result: CallToolResult): RawRuntimePayload | undefined {
 	if (!isRecord(meta)) return undefined;
 	const payload = meta.anywidget;
 	if (!isRecord(payload)) return undefined;
-	if (!("rootModelId" in payload)) return undefined;
+	if (!("instanceId" in payload) && !("rootModelId" in payload)) return undefined;
 	return payload as unknown as RawRuntimePayload;
 }
 
-function resultMessages(result: CallToolResult): RawCommMessage[] {
+function resultAnywidget(result: CallToolResult): Record<string, unknown> | undefined {
 	const meta = isRecord(result._meta) ? result._meta.anywidget : undefined;
-	if (isRecord(meta) && Array.isArray(meta.messages)) return meta.messages as RawCommMessage[];
-	return [];
+	return isRecord(meta) ? meta : undefined;
+}
+
+function resultMessages(result: CallToolResult): unknown {
+	return resultAnywidget(result)?.messages;
 }
 
 function resultModels(result: CallToolResult): unknown {
-	const meta = isRecord(result._meta) ? result._meta.anywidget : undefined;
-	return isRecord(meta) ? meta.models : undefined;
+	return resultAnywidget(result)?.models;
 }
 
 function resultRemovedModelIds(result: CallToolResult): string[] {
@@ -875,6 +1121,68 @@ function normalizeContext(value: unknown): ModelContextSnapshot | undefined {
 	};
 }
 
+function hydrateRuntimePayload(
+	payload: RawRuntimePayload,
+	assets: Map<string, string>,
+): RawRuntimePayload {
+	return {
+		...payload,
+		models: hydrateRawModels(payload.models, assets) as Record<string, RawModelPayload>,
+		messages: hydrateRawMessages(payload.messages, assets),
+	};
+}
+
+function sourceRefValues(models: unknown, messages: unknown): unknown[] {
+	const values: unknown[] = [];
+	if (isRecord(models)) {
+		for (const model of Object.values(models)) {
+			if (isRecord(model)) values.push(model.sourceRefs);
+		}
+	}
+	if (Array.isArray(messages)) {
+		for (const message of messages) {
+			if (isRecord(message)) values.push(message.sourceRefs);
+		}
+	}
+	return values;
+}
+
+function hydrateRawModels(models: unknown, assets: Map<string, string>): unknown {
+	if (!isRecord(models)) return models;
+	return Object.fromEntries(
+		Object.entries(models).map(([modelId, value]) => {
+			if (!isRecord(value) || !isRecord(value.state)) return [modelId, value];
+			return [
+				modelId,
+				{
+					...value,
+					state: hydrateSources(value.state, value.sourceRefs, assets),
+				},
+			];
+		}),
+	);
+}
+
+function hydrateRawMessages(messages: unknown, assets: Map<string, string>): unknown {
+	if (!Array.isArray(messages)) return messages;
+	return messages.map((value) => {
+		if (!isRecord(value) || !isRecord(value.data) || !isRecord(value.data.state)) return value;
+		return {
+			...value,
+			data: {
+				...value.data,
+				state: hydrateSources(value.data.state, value.sourceRefs, assets),
+			},
+		};
+	});
+}
+
+function normalizeMessages(value: unknown): RawCommMessage[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new Error("Widget messages must be an array");
+	return value as RawCommMessage[];
+}
+
 function normalizeModels(models: Record<string, unknown> | undefined): ModelPayload[] {
 	if (!isRecord(models)) throw new Error("Widget payload has no models");
 
@@ -885,10 +1193,12 @@ function normalizeModels(models: Record<string, unknown> | undefined): ModelPayl
 		if (!isRecord(raw.state)) throw new Error(`Model ${modelId} has no state`);
 		const bufferPaths = Array.isArray(raw.bufferPaths) ? raw.bufferPaths : [];
 		const state = insertBuffers({ ...raw.state }, bufferPaths, decodeBuffers(raw.buffers));
-		const esm = requiredString(state._esm, `ESM for model ${modelId}`);
+		requiredString(state._esm, `ESM for model ${modelId}`);
 		const cssValue = state._css;
-		const css = typeof cssValue === "string" ? cssValue : undefined;
-		return { modelId, state, esm, css };
+		if (cssValue !== undefined && typeof cssValue !== "string") {
+			throw new Error(`Invalid CSS for model ${modelId}`);
+		}
+		return { modelId, state };
 	});
 }
 

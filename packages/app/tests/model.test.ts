@@ -12,7 +12,6 @@ function payload(state: Record<string, unknown> = {}): ModelPayload {
 	return {
 		modelId: "model-1",
 		state,
-		esm: "export default {}",
 	};
 }
 

@@ -86,6 +86,37 @@ describe("ToolCallQueue cancellation", () => {
 		expect(callServerTool.mock.calls.map(([request]) => request.name)).toEqual(["first", "second"]);
 	});
 
+	test("lets a nested call narrow the active transaction signal", async () => {
+		let activeSignal: AbortSignal | undefined;
+		const callServerTool = vi.fn(
+			(
+				_request: { name: string; arguments?: Record<string, unknown> },
+				options?: { signal?: AbortSignal },
+			): Promise<CallToolResult> => {
+				activeSignal = options?.signal;
+				return new Promise((_resolve, reject) => {
+					activeSignal?.addEventListener("abort", () => reject(activeSignal?.reason), {
+						once: true,
+					});
+				});
+			},
+		);
+		const calls = new ToolCallQueue({ callServerTool });
+		const outer = new AbortController();
+		const inner = new AbortController();
+
+		const result = calls.transaction(
+			(call) => call("anywidget_assets", {}, inner.signal),
+			outer.signal,
+		);
+		await vi.waitFor(() => expect(activeSignal).toBeDefined());
+		inner.abort(new DOMException("initializer stopped", "AbortError"));
+
+		await expect(result).rejects.toMatchObject({ name: "AbortError" });
+		expect(activeSignal?.aborted).toBe(true);
+		expect(outer.signal.aborted).toBe(false);
+	});
+
 	test("dispatches a direct teardown while queued work is still active", async () => {
 		const active = deferred<CallToolResult>();
 		const callServerTool = vi

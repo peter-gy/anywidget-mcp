@@ -13,6 +13,53 @@ from anywidget.experimental import command
 from anywidget_mcp import AnyWidgetMCP
 
 
+def _large_leaf_module() -> str:
+    source = """
+    export default {
+      render({ model, el }) {
+        const output = document.createElement("output");
+        output.dataset.testid = "large-asset-leaf";
+        output.value = model.get("label");
+        el.append(output);
+      },
+    };
+    """
+    target_bytes = 3 * 1024 * 1024
+    padding_bytes = target_bytes - len(source.encode("utf-8")) - len("\n/**/")
+    return f"{source}\n/*{'x' * padding_bytes}*/"
+
+
+class LargeAssetLeaf(anywidget.AnyWidget):
+    _esm = _large_leaf_module()
+
+    label = traitlets.Unicode().tag(sync=True)
+
+
+class LargeAssetProbe(anywidget.AnyWidget):
+    _esm = """
+    export default {
+      async render({ model, el, host, signal }) {
+        const status = document.createElement("output");
+        status.dataset.testid = "large-asset-status";
+        status.value = "loading";
+        el.append(status);
+
+        for (const name of ["first", "second"]) {
+          const childRoot = document.createElement("div");
+          childRoot.dataset.testid = `large-asset-${name}`;
+          el.append(childRoot);
+          const child = await host.getWidget(model.get(name));
+          await child.render({ el: childRoot, signal });
+        }
+        status.value = "ready";
+      },
+    };
+    """
+
+    first = anywidget.WidgetTrait().tag(sync=True)
+    second = anywidget.WidgetTrait().tag(sync=True)
+
+
 class ChildWidget(anywidget.AnyWidget):
     _esm = """
     export default {
@@ -341,6 +388,14 @@ def create_server(*, host: str, port: int) -> AnyWidgetMCP:
         state=None,
     )
 
+    @server.widget(name="large_asset_probe", title="Large asset probe", state=None)
+    def large_asset_probe() -> LargeAssetProbe:
+        """Open two models that share one three-megabyte ESM source."""
+        return LargeAssetProbe(
+            first=LargeAssetLeaf(label="first large source"),
+            second=LargeAssetLeaf(label="second large source"),
+        )
+
     @server.widget(
         name="nested_probe",
         title="Nested composition probe",
@@ -371,8 +426,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         server.run(transport="streamable-http")
     except KeyboardInterrupt:
         pass
-    finally:
-        server.close()
 
 
 if __name__ == "__main__":

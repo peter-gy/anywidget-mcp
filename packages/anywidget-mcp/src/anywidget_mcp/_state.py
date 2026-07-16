@@ -7,12 +7,51 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from enum import Enum
 from itertools import islice
-from typing import Any, cast
+from typing import Any, Generic, TypeVar, cast
 
 from anywidget import AnyWidget
 
-StateProjector = Callable[[Any], Mapping[str, Any]]
-StateSpec = tuple[str, ...] | StateProjector | None
+WidgetT = TypeVar("WidgetT", bound=AnyWidget)
+StateProjector = Callable[[Any], Mapping[str, object]]
+
+
+@dataclass(frozen=True, init=False)
+class StateProjection(Generic[WidgetT]):
+    """Project model-visible state when selected root traits change.
+
+    Args:
+        project: Read-only function that returns a mapping for the root widget.
+        watch: Root trait names that invalidate the projection. ``None`` observes
+            every trait in the enrolled widget graph. An empty sequence computes
+            the projection once during launch.
+    """
+
+    project: Callable[[WidgetT], Mapping[str, object]]
+    watch: tuple[str, ...] | None
+
+    def __init__(
+        self,
+        project: Callable[[WidgetT], Mapping[str, object]],
+        *,
+        watch: str | Sequence[str] | None = None,
+    ) -> None:
+        if not callable(project):
+            raise TypeError("StateProjection project must be callable")
+        if watch is None:
+            normalized_watch = None
+        elif isinstance(watch, str):
+            normalized_watch = (watch,)
+        elif isinstance(watch, Sequence) and all(
+            isinstance(name, str) for name in watch
+        ):
+            normalized_watch = tuple(watch)
+        else:
+            raise TypeError("StateProjection watch must contain trait names")
+        object.__setattr__(self, "project", project)
+        object.__setattr__(self, "watch", normalized_watch)
+
+
+StateSpec = tuple[str, ...] | StateProjector | StateProjection[Any] | None
 
 
 class _DefaultState:
@@ -73,8 +112,14 @@ class StateContext:
         self._mutated_during_refresh = False
         self._closed = False
         self._observers: list[tuple[object, tuple[str, ...]]] = []
+        self._projection_guards: list[tuple[object, tuple[str, ...]]] = []
         self._notified_values: dict[tuple[int, str], tuple[object, Any]] = {}
-        self._tracks_all_widgets = False
+        self._tracks_widget_graph = False
+        self._observes_widget_graph = False
+        self._guards_projection_mutations = False
+        self._tracked_widgets: list[object] = []
+        self._invalidates_on_comm = False
+        self._dirty_traits: set[tuple[int, str]] | None = set()
         self._trait_names: tuple[str, ...] | None = None
 
         if state is None:
@@ -91,6 +136,7 @@ class StateContext:
             )
             self._projector = _traits_projector(names)
             self._trait_names = names
+            self._dirty_traits = {(id(root), name) for name in names}
             self._observe(root, names)
             return
 
@@ -101,55 +147,106 @@ class StateContext:
             _validate_trait_names(root, names)
             self._projector = _traits_projector(names)
             self._trait_names = names
+            self._dirty_traits = {(id(root), name) for name in names}
             self._observe(root, names)
+            return
+
+        if isinstance(state, StateProjection):
+            self._projector = state.project
+            self._tracks_widget_graph = True
+            if state.watch is None:
+                self._observes_widget_graph = True
+                self._dirty_traits = None
+                self._invalidates_on_comm = True
+                self.add_widgets(widgets)
+            else:
+                _validate_trait_names(root, state.watch)
+                self._dirty_traits = {(id(root), name) for name in state.watch}
+                self._guards_projection_mutations = True
+                self.add_widgets(widgets)
+                self._observe(root, state.watch)
             return
 
         if not callable(state):
             raise TypeError("state must be callable")
         self._projector = state
-        self._tracks_all_widgets = True
+        self._tracks_widget_graph = True
+        self._observes_widget_graph = True
+        self._dirty_traits = None
+        self._invalidates_on_comm = True
         self.add_widgets(widgets)
 
     def add_widgets(self, widgets: Sequence[object]) -> None:
         with self._lock:
-            if not self._tracks_all_widgets:
+            if not self._tracks_widget_graph:
                 return
             added = False
-            for widget in widgets:
-                if any(observed is widget for observed, _names in self._observers):
-                    continue
-                names = _observable_trait_names(widget)
-                if not names:
-                    continue
-                self._observe(widget, names)
-                added = True
-            if added:
+            tracked: list[object] = []
+            try:
+                for widget in widgets:
+                    if any(current is widget for current in self._tracked_widgets):
+                        continue
+                    self._tracked_widgets.append(widget)
+                    tracked.append(widget)
+                    if not self._observes_widget_graph:
+                        continue
+                    names = _observable_trait_names(widget)
+                    if not names:
+                        continue
+                    self._observe(widget, names)
+                    added = True
+            except Exception:
+                self.remove_widgets(tracked)
+                raise
+            if added and self._dirty_traits is None:
                 self._mark_dirty_locked()
 
     def remove_widgets(self, widgets: Sequence[object]) -> None:
         with self._lock:
-            if not self._tracks_all_widgets:
+            if not self._tracks_widget_graph:
                 return
             targets = {id(widget) for widget in widgets}
             if not targets:
                 return
+            if not self._observes_widget_graph:
+                self._tracked_widgets = [
+                    widget
+                    for widget in self._tracked_widgets
+                    if id(widget) not in targets
+                ]
+                return
             retained: list[tuple[object, tuple[str, ...]]] = []
+            failed_targets: set[int] = set()
+            errors: list[Exception] = []
             removed = False
             for widget, names in self._observers:
                 if id(widget) not in targets:
                     retained.append((widget, names))
                     continue
-                _unobserve(widget, self._mark_dirty, names)
+                try:
+                    _unobserve(widget, self._mark_dirty, names)
+                except Exception as error:
+                    retained.append((widget, names))
+                    failed_targets.add(id(widget))
+                    errors.append(error)
+                    continue
                 for name in names:
                     self._notified_values.pop((id(widget), name), None)
                 removed = True
             self._observers = retained
-            if removed:
+            self._tracked_widgets = [
+                widget
+                for widget in self._tracked_widgets
+                if id(widget) not in targets or id(widget) in failed_targets
+            ]
+            if removed and self._dirty_traits is None:
                 self._mark_dirty_locked()
+            if errors:
+                raise ExceptionGroup("Failed to remove state observers", errors)
 
     def invalidate(self) -> None:
         with self._lock:
-            if self._closed or not self._tracks_all_widgets:
+            if self._closed or not self._invalidates_on_comm:
                 return
             self._mark_dirty_locked()
 
@@ -196,22 +293,28 @@ class StateContext:
         state: dict[str, Any] | None = None
         state_json: str | None = None
         error: Exception | None = None
+        projection_guards: list[tuple[object, tuple[str, ...]]] = []
         try:
-            if trait_names is None:
-                projected = projector(self._root)
-            else:
-                projected = _project_notified_traits(
-                    self._root,
-                    trait_names,
-                    notified_values,
-                )
-            if not isinstance(projected, Mapping):
-                raise TypeError(
-                    "The widget state projection must return a mapping, "
-                    f"got {type(projected).__name__}"
-                )
-            state = _bounded_mapping(projected)
-            state_json = _canonical_json(state)
+            try:
+                if self._guards_projection_mutations:
+                    projection_guards = self._install_projection_guards()
+                if trait_names is None:
+                    projected = projector(self._root)
+                else:
+                    projected = _project_notified_traits(
+                        self._root,
+                        trait_names,
+                        notified_values,
+                    )
+                if not isinstance(projected, Mapping):
+                    raise TypeError(
+                        "The widget state projection must return a mapping, "
+                        f"got {type(projected).__name__}"
+                    )
+                state = _bounded_mapping(projected)
+                state_json = _canonical_json(state)
+            finally:
+                self._remove_projection_guards(projection_guards)
         except Exception as caught:
             error = caught
         except BaseException:
@@ -302,43 +405,146 @@ class StateContext:
             return update
 
     def close(self) -> None:
+        errors: list[Exception] = []
         with self._lock:
-            if self._closed:
+            if self._closed and not self._observers and not self._projection_guards:
                 return
             self._closed = True
-            observers = self._observers
-            self._observers.clear()
+            self._tracked_widgets.clear()
             self._notified_values.clear()
             self._pending_update = None
             self._pending_error = None
-        for widget, names in observers:
-            _unobserve(widget, self._mark_dirty, names)
+            retained: list[tuple[object, tuple[str, ...]]] = []
+            for widget, names in self._observers:
+                try:
+                    _unobserve(widget, self._mark_dirty, names)
+                except Exception as error:
+                    retained.append((widget, names))
+                    errors.append(error)
+            self._observers = retained
+            retained_guards: list[tuple[object, tuple[str, ...]]] = []
+            for widget, names in self._projection_guards:
+                try:
+                    _unobserve(widget, self._mark_dirty, names)
+                except Exception as error:
+                    retained_guards.append((widget, names))
+                    errors.append(error)
+            self._projection_guards = retained_guards
+        if errors:
+            raise ExceptionGroup("Failed to close state observers", errors)
 
     def _observe(self, widget: object, names: tuple[str, ...]) -> None:
         if not names:
             return
-        for name in names:
-            self._notified_values[(id(widget), name)] = (widget, getattr(widget, name))
-        observe = getattr(widget, "observe")
-        observe(self._mark_dirty, names=names)
-        self._observers.append((widget, names))
+        with self._lock:
+            observe = getattr(widget, "observe")
+            registration = (widget, names)
+            self._observers.append(registration)
+            try:
+                observe(self._mark_dirty, names=names)
+                for name in names:
+                    self._notified_values[(id(widget), name)] = (
+                        widget,
+                        getattr(widget, name),
+                    )
+            except BaseException as error:
+                cleanup_error: Exception | None = None
+                try:
+                    _unobserve(widget, self._mark_dirty, names)
+                except Exception as caught:
+                    cleanup_error = caught
+                else:
+                    for index, (current_widget, current_names) in enumerate(
+                        self._observers
+                    ):
+                        if current_widget is widget and current_names == names:
+                            self._observers.pop(index)
+                            break
+                for name in names:
+                    self._notified_values.pop((id(widget), name), None)
+                if cleanup_error is not None:
+                    raise BaseExceptionGroup(
+                        "Failed to initialize and remove a state observer",
+                        [error, cleanup_error],
+                    ) from error
+                raise
 
     def _mark_dirty(self, change: object) -> None:
         with self._lock:
-            if not self._closed:
-                if isinstance(change, Mapping):
-                    owner = change.get("owner")
-                    name = change.get("name")
-                    if owner is not None and isinstance(name, str):
-                        key = (id(owner), name)
-                        if key in self._notified_values:
-                            self._notified_values[key] = (owner, change.get("new"))
+            if self._closed:
+                return
+            key: tuple[int, str] | None = None
+            if isinstance(change, Mapping):
+                owner = change.get("owner")
+                name = change.get("name")
+                if owner is not None and isinstance(name, str):
+                    key = (id(owner), name)
+                    if key in self._notified_values:
+                        self._notified_values[key] = (owner, change.get("new"))
+            if self._refresh_thread_id == threading.get_ident():
+                self._mutated_during_refresh = True
+            if self._dirty_traits is None or key in self._dirty_traits:
                 self._mark_dirty_locked()
 
     def _mark_dirty_locked(self) -> None:
         self._dirty_generation += 1
-        if self._refresh_thread_id == threading.get_ident():
-            self._mutated_during_refresh = True
+
+    def _install_projection_guards(
+        self,
+    ) -> list[tuple[object, tuple[str, ...]]]:
+        with self._lock:
+            widgets = tuple(self._tracked_widgets)
+            observed: dict[int, set[str]] = {}
+            for widget, names in (*self._observers, *self._projection_guards):
+                observed.setdefault(id(widget), set()).update(names)
+            guards: list[tuple[object, tuple[str, ...]]] = []
+            try:
+                for widget in widgets:
+                    names = tuple(
+                        name
+                        for name in _observable_trait_names(widget)
+                        if name not in observed.get(id(widget), ())
+                    )
+                    if not names:
+                        continue
+                    observe = getattr(widget, "observe")
+                    observe(self._mark_dirty, names=names)
+                    guard = (widget, names)
+                    guards.append(guard)
+                    self._projection_guards.append(guard)
+            except BaseException as error:
+                try:
+                    self._remove_projection_guards(guards)
+                except Exception as cleanup_error:
+                    if isinstance(error, Exception):
+                        raise ExceptionGroup(
+                            "Failed to install and remove projection guards",
+                            [error, cleanup_error],
+                        ) from error
+                    raise
+                raise
+        return guards
+
+    def _remove_projection_guards(
+        self,
+        guards: Sequence[tuple[object, tuple[str, ...]]],
+    ) -> None:
+        errors: list[Exception] = []
+        with self._lock:
+            for widget, names in guards:
+                try:
+                    _unobserve(widget, self._mark_dirty, names)
+                except Exception as error:
+                    errors.append(error)
+                    continue
+                for index, (current, current_names) in enumerate(
+                    self._projection_guards
+                ):
+                    if current is widget and current_names == names:
+                        self._projection_guards.pop(index)
+                        break
+        if errors:
+            raise ExceptionGroup("Failed to remove projection guards", errors)
 
     def _finish_refresh(self) -> None:
         self._refreshing = False
@@ -347,17 +553,23 @@ class StateContext:
 
 
 def validate_state_spec(state: object) -> None:
-    if state is DEFAULT_STATE or state is None or callable(state):
+    if (
+        state is DEFAULT_STATE
+        or state is None
+        or isinstance(state, StateProjection)
+        or callable(state)
+    ):
         return
     if isinstance(state, tuple) and all(isinstance(name, str) for name in state):
         return
     raise TypeError(
-        "state must be a tuple of trait names, a projection callable, None, or omitted"
+        "state must be a tuple of trait names, a StateProjection, "
+        "a projection callable, None, or omitted"
     )
 
 
 def _traits_projector(names: tuple[str, ...]) -> StateProjector:
-    def project(widget: AnyWidget) -> Mapping[str, Any]:
+    def project(widget: AnyWidget) -> Mapping[str, object]:
         return widget.get_state(key=names)
 
     return project

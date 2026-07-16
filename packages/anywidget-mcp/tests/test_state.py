@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, cast, overload
 
 import pytest
 from anywidget import AnyWidget
-from traitlets import Bytes, Float, Int, List, Unicode, observe
+from anywidget._descriptor import MimeBundleDescriptor
+from traitlets import All, Bytes, Float, Int, List, Unicode, observe
+from traitlets.utils.sentinel import Sentinel
 
+from anywidget_mcp import StateProjection
+from anywidget_mcp._bridge import WidgetSession, WidgetSessionInitializationError
 from anywidget_mcp._state import DEFAULT_STATE, StateContext
+
+from .bridge_test_widgets import NestedParentWidget
 
 
 class StateWidget(AnyWidget):
@@ -25,6 +31,110 @@ class StateWidget(AnyWidget):
     @observe("value")
     def _derive_doubled(self, change: dict[str, Any]) -> None:
         self.doubled = change["new"] * 2
+
+
+class ObservationWidget(StateWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.state_observers: dict[str, int] = {}
+
+    def observe(
+        self,
+        handler: Callable[..., Any],
+        names: Sentinel | str | Iterable[Sentinel | str] = All,
+        type: Sentinel | str = "change",
+    ) -> None:
+        super().observe(handler, names=names, type=type)
+        if not hasattr(self, "state_observers") or not isinstance(
+            getattr(handler, "__self__", None), StateContext
+        ):
+            return
+        for name in self._names(names):
+            self.state_observers[name] = self.state_observers.get(name, 0) + 1
+
+    def unobserve(
+        self,
+        handler: Callable[..., Any],
+        names: Sentinel | str | Iterable[Sentinel | str] = All,
+        type: Sentinel | str = "change",
+    ) -> None:
+        super().unobserve(handler, names=names, type=type)
+        if not hasattr(self, "state_observers") or not isinstance(
+            getattr(handler, "__self__", None), StateContext
+        ):
+            return
+        for name in self._names(names):
+            remaining = self.state_observers.get(name, 0) - 1
+            if remaining > 0:
+                self.state_observers[name] = remaining
+            else:
+                self.state_observers.pop(name, None)
+
+    @staticmethod
+    def _names(names: Any) -> tuple[str, ...]:
+        if isinstance(names, str):
+            return (names,)
+        return tuple(name for name in names if isinstance(name, str))
+
+
+class RegistrationMutationWidget(StateWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mutate_during_state_observe = True
+
+    def observe(
+        self,
+        handler: Callable[..., Any],
+        names: Sentinel | str | Iterable[Sentinel | str] = All,
+        type: Sentinel | str = "change",
+    ) -> None:
+        if getattr(self, "mutate_during_state_observe", False) and isinstance(
+            getattr(handler, "__self__", None), StateContext
+        ):
+            self.mutate_during_state_observe = False
+            self.value = 7
+        super().observe(handler, names=names, type=type)
+
+
+class BrokenObservationWidget:
+    def trait_names(self) -> list[str]:
+        raise RuntimeError("trait discovery failed")
+
+    def observe(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+    def unobserve(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+
+class UnobserveProbe:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.value = 1
+        self.fail = fail
+        self.attempts = 0
+        self.observers: list[tuple[Callable[..., Any], tuple[str, ...]]] = []
+
+    def trait_names(self) -> list[str]:
+        return ["value"]
+
+    def observe(
+        self,
+        handler: Callable[..., Any],
+        *,
+        names: Sequence[str],
+    ) -> None:
+        self.observers.append((handler, tuple(names)))
+
+    def unobserve(
+        self,
+        handler: Callable[..., Any],
+        *,
+        names: Sequence[str],
+    ) -> None:
+        self.attempts += 1
+        if self.fail:
+            raise RuntimeError("unobserve failed")
+        self.observers.remove((handler, tuple(names)))
 
 
 class CountingMapping(Mapping[str, int]):
@@ -151,6 +261,53 @@ def test_selected_projection_tracks_python_authoritative_observer_state() -> Non
     assert changed.version == 2
     assert changed.state == {"doubled": 14, "value": 7}
     assert duplicate is None
+
+
+def test_selected_projection_seeds_values_after_observer_registration() -> None:
+    widget = RegistrationMutationWidget()
+    context = StateContext(widget, [widget], ("value", "doubled"))
+
+    try:
+        initial = context.take()
+    finally:
+        context.close()
+        widget.close()
+
+    assert initial is not None
+    assert initial.state == {"doubled": 14, "value": 7}
+
+
+def test_callable_projection_computes_after_observer_registration_change() -> None:
+    widget = RegistrationMutationWidget()
+    context = StateContext(
+        widget,
+        [widget],
+        lambda current: {"doubled": current.doubled, "value": current.value},
+    )
+
+    try:
+        initial = context.take()
+    finally:
+        context.close()
+        widget.close()
+
+    assert initial is not None
+    assert initial.state == {"doubled": 14, "value": 7}
+
+
+def test_callable_projection_rolls_back_partial_observer_registration() -> None:
+    widget = ObservationWidget()
+
+    try:
+        with pytest.raises(RuntimeError, match="trait discovery failed"):
+            StateContext(
+                widget,
+                [widget, BrokenObservationWidget()],
+                lambda current: {"value": current.value},
+            )
+        assert widget.state_observers == {}
+    finally:
+        widget.close()
 
 
 def test_none_disables_model_state() -> None:
@@ -382,6 +539,215 @@ def test_callable_projection_observes_dynamically_added_widgets() -> None:
     assert removed is None
 
 
+def test_remove_widgets_attempts_every_observer_and_retries_failures() -> None:
+    root = StateWidget()
+    failing = UnobserveProbe(fail=True)
+    healthy = UnobserveProbe()
+    context = StateContext(root, [root, failing, healthy], lambda _widget: {})
+
+    try:
+        with pytest.raises(
+            ExceptionGroup,
+            match="Failed to remove state observers",
+        ) as error_info:
+            context.remove_widgets([failing, healthy])
+
+        assert [str(error) for error in error_info.value.exceptions] == [
+            "unobserve failed"
+        ]
+        assert failing.attempts == 1
+        assert len(failing.observers) == 1
+        assert healthy.attempts == 1
+        assert healthy.observers == []
+
+        failing.fail = False
+        context.remove_widgets([failing])
+        assert failing.attempts == 2
+        assert failing.observers == []
+    finally:
+        context.close()
+        root.close()
+
+
+def test_close_attempts_every_observer_before_raising_cleanup_errors() -> None:
+    root = StateWidget()
+    failing = UnobserveProbe(fail=True)
+    healthy = UnobserveProbe()
+    context = StateContext(root, [root, failing, healthy], lambda _widget: {})
+
+    try:
+        with pytest.raises(
+            ExceptionGroup,
+            match="Failed to close state observers",
+        ) as error_info:
+            context.close()
+
+        assert [str(error) for error in error_info.value.exceptions] == [
+            "unobserve failed"
+        ]
+        assert failing.attempts == 1
+        assert len(failing.observers) == 1
+        assert healthy.attempts == 1
+        assert healthy.observers == []
+
+        failing.fail = False
+        context.close()
+        assert failing.attempts == 2
+        assert failing.observers == []
+    finally:
+        root.close()
+
+
+def test_projection_guard_cleanup_attempts_every_observer_and_retries() -> None:
+    root = StateWidget()
+    failing = UnobserveProbe(fail=True)
+    healthy = UnobserveProbe()
+    context = StateContext(
+        root,
+        [root, failing, healthy],
+        StateProjection(lambda _widget: {}, watch="value"),
+    )
+
+    try:
+        with pytest.raises(
+            ExceptionGroup,
+            match="Failed to remove projection guards",
+        ):
+            context.take()
+
+        assert failing.attempts == 1
+        assert len(failing.observers) == 1
+        assert healthy.attempts == 1
+        assert healthy.observers == []
+
+        root.value = 2
+        update = context.take()
+        assert update is not None
+        assert update.state == {}
+        assert failing.attempts == 1
+        assert len(failing.observers) == 1
+
+        failing.fail = False
+        context.close()
+        assert failing.attempts == 2
+        assert failing.observers == []
+    finally:
+        context.close()
+        root.close()
+
+
+def test_state_projection_recomputes_only_for_watched_root_traits() -> None:
+    widget = ObservationWidget()
+    child = ObservationWidget()
+    calls = 0
+
+    def project(current: StateWidget) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return {"label": current.label, "value": current.value}
+
+    context = StateContext(
+        widget,
+        [widget, child],
+        StateProjection(project, watch="value"),
+    )
+
+    try:
+        initial = context.take()
+        assert widget.state_observers == {"value": 1}
+        assert child.state_observers == {}
+        widget.label = "changed outside watch"
+        unrelated = context.take()
+        widget.value = 4
+        changed = context.take()
+    finally:
+        context.close()
+        widget.close()
+        child.close()
+
+    assert initial is not None
+    assert initial.state == {"label": "ready", "value": 1}
+    assert unrelated is None
+    assert changed is not None
+    assert changed.state == {"label": "changed outside watch", "value": 4}
+    assert calls == 2
+
+
+def test_state_projection_empty_watch_computes_once() -> None:
+    widget = ObservationWidget()
+    calls = 0
+
+    def project(current: StateWidget) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return {"value": current.value}
+
+    context = StateContext(widget, [widget], StateProjection(project, watch=()))
+
+    try:
+        initial = context.take()
+        assert widget.state_observers == {}
+        widget.value = 9
+        later = context.take()
+    finally:
+        context.close()
+        widget.close()
+
+    assert initial is not None and initial.state == {"value": 1}
+    assert later is None
+    assert calls == 1
+
+
+def test_state_projection_rejects_mutation_of_an_unwatched_trait() -> None:
+    widget = StateWidget()
+
+    def project(current: StateWidget) -> Mapping[str, Any]:
+        current.label = "mutated"
+        return {"value": current.value}
+
+    context = StateContext(
+        widget,
+        [widget],
+        StateProjection(project, watch="value"),
+    )
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="must not mutate synchronized widget traits",
+        ):
+            context.take()
+    finally:
+        context.close()
+        widget.close()
+
+
+def test_state_projection_rejects_mutation_of_an_unwatched_child() -> None:
+    widget = StateWidget()
+    child = StateWidget()
+
+    def project(current: StateWidget) -> Mapping[str, object]:
+        child.label = "mutated"
+        return {"value": current.value}
+
+    context = StateContext(
+        widget,
+        [widget, child],
+        StateProjection(project, watch="value"),
+    )
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="must not mutate synchronized widget traits",
+        ):
+            context.take()
+    finally:
+        context.close()
+        widget.close()
+        child.close()
+
+
 def test_unknown_selected_trait_is_actionable() -> None:
     widget = StateWidget()
     try:
@@ -389,6 +755,130 @@ def test_unknown_selected_trait_is_actionable() -> None:
             StateContext(widget, [widget], ("missing",))
     finally:
         widget.close()
+
+
+def test_partial_observer_install_is_retained_for_session_cleanup() -> None:
+    class PartialObserveWidget(StateWidget):
+        def __init__(self) -> None:
+            self.installed = 0
+            self.cleanup_attempts = 0
+            super().__init__()
+
+        def observe(self, *args: Any, **kwargs: Any) -> None:
+            handler = args[0]
+            super().observe(*args, **kwargs)
+            if isinstance(getattr(handler, "__self__", None), StateContext):
+                self.installed += 1
+                raise RuntimeError("observer install failed")
+
+        def unobserve(self, *args: Any, **kwargs: Any) -> None:
+            handler = args[0]
+            if isinstance(getattr(handler, "__self__", None), StateContext):
+                self.cleanup_attempts += 1
+                if self.cleanup_attempts < 3:
+                    raise RuntimeError("observer cleanup failed")
+            super().unobserve(*args, **kwargs)
+            if isinstance(getattr(handler, "__self__", None), StateContext):
+                self.installed -= 1
+
+    widget = PartialObserveWidget()
+    with pytest.raises(WidgetSessionInitializationError) as error_info:
+        WidgetSession("instance", widget, ("value",))
+
+    assert widget.installed == 1
+    error_info.value.session.close()
+    assert widget.cleanup_attempts == 3
+    assert widget.installed == 0
+
+
+def test_partial_graph_observer_install_is_retained_for_session_cleanup() -> None:
+    class PartialGraphObserveWidget(StateWidget):
+        def __init__(self) -> None:
+            self.installed = 0
+            self.cleanup_attempts = 0
+            super().__init__()
+
+        def observe(self, *args: Any, **kwargs: Any) -> None:
+            handler = args[0]
+            super().observe(*args, **kwargs)
+            if getattr(handler, "__name__", None) == "_sync_widget_graph":
+                self.installed += 1
+                raise RuntimeError("graph observer install failed")
+
+        def unobserve(self, *args: Any, **kwargs: Any) -> None:
+            handler = args[0]
+            if getattr(handler, "__name__", None) == "_sync_widget_graph":
+                self.cleanup_attempts += 1
+                if self.cleanup_attempts < 3:
+                    raise RuntimeError("graph observer cleanup failed")
+            super().unobserve(*args, **kwargs)
+            if getattr(handler, "__name__", None) == "_sync_widget_graph":
+                self.installed -= 1
+
+    widget = PartialGraphObserveWidget()
+    with pytest.raises(WidgetSessionInitializationError) as error_info:
+        WidgetSession("instance", widget, None)
+
+    assert widget.installed == 1
+    error_info.value.session.close()
+    assert widget.cleanup_attempts == 3
+    assert widget.installed == 0
+
+
+def test_partial_graph_discovery_closes_widgets_collected_before_failure() -> None:
+    class TrackedChild(StateWidget):
+        close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+            super().close()
+
+    class BrokenProtocolChild:
+        _repr_mimebundle_ = MimeBundleDescriptor(
+            _esm="export default { render() {} }",
+            autodetect_observer=False,
+            follow_changes=False,
+        )
+
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def _get_anywidget_state(
+            self,
+            include: set[str] | None,
+        ) -> dict[str, object]:
+            self.reads += 1
+            if self.reads > 1:
+                raise RuntimeError("nested state failed")
+            return {"value": 1}
+
+    valid = TrackedChild()
+    root = NestedParentWidget(payload=[BrokenProtocolChild(), valid])
+
+    with pytest.raises(RuntimeError, match="nested state failed"):
+        WidgetSession("instance", root)
+
+    assert valid.close_count == 1
+    assert valid.comm is None
+
+
+def test_capture_serialization_failure_restores_the_changed_trait() -> None:
+    class BrokenProtocolChild:
+        @property
+        def _repr_mimebundle_(self) -> object:
+            raise RuntimeError("nested state failed")
+
+    root = NestedParentWidget(payload=None)
+    session = WidgetSession("instance", root)
+
+    try:
+        with pytest.raises(RuntimeError, match="nested state failed"):
+            root.payload = BrokenProtocolChild()
+
+        assert root.payload is None
+        assert set(session.models) == {root.model_id}
+    finally:
+        session.close()
 
 
 def test_callable_projection_must_return_a_mapping() -> None:

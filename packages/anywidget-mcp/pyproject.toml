@@ -9,7 +9,14 @@ description = "Expose AnyWidget interfaces as interactive MCP Apps"
 readme = "README.md"
 authors = [{ name = "Péter Ferenc Gyarmati", email = "dev.petergy@gmail.com" }]
 requires-python = ">=3.12"
-dependencies = ["anywidget>=0.11.0", "mcp>=1.28.1,<2", "starlette>=0.27", "traitlets>=5.15.1"]
+dependencies = [
+	"anyio>=4.5",
+	"anywidget>=0.11.0",
+	"mcp>=1.28.1,<2",
+	"pydantic>=2.11,<3",
+	"starlette>=0.27",
+	"traitlets>=5.15.1",
+]
 
 [project.scripts]
 anywidget-mcp = "anywidget_mcp.cli:main"

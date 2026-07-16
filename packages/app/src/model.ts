@@ -5,8 +5,6 @@ export type State = Record<string, unknown>;
 export interface ModelPayload {
 	modelId: string;
 	state: State;
-	esm: string;
-	css?: string;
 }
 
 export interface CommData {

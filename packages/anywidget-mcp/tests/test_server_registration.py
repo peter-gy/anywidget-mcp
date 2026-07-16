@@ -1,0 +1,634 @@
+from __future__ import annotations
+
+import functools
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import Any, cast
+
+import pytest
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.types import Icon, TextContent, ToolAnnotations
+from pydantic import AnyUrl
+from starlette.testclient import TestClient
+from traitlets import Int
+from wigglystuff import ColorPicker, Matrix, Slider2D, SortableList
+
+from anywidget_mcp import (
+    APP_RESOURCE_URI,
+    AnyWidgetMCP,
+    WidgetTools,
+    attach,
+)
+from anywidget_mcp.server import describe_widget_target
+
+from ._server_support import CounterWidget, connected
+
+RowValues = list[str]
+
+
+@pytest.mark.anyio
+async def test_attach_registers_classes_sync_factories_and_async_factories() -> None:
+    mcp = FastMCP("test")
+    widgets = attach(mcp)
+    created: list[CounterWidget] = []
+
+    assert isinstance(widgets, WidgetTools)
+    assert widgets.widget(ColorPicker, state="color") is ColorPicker
+
+    @widgets.widget
+    def counter(value: int = 1) -> CounterWidget:
+        widget = CounterWidget(value=value)
+        created.append(widget)
+        return widget
+
+    @widgets.widget
+    async def async_counter(value: int = 2) -> CounterWidget:
+        widget = CounterWidget(value=value)
+        created.append(widget)
+        return widget
+
+    async with create_connected_server_and_client_session(
+        mcp,
+        raise_exceptions=True,
+    ) as client:
+        color = await client.call_tool("color_picker", {"color": "#c026d3"})
+        sync_result = await client.call_tool("counter", {"value": 3})
+        async_result = await client.call_tool("async_counter", {"value": 4})
+
+    assert color.structuredContent == {
+        "tool": "color_picker",
+        "state": {"color": "#c026d3"},
+    }
+    assert color.content == [
+        TextContent(
+            type="text",
+            text='Opened Color Picker with state {"color":"#c026d3"}.',
+        )
+    ]
+    assert color.meta is not None
+    assert color.meta["anywidget"]["context"] == {
+        "version": 1,
+        "tool": "color_picker",
+        "state": {"color": "#c026d3"},
+    }
+    assert sync_result.structuredContent == {
+        "tool": "counter",
+        "state": {"doubled": 6, "value": 3},
+    }
+    assert async_result.structuredContent == {
+        "tool": "async_counter",
+        "state": {"doubled": 8, "value": 4},
+    }
+    assert all(widget.comm is None for widget in created)
+
+
+def test_attach_rejects_a_second_adapter() -> None:
+    mcp = FastMCP("test")
+    attach(mcp)
+
+    with pytest.raises(ValueError, match="already attached"):
+        attach(mcp)
+
+
+@pytest.mark.anyio
+async def test_attach_rejects_an_occupied_app_resource_without_registering_tools() -> (
+    None
+):
+    mcp = FastMCP("test")
+
+    @mcp.resource(APP_RESOURCE_URI)
+    def existing_app() -> str:
+        return "existing"
+
+    with pytest.raises(ValueError, match="already defines the app resource"):
+        attach(mcp)
+
+    async with create_connected_server_and_client_session(
+        mcp,
+        raise_exceptions=True,
+    ) as client:
+        resources = (await client.list_resources()).resources
+        tools = (await client.list_tools()).tools
+
+    assert [str(resource.uri) for resource in resources] == [
+        "ui://anywidget-mcp/widget.html"
+    ]
+    assert tools == []
+
+
+@pytest.mark.anyio
+async def test_attach_rejects_an_invalid_app_uri_without_poisoning_retry() -> None:
+    mcp = FastMCP("test")
+
+    with pytest.raises(ValueError, match="Invalid app_uri"):
+        attach(mcp, app_uri="not a uri")
+
+    assert isinstance(attach(mcp), WidgetTools)
+
+    async with create_connected_server_and_client_session(
+        mcp,
+        raise_exceptions=True,
+    ) as client:
+        resources = (await client.list_resources()).resources
+        tools = {tool.name for tool in (await client.list_tools()).tools}
+
+    assert [str(resource.uri) for resource in resources] == [
+        "ui://anywidget-mcp/widget.html"
+    ]
+    assert {
+        "anywidget_assets",
+        "anywidget_comm",
+        "anywidget_poll",
+        "anywidget_dispose",
+    }.issubset(tools)
+
+
+@pytest.mark.anyio
+async def test_describe_widget_target_matches_registered_input_schema() -> None:
+    description = describe_widget_target(
+        ColorPicker,
+        name="choose_color",
+        title="Choose Color",
+    )
+    mcp = FastMCP("test")
+    widgets = attach(mcp)
+    widgets.widget(
+        ColorPicker,
+        name="choose_color",
+        title="Choose Color",
+    )
+    async with create_connected_server_and_client_session(
+        mcp,
+        raise_exceptions=True,
+    ) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == "choose_color"
+        )
+
+    assert description.target_name == "ColorPicker"
+    assert description.tool_name == "choose_color"
+    assert description.title == "Choose Color"
+    assert description.kind == "widget-class"
+    assert description.input_schema == tool.inputSchema
+
+
+@pytest.mark.parametrize("kind", ["callable", "partial"])
+@pytest.mark.anyio
+async def test_compiled_factory_schema_matches_registration(kind: str) -> None:
+    def make_counter(value: int = 1) -> CounterWidget:
+        return CounterWidget(value=value)
+
+    class CounterFactory:
+        def __call__(self, value: int = 1) -> CounterWidget:
+            return CounterWidget(value=value)
+
+    factory = (
+        CounterFactory()
+        if kind == "callable"
+        else functools.partial(
+            make_counter,
+            value=2,
+        )
+    )
+    description = describe_widget_target(factory)
+    mcp = FastMCP("test")
+    widgets = attach(mcp)
+    widgets.widget(factory)
+    async with create_connected_server_and_client_session(
+        mcp,
+        raise_exceptions=True,
+    ) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == description.tool_name
+        )
+
+    assert description.input_schema == tool.inputSchema
+
+
+@pytest.mark.anyio
+async def test_explicit_empty_description_matches_registration() -> None:
+    description = describe_widget_target(CounterWidget, description="")
+    mcp = FastMCP("test")
+    widgets = attach(mcp)
+    widgets.widget(CounterWidget, description="")
+    async with create_connected_server_and_client_session(
+        mcp,
+        raise_exceptions=True,
+    ) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == "counter_widget"
+        )
+
+    assert description.description == ""
+    assert tool.description == ""
+
+
+@pytest.mark.anyio
+async def test_compiled_factory_resolves_target_module_annotations() -> None:
+    def row_counter(rows: RowValues) -> CounterWidget:
+        return CounterWidget(value=len(rows))
+
+    description = describe_widget_target(row_counter)
+    mcp = FastMCP("test")
+    widgets = attach(mcp)
+    widgets.widget(row_counter)
+    async with create_connected_server_and_client_session(
+        mcp,
+        raise_exceptions=True,
+    ) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == "row_counter"
+        )
+
+    assert description.input_schema == tool.inputSchema
+    assert tool.inputSchema["properties"]["rows"] == {
+        "items": {"type": "string"},
+        "title": "Rows",
+        "type": "array",
+    }
+
+
+@pytest.mark.anyio
+async def test_user_lifespan_wraps_sequential_widget_lifespans() -> None:
+    events: list[str] = []
+    cycle = 0
+
+    @asynccontextmanager
+    async def user_lifespan(
+        _server: FastMCP,
+    ) -> AsyncGenerator[dict[str, int], None]:
+        nonlocal cycle
+        cycle += 1
+        current = cycle
+        events.append(f"user {current} enter")
+        try:
+            yield {"cycle": current}
+        finally:
+            events.append(f"user {current} exit")
+
+    server = AnyWidgetMCP("test", lifespan=user_lifespan)
+
+    class TrackedWidget(CounterWidget):
+        cycle = Int(0)
+
+        def close(self) -> None:
+            if self.comm is not None:
+                events.append(f"widget {self.cycle} close")
+            super().close()
+
+    @server.widget
+    def counter() -> TrackedWidget:
+        events.append(f"widget {cycle} create")
+        return TrackedWidget(cycle=cycle)
+
+    for current in (1, 2):
+        async with connected(server) as client:
+            launch = await client.call_tool("counter", {})
+            assert launch.isError is False
+            events.append(f"client {current} active")
+
+    assert events == [
+        "user 1 enter",
+        "widget 1 create",
+        "client 1 active",
+        "widget 1 close",
+        "user 1 exit",
+        "user 2 enter",
+        "widget 2 create",
+        "client 2 active",
+        "widget 2 close",
+        "user 2 exit",
+    ]
+
+
+@pytest.mark.anyio
+async def test_widget_decorator_exposes_factory_schema_and_app_metadata() -> None:
+    server = AnyWidgetMCP("test")
+
+    @server.widget(name="open_counter", title="Counter")
+    def counter(label: str, value: int = 3, enabled: bool = True) -> CounterWidget:
+        del label, enabled
+        return CounterWidget(value=value)
+
+    async with connected(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    tool = tools["open_counter"]
+    properties = tool.inputSchema["properties"]
+    assert tool.title == "Counter"
+    assert tool.inputSchema["required"] == ["label"]
+    assert properties["label"]["type"] == "string"
+    assert properties["value"] == {
+        "default": 3,
+        "title": "Value",
+        "type": "integer",
+    }
+    assert properties["enabled"] == {
+        "default": True,
+        "title": "Enabled",
+        "type": "boolean",
+    }
+    assert tool.meta == {
+        "ui": {"resourceUri": "ui://anywidget-mcp/widget.html"},
+    }
+
+
+@pytest.mark.anyio
+async def test_widget_classes_expose_filtered_constructor_schemas() -> None:
+    server = AnyWidgetMCP("test")
+    assert server.widget(ColorPicker) is ColorPicker
+    server.widget(SortableList)
+    server.widget(Matrix)
+    server.widget(Slider2D)
+
+    async with connected(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        launches = {
+            "color_picker": await client.call_tool("color_picker", {}),
+            "sortable_list": await client.call_tool(
+                "sortable_list", {"value": ["alpha", "beta"]}
+            ),
+            "matrix": await client.call_tool("matrix", {}),
+            "slider_2d": await client.call_tool("slider_2d", {}),
+        }
+
+    assert {
+        name
+        for name, tool in tools.items()
+        if tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/widget.html"}}
+    } == {"color_picker", "sortable_list", "matrix", "slider_2d"}
+    assert "kwargs" not in tools["color_picker"].inputSchema["properties"]
+    assert tools["sortable_list"].inputSchema["required"] == ["value"]
+    assert tools["sortable_list"].inputSchema["properties"]["value"] == {
+        "items": {"type": "string"},
+        "title": "Value",
+        "type": "array",
+    }
+    assert tools["slider_2d"].inputSchema["properties"]["x_bounds"]["maxItems"] == 2
+    assert tools["slider_2d"].inputSchema["properties"]["x_bounds"]["minItems"] == 2
+    assert tools["color_picker"].title == "Color Picker"
+    assert tools["slider_2d"].title == "Slider 2D"
+    assert all(result.isError is False for result in launches.values())
+
+
+@pytest.mark.anyio
+async def test_widget_class_overrides_inferred_tool_fields() -> None:
+    server = AnyWidgetMCP("test")
+    server.widget(
+        ColorPicker,
+        name="choose_color",
+        title="Choose color",
+        description="Select a hexadecimal color.",
+    )
+
+    async with connected(server) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == "choose_color"
+        )
+
+    assert tool.title == "Choose color"
+    assert tool.description == "Select a hexadecimal color."
+
+
+@pytest.mark.anyio
+async def test_widget_class_description_uses_its_own_docstring() -> None:
+    class DescribedCounterWidget(CounterWidget):
+        """Track a synchronized counter."""
+
+    server = AnyWidgetMCP("test")
+    server.widget(DescribedCounterWidget)
+
+    async with connected(server) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == "described_counter_widget"
+        )
+
+    assert tool.description == "Track a synchronized counter."
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["anywidget_assets", "anywidget_comm", "anywidget_poll", "anywidget_dispose"],
+)
+def test_widget_rejects_reserved_session_tool_names(name: str) -> None:
+    server = AnyWidgetMCP("test")
+
+    with pytest.raises(ValueError, match="reserved for the AnyWidget app"):
+        server.widget(CounterWidget, name=name)
+
+
+@pytest.mark.anyio
+async def test_widget_rejects_duplicate_tool_names_and_preserves_the_first() -> None:
+    server = AnyWidgetMCP("test")
+    server.widget(CounterWidget, name="counter", title="First counter")
+
+    with pytest.raises(ValueError, match="already registered"):
+        server.widget(CounterWidget, name="counter", title="Second counter")
+
+    async with connected(server) as client:
+        tool = next(
+            tool for tool in (await client.list_tools()).tools if tool.name == "counter"
+        )
+
+    assert tool.title == "First counter"
+
+
+def test_widget_rejects_instances_and_unrelated_classes() -> None:
+    server = AnyWidgetMCP("test")
+    picker = ColorPicker()
+
+    try:
+        with pytest.raises(TypeError, match="Pass the ColorPicker class.*fresh widget"):
+            server.widget(cast(Any, picker))
+        with pytest.raises(TypeError, match="expected an AnyWidget subclass"):
+            server.widget(str)  # type: ignore[arg-type]
+    finally:
+        picker.close()
+
+
+@pytest.mark.anyio
+async def test_async_factory_returns_a_fresh_widget_per_invocation() -> None:
+    server = AnyWidgetMCP("test")
+    created: list[CounterWidget] = []
+
+    @server.widget
+    async def counter(value: int = 1) -> CounterWidget:
+        widget = CounterWidget(value=value)
+        created.append(widget)
+        return widget
+
+    async with connected(server) as client:
+        first = await client.call_tool("counter", {"value": 2})
+        second = await client.call_tool("counter", {"value": 3})
+
+    assert first.isError is False
+    assert second.isError is False
+    assert created[0] is not created[1]
+
+
+@pytest.mark.anyio
+async def test_widget_metadata_preserves_annotations_icons_and_app_resource() -> None:
+    server = AnyWidgetMCP("test")
+    annotations = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+    icons = [
+        Icon(
+            src="https://example.com/widget.svg",
+            mimeType="image/svg+xml",
+            sizes=["32x32"],
+        )
+    ]
+    server.widget(
+        CounterWidget,
+        annotations=annotations,
+        icons=icons,
+    )
+
+    async with connected(server) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == "counter_widget"
+        )
+
+    assert tool.annotations == annotations
+    assert tool.icons == icons
+    assert tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/widget.html"}}
+
+
+@pytest.mark.anyio
+async def test_session_tools_are_visible_to_the_app() -> None:
+    server = AnyWidgetMCP("test")
+
+    async with connected(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    for name in (
+        "anywidget_assets",
+        "anywidget_comm",
+        "anywidget_poll",
+        "anywidget_dispose",
+    ):
+        assert tools[name].meta == {"ui": {"visibility": ["app"]}}
+    assert tools["anywidget_assets"].inputSchema["required"] == [
+        "instance_id",
+        "asset_ids",
+    ]
+    assert "operation_id" in tools["anywidget_comm"].inputSchema["required"]
+    assert "operation_id" in tools["anywidget_poll"].inputSchema["required"]
+    assert "acknowledged_model_ids" in tools["anywidget_poll"].inputSchema["properties"]
+
+
+@pytest.mark.anyio
+async def test_app_resource_exposes_mime_type_and_csp() -> None:
+    server = AnyWidgetMCP(
+        "test",
+        csp={
+            "connectDomains": ["https://api.example.com"],
+            "resourceDomains": ["https://esm.sh"],
+        },
+    )
+
+    async with connected(server) as client:
+        resources = (await client.list_resources()).resources
+        contents = (await client.read_resource(AnyUrl(APP_RESOURCE_URI))).contents
+
+    assert len(resources) == 1
+    assert resources[0].mimeType == "text/html;profile=mcp-app"
+    assert resources[0].meta == {
+        "ui": {
+            "csp": {
+                "connectDomains": ["https://api.example.com"],
+                "resourceDomains": ["https://esm.sh", "blob:"],
+            },
+            "prefersBorder": True,
+        }
+    }
+    assert len(contents) == 1
+    assert contents[0].mimeType == "text/html;profile=mcp-app"
+    assert contents[0].meta == resources[0].meta
+
+
+def test_streamable_http_app_allows_configured_browser_origin() -> None:
+    server = AnyWidgetMCP("test", cors_origins=["http://localhost:8080"])
+
+    with TestClient(server.streamable_http_app()) as client:
+        response = client.options(
+            "/mcp",
+            headers={
+                "Origin": "http://localhost:8080",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "mcp-protocol-version",
+            },
+        )
+        head_preflight = client.options(
+            "/mcp",
+            headers={
+                "Origin": "http://localhost:8080",
+                "Access-Control-Request-Method": "HEAD",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+        simple_response = client.get(
+            "/missing", headers={"Origin": "http://localhost:8080"}
+        )
+        head_response = client.head("/mcp", headers={"Origin": "http://localhost:8080"})
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:8080"
+    assert "mcp-protocol-version" in response.headers["access-control-allow-headers"]
+    assert head_preflight.status_code == 200
+    assert "HEAD" in head_preflight.headers["access-control-allow-methods"]
+    assert simple_response.headers["access-control-expose-headers"] == "Mcp-Session-Id"
+    assert head_response.status_code == 200
+    assert head_response.headers["allow"] == "GET, POST, DELETE, HEAD"
+    assert (
+        head_response.headers["access-control-allow-origin"] == "http://localhost:8080"
+    )
+
+
+def test_widget_rejects_ambiguous_factory_signatures() -> None:
+    server = AnyWidgetMCP("test")
+
+    def positional(value: int, /) -> CounterWidget:
+        return CounterWidget(value=value)
+
+    def variadic(*values: int) -> CounterWidget:
+        return CounterWidget(value=sum(values))
+
+    def arbitrary(**values: int) -> CounterWidget:
+        return CounterWidget(value=sum(values.values()))
+
+    for factory in (positional, variadic, arbitrary):
+        with pytest.raises(TypeError, match="must"):
+            server.widget(factory)
+
+
+@pytest.mark.anyio
+async def test_widget_reports_invalid_factory_return() -> None:
+    server = AnyWidgetMCP("test")
+
+    @server.widget
+    def broken() -> Any:
+        return object()
+
+    async with connected(server) as client:
+        result = await client.call_tool("broken", {})
+
+    assert result.isError is True
+    assert isinstance(result.content[0], TextContent)
+    assert (
+        "Widget factory returned object, expected AnyWidget" in result.content[0].text
+    )

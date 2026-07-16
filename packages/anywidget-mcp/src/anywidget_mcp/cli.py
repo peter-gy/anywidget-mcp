@@ -33,18 +33,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         log_level=arguments.log_level,
     )
     try:
-        try:
-            server.widget(target)
-        except (TypeError, ValueError) as error:
-            parser.error(str(error))
-
+        server.widget(target)
+    except (TypeError, ValueError) as error:
+        parser.error(str(error))
+    try:
         server.run(
             transport=arguments.transport,
         )
     except KeyboardInterrupt:
         return
-    finally:
-        server.close()
 
 
 def _parser() -> argparse.ArgumentParser:

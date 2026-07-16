@@ -442,7 +442,12 @@ export class WidgetBinding implements RuntimeBinding {
 					initializeError = protocolScope.error;
 				}
 			}
-			if (initializeFailed) throw initializeError;
+			if (initializeFailed) {
+				if (isCleanup(result)) {
+					await runCleanup(result, "anywidget model", this.timeoutMilliseconds);
+				}
+				throw initializeError;
+			}
 			if (signal.aborted) {
 				if (isCleanup(result)) {
 					await runCleanup(result, "anywidget model", this.timeoutMilliseconds);

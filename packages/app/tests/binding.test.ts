@@ -21,8 +21,6 @@ function createModel(state: Record<string, unknown>): BridgeModel {
 	const payload: ModelPayload = {
 		modelId: "model-1",
 		state,
-		esm: String(state._esm),
-		css: typeof state._css === "string" ? state._css : undefined,
 	};
 	model = new BridgeModel(runtime, payload, vi.fn());
 	return model;
