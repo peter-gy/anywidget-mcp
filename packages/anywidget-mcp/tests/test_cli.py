@@ -98,7 +98,17 @@ def test_inspect_json_reports_empty_schema_for_minimal_widget_class(
     expected = {
         "description": "",
         "inputSchema": {
-            "properties": {},
+            "properties": {
+                "loading_message": {
+                    "default": "Initializing Minimal Widget…",
+                    "description": (
+                        "Progress text shown while this widget initializes. "
+                        "Describe the current request in at most 120 characters."
+                    ),
+                    "title": "Loading Message",
+                    "type": "string",
+                }
+            },
             "title": "MinimalWidgetArguments",
             "type": "object",
         },
@@ -129,14 +139,14 @@ def test_inspect_preserves_anywidget_in_the_factory_title(
             "make_widget",
             "factory",
             "make_widget",
-            {"value", "label"},
+            {"value", "label", "loading_message"},
             ["value"],
         ),
         (
             "make_async_widget",
             "factory",
             "make_async_widget",
-            {"value"},
+            {"value", "loading_message"},
             None,
         ),
     ],
@@ -190,7 +200,10 @@ def test_inspect_excludes_the_injected_context_parameter(
     payload = json.loads(captured.out)
     assert payload["kind"] == "factory"
     assert payload["inputSchema"]["required"] == ["value"]
-    assert set(payload["inputSchema"]["properties"]) == {"value"}
+    assert set(payload["inputSchema"]["properties"]) == {
+        "loading_message",
+        "value",
+    }
 
 
 def test_cli_imports_widget_class_and_forwards_server_options(

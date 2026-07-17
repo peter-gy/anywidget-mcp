@@ -7,13 +7,13 @@ import anywidget
 import pytest
 from anywidget._descriptor import MimeBundleDescriptor
 
-import anywidget_mcp._bridge as bridge
+import anywidget_mcp._notifications as notifications
 from anywidget_mcp._bridge import (
     SessionSnapshot,
     WidgetInUseError,
     WidgetSession,
 )
-from anywidget_mcp._state import StateContext
+from anywidget_mcp._state import StateContext, StateProjection
 
 from ._server_support import leaf_error_messages
 from .bridge_test_widgets import (
@@ -118,10 +118,50 @@ def test_blocking_projection_does_not_block_close_or_commit_late_state() -> None
         session.close()
 
 
+def test_current_projection_releases_notifications_while_projecting() -> None:
+    widget = ProjectionWidget()
+    projector_started = threading.Event()
+    mutation_done = threading.Event()
+    block_projector = False
+
+    def project(current: ProjectionWidget) -> dict[str, int]:
+        if block_projector:
+            projector_started.set()
+            if not mutation_done.wait(1):
+                raise RuntimeError("background trait notification was blocked")
+        return {"a": current.a, "b": current.b}
+
+    session = WidgetSession(
+        "instance",
+        widget,
+        StateProjection(project, watch="a"),
+    )
+    session.launch_snapshot()
+    block_projector = True
+    widget.a = 1
+
+    def mutate() -> None:
+        if projector_started.wait(1):
+            widget.b = 2
+            mutation_done.set()
+
+    thread = threading.Thread(target=mutate)
+    thread.start()
+    try:
+        projection = session.current_projection()
+
+        assert projection is not None
+        assert projection.state == {"a": 1, "b": 2}
+        assert mutation_done.is_set()
+    finally:
+        thread.join(timeout=1)
+        session.close()
+
+
 def test_snapshot_times_out_for_stalled_notification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(bridge, "_NOTIFICATION_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(notifications, "NOTIFICATION_WAIT_SECONDS", 0.01)
     notification_started = threading.Event()
     resume_notification = threading.Event()
     mutation_done = threading.Event()
@@ -182,7 +222,7 @@ def test_snapshot_rejects_active_notification_thread() -> None:
 def test_close_cleans_up_after_stalled_notification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(bridge, "_NOTIFICATION_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(notifications, "NOTIFICATION_WAIT_SECONDS", 0.01)
     notification_started = threading.Event()
     resume_notification = threading.Event()
     mutation_done = threading.Event()

@@ -8,6 +8,66 @@ import { ToolCallQueue } from "../src/tool-calls";
 import { deferred, FakeBinding } from "./runtime-test-support";
 
 describe("WidgetRuntime transport and polling", () => {
+	test("polls while widget initialization is still running", async () => {
+		vi.useFakeTimers();
+		try {
+			const initialization = deferred<void>();
+			const render = vi.fn();
+			const callServerTool = vi.fn().mockResolvedValue({ content: [] });
+			const runtime = new WidgetRuntime(
+				{
+					instanceId: "instance-1",
+					rootModelId: "root-model",
+					models: {
+						"root-model": {
+							modelId: "root-model",
+							state: { _esm: "export default {}" },
+						},
+					},
+				},
+				new ToolCallQueue({ callServerTool } as unknown as App),
+				{
+					getHostCapabilities: () => ({}),
+					updateModelContext: vi.fn().mockResolvedValue({}),
+				} as unknown as App,
+				Promise.resolve(),
+				(): RuntimeBinding => ({
+					async initialize() {
+						await initialization.promise;
+					},
+					async render() {
+						render();
+					},
+					async getExports() {},
+					async dispose() {},
+				}),
+			);
+
+			const mounting = runtime.mount({} as HTMLElement);
+			await vi.advanceTimersByTimeAsync(500);
+
+			expect(render).not.toHaveBeenCalled();
+			expect(callServerTool).toHaveBeenCalledWith(
+				{
+					name: "anywidget_poll",
+					arguments: {
+						instance_id: "instance-1",
+						operation_id: expect.any(String),
+						acknowledged_model_ids: [],
+					},
+				},
+				{ signal: expect.any(AbortSignal) },
+			);
+
+			initialization.resolve(undefined);
+			await mounting;
+			expect(render).toHaveBeenCalledOnce();
+			await runtime.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("keeps retries and response application inside one global queue slot", async () => {
 		vi.useFakeTimers();
 		try {
@@ -225,7 +285,7 @@ describe("WidgetRuntime transport and polling", () => {
 			expect(callServerTool).toHaveBeenCalledWith(
 				{
 					name: "anywidget_dispose",
-					arguments: { instance_id: "instance-1" },
+					arguments: { session_id: "instance-1" },
 				},
 				{ signal: expect.any(AbortSignal) },
 			);
@@ -274,6 +334,49 @@ describe("WidgetRuntime transport and polling", () => {
 			await advanceToPoll(10_000, 5);
 			await advanceToPoll(15_000, 6);
 			await advanceToPoll(15_000, 7);
+
+			await runtime.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("polls within half of the server idle timeout", async () => {
+		vi.useFakeTimers();
+		try {
+			const callServerTool = vi.fn().mockResolvedValue({ content: [] });
+			const runtime = new WidgetRuntime(
+				{
+					instanceId: "instance-1",
+					rootModelId: "root-model",
+					sessionIdleTimeoutMs: 1200,
+					models: {
+						"root-model": {
+							modelId: "root-model",
+							state: { _esm: "export default {}" },
+						},
+					},
+				},
+				new ToolCallQueue({ callServerTool } as unknown as App),
+				{
+					getHostCapabilities: () => ({}),
+					updateModelContext: vi.fn().mockResolvedValue({}),
+				} as unknown as App,
+				Promise.resolve(),
+				(_runtime, model) => new FakeBinding(model, []),
+			);
+			const pollCount = (): number =>
+				callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_poll").length;
+
+			await runtime.mount({} as HTMLElement);
+			await vi.advanceTimersByTimeAsync(500);
+			expect(pollCount()).toBe(1);
+			await vi.advanceTimersByTimeAsync(599);
+			expect(pollCount()).toBe(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(pollCount()).toBe(2);
+			await vi.advanceTimersByTimeAsync(600);
+			expect(pollCount()).toBe(3);
 
 			await runtime.dispose();
 		} finally {

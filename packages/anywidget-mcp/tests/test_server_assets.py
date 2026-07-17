@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import anywidget_mcp.server as server_module
+import anywidget_mcp._runtime as runtime_module
 import pytest
 from mcp.types import TextContent
 from wigglystuff import ColorPicker
 
 from anywidget_mcp import AnyWidgetMCP
 
-from ._server_support import CounterWidget, connected
+from ._server_support import CounterWidget, bootstrap_runtime, connected
 
 
 @pytest.mark.anyio
@@ -22,10 +22,10 @@ async def test_color_picker_launch_returns_widget_model_and_sources() -> None:
         result = await client.call_tool(
             "color_picker", {"color": "#c026d3", "show_label": False}
         )
+        payload = await bootstrap_runtime(client, result)
 
     assert result.meta is not None
-    assert result.meta["ui"] == {"resourceUri": "ui://anywidget-mcp/widget.html"}
-    payload = result.meta["anywidget"]
+    assert result.meta["ui"] == {"resourceUri": "ui://anywidget-mcp/app.html"}
     assert payload["rootModelId"] in payload["models"]
     model = payload["models"][payload["rootModelId"]]
     assert model["state"]["color"] == "#c026d3"
@@ -52,10 +52,8 @@ async def test_assets_are_fetched_by_digest_within_the_owning_session() -> None:
     async with connected(server) as client:
         first = await client.call_tool("first_asset_widget", {})
         second = await client.call_tool("second_asset_widget", {})
-        assert first.meta is not None
-        assert second.meta is not None
-        first_runtime = first.meta["anywidget"]
-        second_runtime = second.meta["anywidget"]
+        first_runtime = await bootstrap_runtime(client, first)
+        second_runtime = await bootstrap_runtime(client, second)
         asset_ids = list(first_runtime["assetManifest"])
 
         fetched = await client.call_tool(
@@ -74,7 +72,7 @@ async def test_assets_are_fetched_by_digest_within_the_owning_session() -> None:
         )
         await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": first_runtime["instanceId"]},
+            {"session_id": first_runtime["instanceId"]},
         )
         disposed = await client.call_tool(
             "anywidget_assets",
@@ -102,17 +100,55 @@ async def test_assets_are_fetched_by_digest_within_the_owning_session() -> None:
 
 
 @pytest.mark.anyio
+async def test_launch_assets_are_released_after_the_first_session_response() -> None:
+    widget = CounterWidget()
+    server = AnyWidgetMCP("test")
+
+    @server.widget
+    def counter() -> CounterWidget:
+        return widget
+
+    async with connected(server) as client:
+        launch = await client.call_tool("counter", {})
+        runtime = await bootstrap_runtime(client, launch)
+        model = runtime["models"][runtime["rootModelId"]]
+        launch_asset_id = model["sourceRefs"]["_esm"]
+
+        widget._esm = "export default { render() { return 'updated'; } }"
+        poll = await client.call_tool(
+            "anywidget_poll",
+            {
+                "instance_id": runtime["instanceId"],
+                "operation_id": "updated-source",
+            },
+        )
+        stale = await client.call_tool(
+            "anywidget_assets",
+            {
+                "instance_id": runtime["instanceId"],
+                "asset_ids": [launch_asset_id],
+            },
+        )
+
+    assert poll.isError is False
+    assert poll.meta is not None
+    assert launch_asset_id not in poll.meta["anywidget"]["assetManifest"]
+    assert stale.isError is True
+    assert isinstance(stale.content[0], TextContent)
+    assert "Unknown widget asset" in stale.content[0].text
+
+
+@pytest.mark.anyio
 async def test_asset_sources_follow_the_bounded_comm_replay_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(server_module, "_COMM_REPLAY_LIMIT", 2)
+    monkeypatch.setattr(runtime_module, "COMM_REPLAY_LIMIT", 2)
     server = AnyWidgetMCP("test")
     server.widget(CounterWidget)
 
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {})
-        assert launch.meta is not None
-        runtime = launch.meta["anywidget"]
+        runtime = await bootstrap_runtime(client, launch)
         instance_id = runtime["instanceId"]
         model_id = runtime["rootModelId"]
 

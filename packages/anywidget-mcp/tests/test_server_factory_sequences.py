@@ -9,10 +9,18 @@ import pytest
 from mcp.types import TextContent
 
 from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp._factory import FactoryOwner
+from anywidget_mcp._runtime import SessionRuntime
 from anywidget_mcp._state import DEFAULT_STATE
-from anywidget_mcp.server import _FactoryOwner, _SessionRuntime
 
-from ._server_support import CounterWidget, ParentWidget, connected
+from ._server_support import (
+    CounterWidget,
+    ParentWidget,
+    bootstrap_id,
+    bootstrap_runtime,
+    connected,
+    state_id,
+)
 
 
 @pytest.mark.anyio
@@ -44,14 +52,14 @@ async def test_direct_and_async_factories_return_ordered_widget_sequences() -> N
             assert result.isError is False
             assert result.structuredContent == {
                 "tool": name,
+                "state_id": state_id(result),
                 "state": {
                     "widgets": [
                         {"doubled": value * 2, "value": value} for value in values
                     ]
                 },
             }
-            assert result.meta is not None
-            runtime = result.meta["anywidget"]
+            runtime = await bootstrap_runtime(client, result)
             roots = created[name]
             group = runtime["models"][runtime["rootModelId"]]
             assert group["state"]["_items"] == [
@@ -59,7 +67,7 @@ async def test_direct_and_async_factories_return_ordered_widget_sequences() -> N
             ]
             disposed = await client.call_tool(
                 "anywidget_dispose",
-                {"instance_id": runtime["instanceId"]},
+                {"session_id": runtime["instanceId"]},
             )
             assert disposed.structuredContent == {"disposed": True}
 
@@ -113,15 +121,15 @@ async def test_managed_factories_keep_widget_sequences_alive_until_disposal() ->
     async with connected(server) as client:
         managed_result = await client.call_tool("managed", {})
         async_result = await client.call_tool("async_managed", {})
-        assert managed_result.meta is not None
-        assert async_result.meta is not None
+        managed_runtime = await bootstrap_runtime(client, managed_result)
+        async_runtime = await bootstrap_runtime(client, async_result)
         await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": managed_result.meta["anywidget"]["instanceId"]},
+            {"session_id": managed_runtime["instanceId"]},
         )
         await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": async_result.meta["anywidget"]["instanceId"]},
+            {"session_id": async_runtime["instanceId"]},
         )
 
     assert events == [
@@ -149,8 +157,7 @@ async def test_factory_sequence_is_snapshotted_at_return() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counters", {})
-        assert launch.meta is not None
-        runtime = launch.meta["anywidget"]
+        runtime = await bootstrap_runtime(client, launch)
         first_model_id = first.model_id
         second_model_id = second.model_id
         third = CounterWidget(value=3)
@@ -165,7 +172,7 @@ async def test_factory_sequence_is_snapshotted_at_return() -> None:
         )
         await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": runtime["instanceId"]},
+            {"session_id": runtime["instanceId"]},
         )
 
     assert poll.isError is False
@@ -320,7 +327,7 @@ async def test_owner_closes_a_cancelled_unclaimed_sequence_graph_child_first() -
     child = TrackedChild()
     parent = TrackedParent(child=child)
     sibling = TrackedSibling()
-    owner = _FactoryOwner()
+    owner = FactoryOwner()
 
     async with anyio.create_task_group() as task_group:
         task_group.start_soon(owner.run, lambda: [parent, sibling], {})
@@ -346,10 +353,10 @@ async def test_unclaimed_sequence_cleanup_preserves_a_reused_live_widget() -> No
             fresh_closed.set()
 
     fresh = FreshWidget(value=2)
-    owner = _FactoryOwner()
+    owner = FactoryOwner()
 
     async with anyio.create_task_group() as task_group:
-        runtime = _SessionRuntime(
+        runtime = SessionRuntime(
             task_group,
             session_idle_timeout=30,
             app_uri="ui://test/widget.html",
@@ -361,7 +368,7 @@ async def test_unclaimed_sequence_cleanup_preserves_a_reused_live_widget() -> No
             tool_name="live",
             tool_title="Live",
         )
-        assert launch.meta is not None
+        assert bootstrap_id(launch)
 
         task_group.start_soon(owner.run, lambda: [live, fresh], {})
         await owner.wait_ready()

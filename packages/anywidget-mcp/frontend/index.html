@@ -6,8 +6,8 @@
     <title>anywidget-mcp</title>
   </head>
   <body>
-    <main id="app-shell">
-      <p id="status" role="status">Waiting for widget data…</p>
+    <main id="app-shell" aria-busy="true">
+      <p id="status" role="status" aria-atomic="true">Initializing widget…</p>
       <div id="widget-root" hidden></div>
     </main>
     <script type="module" src="/app.ts"></script>

@@ -10,12 +10,20 @@ from anyio.lowlevel import checkpoint
 from mcp.server.fastmcp import Context
 from mcp.types import TextContent
 
-import anywidget_mcp.server as server_module
+import anywidget_mcp._runtime as runtime_module
 from anywidget_mcp import AnyWidgetMCP, StateProjection
+from anywidget_mcp._factory import FactoryOwner
+from anywidget_mcp._runtime import SessionRuntime
 from anywidget_mcp._state import DEFAULT_STATE
-from anywidget_mcp.server import _FactoryOwner, _SessionRuntime
 
-from ._server_support import CounterWidget, connected, leaf_error_messages
+from ._server_support import (
+    CounterWidget,
+    bootstrap_id,
+    bootstrap_runtime,
+    connected,
+    leaf_error_messages,
+    state_id,
+)
 
 
 @pytest.mark.anyio
@@ -70,14 +78,17 @@ async def test_context_is_injected_into_direct_and_managed_factories() -> None:
     assert direct_result.structuredContent == {
         "tool": "direct",
         "state": {"doubled": 2, "value": 1},
+        "state_id": state_id(direct_result),
     }
     assert managed_result.structuredContent == {
         "tool": "managed",
         "state": {"doubled": 4, "value": 2},
+        "state_id": state_id(managed_result),
     }
     assert async_result.structuredContent == {
         "tool": "async_managed",
         "state": {"doubled": 6, "value": 3},
+        "state_id": state_id(async_result),
     }
     assert progress_events == [(1.0, 2.0, "Prepared widget")]
 
@@ -108,10 +119,10 @@ async def test_managed_factory_cleanup_runs_on_owner_task_after_widget_close() -
 
     async with connected(server) as client:
         launch = await client.call_tool("managed", {})
-        assert launch.meta is not None
+        runtime = await bootstrap_runtime(client, launch)
         disposed = await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": launch.meta["anywidget"]["instanceId"]},
+            {"session_id": runtime["instanceId"]},
         )
 
     assert disposed.structuredContent == {"disposed": True}
@@ -144,10 +155,10 @@ async def test_async_factory_can_return_an_awaited_context_manager() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("managed", {})
-        assert launch.meta is not None
+        runtime = await bootstrap_runtime(client, launch)
         disposed = await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": launch.meta["anywidget"]["instanceId"]},
+            {"session_id": runtime["instanceId"]},
         )
 
     assert disposed.structuredContent == {"disposed": True}
@@ -178,7 +189,7 @@ async def test_request_cancellation_closes_managed_factory_exactly_once(
             events.append("resource exit")
 
     async with anyio.create_task_group() as task_group:
-        runtime = _SessionRuntime(
+        runtime = SessionRuntime(
             task_group,
             session_idle_timeout=30,
             app_uri="ui://test/widget.html",
@@ -191,7 +202,7 @@ async def test_request_cancellation_closes_managed_factory_exactly_once(
                 await checkpoint()
 
             monkeypatch.setattr(
-                server_module,
+                runtime_module,
                 "checkpoint",
                 cancel_before_session_commit,
             )
@@ -263,7 +274,7 @@ async def test_factory_owner_finishes_cancellation_safe_acquisition_cleanup() ->
     events: list[str] = []
     acquisition_started = anyio.Event()
     allow_yield = anyio.Event()
-    owner = _FactoryOwner()
+    owner = FactoryOwner()
 
     @asynccontextmanager
     async def resource() -> AsyncGenerator[CounterWidget, None]:
@@ -292,7 +303,7 @@ async def test_factory_owner_finishes_cancellation_safe_acquisition_cleanup() ->
 async def test_factory_owner_cancels_an_awaitable_factory_acquisition() -> None:
     events: list[str] = []
     acquisition_started = anyio.Event()
-    owner = _FactoryOwner()
+    owner = FactoryOwner()
 
     async def factory() -> CounterWidget:
         events.append("factory start")
@@ -339,7 +350,7 @@ async def test_dispose_and_shutdown_wait_for_the_same_active_session_call() -> N
             events.append("resource exit")
 
     async with anyio.create_task_group() as task_group:
-        runtime = _SessionRuntime(
+        runtime = SessionRuntime(
             task_group,
             session_idle_timeout=30,
             app_uri="ui://test/widget.html",
@@ -351,8 +362,9 @@ async def test_dispose_and_shutdown_wait_for_the_same_active_session_call() -> N
             tool_name="managed",
             tool_title="Managed",
         )
-        assert launch.meta is not None
-        instance_id = launch.meta["anywidget"]["instanceId"]
+        bootstrap = runtime.bootstrap(bootstrap_id(launch), "managed-session")
+        assert bootstrap.meta is not None
+        instance_id = bootstrap.meta["anywidget"]["instanceId"]
 
         async def hold_active_call() -> None:
             with runtime.use(instance_id):
@@ -406,7 +418,7 @@ async def test_aclose_finishes_live_session_cleanup_under_cancellation() -> None
             events.append("resource exit")
 
     async with anyio.create_task_group() as task_group:
-        runtime = _SessionRuntime(
+        runtime = SessionRuntime(
             task_group,
             session_idle_timeout=30,
             app_uri="ui://test/widget.html",
@@ -441,7 +453,7 @@ async def test_dispose_retries_transient_widget_cleanup_before_forgetting_owner(
 
     widget = TransientCloseWidget()
     async with anyio.create_task_group() as task_group:
-        runtime = _SessionRuntime(
+        runtime = SessionRuntime(
             task_group,
             session_idle_timeout=30,
             app_uri="ui://test/widget.html",
@@ -453,10 +465,11 @@ async def test_dispose_retries_transient_widget_cleanup_before_forgetting_owner(
             tool_name="transient",
             tool_title="Transient",
         )
-        assert launch.meta is not None
 
+        bootstrap = runtime.bootstrap(bootstrap_id(launch), "transient-session")
+        assert bootstrap.meta is not None
         assert await runtime.dispose(
-            launch.meta["anywidget"]["instanceId"],
+            bootstrap.meta["anywidget"]["instanceId"],
             "app disposal",
         )
 
@@ -488,7 +501,7 @@ async def test_launch_failure_retries_fresh_root_cleanup() -> None:
 
     widget = BrokenLaunchWidget()
     async with anyio.create_task_group() as task_group:
-        runtime = _SessionRuntime(
+        runtime = SessionRuntime(
             task_group,
             session_idle_timeout=30,
             app_uri="ui://test/widget.html",

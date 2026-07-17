@@ -12,7 +12,7 @@ import pytest
 
 from anywidget_mcp import AnyWidgetMCP, create_anywidget
 
-from ._server_support import connected
+from ._server_support import bootstrap_runtime, connected, state_id
 
 ROOT = Path(__file__).parents[3]
 RETRY_BUDGET_CODE = (ROOT / "examples" / "retry_budget.py").read_text()
@@ -217,8 +217,7 @@ async def test_create_anywidget_exposes_schema_and_generated_assets() -> None:
             "create_anywidget",
             {"code": RETRY_BUDGET_CODE, "classnames": ["RetryBudget"]},
         )
-        assert launch.meta is not None
-        runtime = launch.meta["anywidget"]
+        runtime = await bootstrap_runtime(client, launch)
         model = runtime["models"][runtime["rootModelId"]]
         assets = await client.call_tool(
             "anywidget_assets",
@@ -229,7 +228,7 @@ async def test_create_anywidget_exposes_schema_and_generated_assets() -> None:
         )
         await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": runtime["instanceId"]},
+            {"session_id": runtime["instanceId"]},
         )
 
     assert tool.inputSchema["required"] == ["code"]
@@ -246,6 +245,7 @@ async def test_create_anywidget_exposes_schema_and_generated_assets() -> None:
     assert launch.structuredContent == {
         "tool": "create_anywidget",
         "state": {"attempts": 4, "base_delay": 0.5, "total_wait": 3.5},
+        "state_id": state_id(launch),
     }
     assert set(model["sourceRefs"]) == {"_css", "_esm"}
     assert set(model["state"]).isdisjoint(model["sourceRefs"])
@@ -268,15 +268,15 @@ async def test_create_anywidget_launches_multiple_selected_classes() -> None:
                 "classnames": ["RetryBudget", "RetryGuidance"],
             },
         )
-        assert launch.meta is not None
-        runtime = launch.meta["anywidget"]
+        runtime = await bootstrap_runtime(client, launch)
         await client.call_tool(
             "anywidget_dispose",
-            {"instance_id": runtime["instanceId"]},
+            {"session_id": runtime["instanceId"]},
         )
 
     assert launch.structuredContent == {
         "tool": "create_anywidget",
+        "state_id": state_id(launch),
         "state": {
             "widgets": [
                 {"attempts": 4, "base_delay": 0.5, "total_wait": 3.5},

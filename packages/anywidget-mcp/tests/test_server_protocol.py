@@ -13,7 +13,9 @@ from ._server_support import (
     CounterWidget,
     ParentWidget,
     ValidatedCounterWidget,
+    bootstrap_runtime,
     connected,
+    state_id,
 )
 
 
@@ -27,13 +29,14 @@ async def test_state_modes_control_initial_model_visibility() -> None:
 
     async with connected(selected) as client:
         selected_result = await client.call_tool("selected_counter", {})
+        selected_runtime = await bootstrap_runtime(client, selected_result)
 
     assert selected_result.structuredContent == {
         "tool": "selected_counter",
         "state": {"value": 4},
+        "state_id": state_id(selected_result),
     }
-    assert selected_result.meta is not None
-    assert selected_result.meta["anywidget"]["context"]["state"] == {"value": 4}
+    assert selected_runtime["context"]["state"] == {"value": 4}
 
     hidden = AnyWidgetMCP("hidden")
 
@@ -43,13 +46,12 @@ async def test_state_modes_control_initial_model_visibility() -> None:
 
     async with connected(hidden) as client:
         hidden_result = await client.call_tool("hidden_counter", {})
+        hidden_runtime = await bootstrap_runtime(client, hidden_result)
 
     assert hidden_result.structuredContent == {"tool": "hidden_counter"}
-    assert hidden_result.content == [
-        TextContent(type="text", text="Opened Hidden Counter.")
-    ]
-    assert hidden_result.meta is not None
-    assert "context" not in hidden_result.meta["anywidget"]
+    assert isinstance(hidden_result.content[0], TextContent)
+    assert hidden_result.content[0].text == "Opened Hidden Counter."
+    assert "context" not in hidden_runtime
 
     custom = AnyWidgetMCP("custom")
 
@@ -63,6 +65,7 @@ async def test_state_modes_control_initial_model_visibility() -> None:
     assert custom_result.structuredContent == {
         "tool": "custom_counter",
         "state": {"answer": 12},
+        "state_id": state_id(custom_result),
     }
 
 
@@ -133,8 +136,7 @@ async def test_comm_applies_browser_update_and_returns_observer_update() -> None
 
     async with connected(server) as client:
         launch = await client.call_tool("counter", {})
-        assert launch.meta is not None
-        payload = launch.meta["anywidget"]
+        payload = await bootstrap_runtime(client, launch)
         result = await client.call_tool(
             "anywidget_comm",
             {
@@ -183,8 +185,7 @@ async def test_comm_operation_id_replays_the_complete_response() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counter", {})
-        assert launch.meta is not None
-        payload = launch.meta["anywidget"]
+        payload = await bootstrap_runtime(client, launch)
         arguments = {
             "instance_id": payload["instanceId"],
             "model_id": payload["rootModelId"],
@@ -229,8 +230,7 @@ async def test_comm_operation_id_rejects_another_request() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counter", {})
-        assert launch.meta is not None
-        payload = launch.meta["anywidget"]
+        payload = await bootstrap_runtime(client, launch)
         common = {
             "instance_id": payload["instanceId"],
             "model_id": payload["rootModelId"],
@@ -277,8 +277,7 @@ async def test_comm_operation_id_replays_handler_failure() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counter", {})
-        assert launch.meta is not None
-        payload = launch.meta["anywidget"]
+        payload = await bootstrap_runtime(client, launch)
         comm = created[0].comm
         assert comm is not None
         comm.on_msg(fail_after_update)
@@ -314,8 +313,7 @@ async def test_comm_projects_python_validated_state() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("validated_counter_widget", {})
-        assert launch.meta is not None
-        payload = launch.meta["anywidget"]
+        payload = await bootstrap_runtime(client, launch)
         result = await client.call_tool(
             "anywidget_comm",
             {
@@ -351,8 +349,8 @@ async def test_poll_operation_id_replays_the_complete_response() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counter", {})
-        assert launch.meta is not None
-        instance_id = launch.meta["anywidget"]["instanceId"]
+        runtime = await bootstrap_runtime(client, launch)
+        instance_id = runtime["instanceId"]
         created[0].doubled = 22
         arguments = {
             "instance_id": instance_id,
@@ -409,8 +407,8 @@ async def test_poll_rejects_invalid_operation_id_without_draining(
 
     async with connected(server) as client:
         launch = await client.call_tool("counter", {})
-        assert launch.meta is not None
-        instance_id = launch.meta["anywidget"]["instanceId"]
+        runtime = await bootstrap_runtime(client, launch)
+        instance_id = runtime["instanceId"]
         created[0].doubled = 22
         invalid = await client.call_tool(
             "anywidget_poll",
@@ -447,12 +445,12 @@ async def test_poll_returns_python_originated_update() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counter", {})
-        assert launch.meta is not None
+        runtime = await bootstrap_runtime(client, launch)
         created[0].doubled = 22
         result = await client.call_tool(
             "anywidget_poll",
             {
-                "instance_id": launch.meta["anywidget"]["instanceId"],
+                "instance_id": runtime["instanceId"],
                 "operation_id": "python-originated-update",
             },
         )
@@ -485,7 +483,8 @@ async def test_poll_returns_dynamic_widget_models_in_app_metadata() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("parent", {})
-        assert launch.meta is not None
+        runtime = await bootstrap_runtime(client, launch)
+        instance_id = runtime["instanceId"]
         root, first = created[0]
         first_model_id = first.model_id
         second = CounterWidget(value=2)
@@ -494,14 +493,14 @@ async def test_poll_returns_dynamic_widget_models_in_app_metadata() -> None:
         result = await client.call_tool(
             "anywidget_poll",
             {
-                "instance_id": launch.meta["anywidget"]["instanceId"],
+                "instance_id": instance_id,
                 "operation_id": "dynamic-widget-models",
             },
         )
         before_ack = await client.call_tool(
             "anywidget_comm",
             {
-                "instance_id": launch.meta["anywidget"]["instanceId"],
+                "instance_id": instance_id,
                 "model_id": first_model_id,
                 "operation_id": "detached-before-ack",
                 "data": {"method": "request_state"},
@@ -512,7 +511,7 @@ async def test_poll_returns_dynamic_widget_models_in_app_metadata() -> None:
         acknowledged = await client.call_tool(
             "anywidget_poll",
             {
-                "instance_id": launch.meta["anywidget"]["instanceId"],
+                "instance_id": instance_id,
                 "operation_id": "acknowledge-dynamic-removal",
                 "acknowledged_model_ids": [first_model_id],
             },
@@ -522,7 +521,7 @@ async def test_poll_returns_dynamic_widget_models_in_app_metadata() -> None:
         after_ack = await client.call_tool(
             "anywidget_comm",
             {
-                "instance_id": launch.meta["anywidget"]["instanceId"],
+                "instance_id": instance_id,
                 "model_id": first_model_id,
                 "operation_id": "detached-after-ack",
                 "data": {"method": "request_state"},
@@ -553,8 +552,7 @@ async def test_launch_result_keeps_an_immutable_model_snapshot() -> None:
 
     async with connected(server) as client:
         result = await client.call_tool("parent", {})
-        assert result.meta is not None
-        payload = result.meta["anywidget"]
+        payload = await bootstrap_runtime(client, result)
         root, first = created[0]
         root_model_id = root.model_id
         first_model_id = first.model_id
@@ -623,9 +621,8 @@ async def test_launch_includes_messages_that_advance_serialized_models(
 
     async with connected(server) as client:
         result = await client.call_tool("counter", {})
+        runtime = await bootstrap_runtime(client, result)
 
-    assert result.meta is not None
-    runtime = result.meta["anywidget"]
     model_id = runtime["rootModelId"]
     assert runtime["models"][model_id]["state"]["value"] == 0
     assert [message["data"]["state"] for message in runtime["messages"]] == [
@@ -668,11 +665,11 @@ async def test_idle_poll_does_not_repeat_model_context() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {})
-        assert launch.meta is not None
+        runtime = await bootstrap_runtime(client, launch)
         result = await client.call_tool(
             "anywidget_poll",
             {
-                "instance_id": launch.meta["anywidget"]["instanceId"],
+                "instance_id": runtime["instanceId"],
                 "operation_id": "idle-model-context",
             },
         )
@@ -688,8 +685,7 @@ async def test_state_none_suppresses_live_context() -> None:
 
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {})
-        assert launch.meta is not None
-        payload = launch.meta["anywidget"]
+        payload = await bootstrap_runtime(client, launch)
         result = await client.call_tool(
             "anywidget_comm",
             {

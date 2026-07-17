@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
-from mcp.types import Icon, TextContent, ToolAnnotations
+from mcp.types import Icon, TextContent, TextResourceContents, ToolAnnotations
 from pydantic import AnyUrl
 from starlette.testclient import TestClient
 from traitlets import Int
@@ -22,7 +22,13 @@ from anywidget_mcp import (
 )
 from anywidget_mcp.server import describe_widget_target
 
-from ._server_support import CounterWidget, connected
+from ._server_support import (
+    CounterWidget,
+    bootstrap_id,
+    bootstrap_runtime,
+    connected,
+    state_id,
+)
 
 RowValues = list[str]
 
@@ -53,21 +59,34 @@ async def test_attach_registers_classes_sync_factories_and_async_factories() -> 
         raise_exceptions=True,
     ) as client:
         color = await client.call_tool("color_picker", {"color": "#c026d3"})
+        color_runtime = await bootstrap_runtime(client, color)
         sync_result = await client.call_tool("counter", {"value": 3})
         async_result = await client.call_tool("async_counter", {"value": 4})
 
     assert color.structuredContent == {
         "tool": "color_picker",
         "state": {"color": "#c026d3"},
+        "state_id": state_id(color),
     }
     assert color.content == [
         TextContent(
             type="text",
-            text='Opened Color Picker with state {"color":"#c026d3"}.',
-        )
+            text=(
+                'Opened Color Picker with state {"color":"#c026d3"}. '
+                "To read later user changes, call anywidget_state with "
+                f'{{"state_id":"{state_id(color)}"}}.'
+            ),
+        ),
+        TextContent(
+            type="text",
+            text=f"urn:anywidget-mcp:bootstrap:{bootstrap_id(color)}",
+        ),
     ]
-    assert color.meta is not None
-    assert color.meta["anywidget"]["context"] == {
+    assert color.meta == {"ui": {"resourceUri": APP_RESOURCE_URI}}
+    assert bootstrap_id(color) != color_runtime["instanceId"]
+    assert state_id(color) not in {bootstrap_id(color), color_runtime["instanceId"]}
+    assert color_runtime["sessionIdleTimeoutMs"] == 900_000
+    assert color_runtime["context"] == {
         "version": 1,
         "tool": "color_picker",
         "state": {"color": "#c026d3"},
@@ -75,10 +94,12 @@ async def test_attach_registers_classes_sync_factories_and_async_factories() -> 
     assert sync_result.structuredContent == {
         "tool": "counter",
         "state": {"doubled": 6, "value": 3},
+        "state_id": state_id(sync_result),
     }
     assert async_result.structuredContent == {
         "tool": "async_counter",
         "state": {"doubled": 8, "value": 4},
+        "state_id": state_id(async_result),
     }
     assert all(widget.comm is None for widget in created)
 
@@ -88,6 +109,17 @@ def test_attach_rejects_a_second_adapter() -> None:
     attach(mcp)
 
     with pytest.raises(ValueError, match="already attached"):
+        attach(mcp)
+
+
+def test_attach_rejects_an_existing_streamable_http_app() -> None:
+    mcp = FastMCP("test")
+    mcp.streamable_http_app()
+
+    with pytest.raises(
+        ValueError,
+        match=r"attach\(\) must run before streamable_http_app\(\)",
+    ):
         attach(mcp)
 
 
@@ -112,7 +144,7 @@ async def test_attach_rejects_an_occupied_app_resource_without_registering_tools
         tools = (await client.list_tools()).tools
 
     assert [str(resource.uri) for resource in resources] == [
-        "ui://anywidget-mcp/widget.html"
+        "ui://anywidget-mcp/app.html"
     ]
     assert tools == []
 
@@ -134,12 +166,14 @@ async def test_attach_rejects_an_invalid_app_uri_without_poisoning_retry() -> No
         tools = {tool.name for tool in (await client.list_tools()).tools}
 
     assert [str(resource.uri) for resource in resources] == [
-        "ui://anywidget-mcp/widget.html"
+        "ui://anywidget-mcp/app.html"
     ]
     assert {
+        "anywidget_bootstrap",
         "anywidget_assets",
         "anywidget_comm",
         "anywidget_poll",
+        "anywidget_state",
         "anywidget_dispose",
     }.issubset(tools)
 
@@ -177,6 +211,95 @@ async def test_describe_widget_target_matches_registered_input_schema() -> None:
     assert description.kind == "widget-class"
     assert description.input_schema == tool.inputSchema
     assert tool.description == description.description
+
+
+@pytest.mark.anyio
+async def test_widget_tool_owns_the_optional_loading_message() -> None:
+    server = AnyWidgetMCP("test")
+    received: list[int] = []
+
+    @server.widget(title="Embedding Atlas")
+    def create_atlas(row_count: int) -> CounterWidget:
+        received.append(row_count)
+        return CounterWidget(value=row_count)
+
+    async with connected(server) as client:
+        tool = next(
+            tool
+            for tool in (await client.list_tools()).tools
+            if tool.name == "create_atlas"
+        )
+        result = await client.call_tool(
+            "create_atlas",
+            {
+                "row_count": 12,
+                "loading_message": "  Mapping 12 text rows…  ",
+            },
+        )
+        runtime = await bootstrap_runtime(client, result)
+
+    assert tool.inputSchema["properties"]["loading_message"] == {
+        "default": "Initializing Embedding Atlas…",
+        "description": (
+            "Progress text shown while this widget initializes. Describe the "
+            "current request in at most 120 characters."
+        ),
+        "title": "Loading Message",
+        "type": "string",
+    }
+    assert tool.inputSchema["required"] == ["row_count"]
+    assert received == [12]
+    assert runtime["loadingMessage"] == "Mapping 12 text rows…"
+
+
+@pytest.mark.anyio
+async def test_target_loading_message_parameter_keeps_its_python_contract() -> None:
+    server = AnyWidgetMCP("test")
+    received: list[str] = []
+
+    @server.widget(title="Code Walkthrough")
+    def walkthrough(
+        loading_message: str = "Preparing the walkthrough…",
+    ) -> CounterWidget:
+        received.append(loading_message)
+        return CounterWidget()
+
+    async with connected(server) as client:
+        default_result = await client.call_tool("walkthrough", {})
+        explicit_result = await client.call_tool(
+            "walkthrough",
+            {"loading_message": "Tracing quicksort…"},
+        )
+        default_runtime = await bootstrap_runtime(client, default_result)
+        explicit_runtime = await bootstrap_runtime(client, explicit_result)
+
+    assert received == ["Preparing the walkthrough…", "Tracing quicksort…"]
+    assert default_runtime["loadingMessage"] == "Preparing the walkthrough…"
+    assert explicit_runtime["loadingMessage"] == "Tracing quicksort…"
+
+
+@pytest.mark.parametrize(
+    "loading_message",
+    ["Loading\u202eexe", "x" * 121, " \n "],
+)
+@pytest.mark.anyio
+async def test_widget_loading_message_falls_back_for_invalid_display_text(
+    loading_message: str,
+) -> None:
+    server = AnyWidgetMCP("test")
+
+    @server.widget(title="Code Walkthrough")
+    def walkthrough() -> CounterWidget:
+        return CounterWidget()
+
+    async with connected(server) as client:
+        result = await client.call_tool(
+            "walkthrough",
+            {"loading_message": loading_message},
+        )
+        runtime = await bootstrap_runtime(client, result)
+
+    assert runtime["loadingMessage"] == "Initializing Code Walkthrough…"
 
 
 @pytest.mark.parametrize("kind", ["callable", "partial"])
@@ -356,7 +479,7 @@ async def test_widget_classes_expose_filtered_constructor_schemas() -> None:
     assert {
         name
         for name, tool in tools.items()
-        if tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/widget.html"}}
+        if tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/app.html"}}
     } == {"color_picker", "sortable_list", "slider_2d"}
     assert "kwargs" not in tools["color_picker"].inputSchema["properties"]
     assert tools["sortable_list"].inputSchema["required"] == ["value"]
@@ -391,7 +514,14 @@ async def test_widget_class_description_uses_its_own_docstring() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["anywidget_assets", "anywidget_comm", "anywidget_poll", "anywidget_dispose"],
+    [
+        "anywidget_bootstrap",
+        "anywidget_assets",
+        "anywidget_comm",
+        "anywidget_poll",
+        "anywidget_state",
+        "anywidget_dispose",
+    ],
 )
 def test_widget_rejects_reserved_session_tool_names(name: str) -> None:
     server = AnyWidgetMCP("test")
@@ -455,7 +585,7 @@ async def test_widget_metadata_preserves_annotations_icons_and_app_resource() ->
 
     assert tool.annotations == annotations
     assert tool.icons == icons
-    assert tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/widget.html"}}
+    assert tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/app.html"}}
 
 
 @pytest.mark.anyio
@@ -466,16 +596,31 @@ async def test_session_tools_are_visible_to_the_app() -> None:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     for name in (
+        "anywidget_bootstrap",
         "anywidget_assets",
         "anywidget_comm",
         "anywidget_poll",
         "anywidget_dispose",
     ):
         assert tools[name].meta == {"ui": {"visibility": ["app"]}}
+    state_tool = tools["anywidget_state"]
+    assert state_tool.meta == {"ui": {"visibility": ["model"]}}
+    assert state_tool.inputSchema["required"] == ["state_id"]
+    assert state_tool.annotations == ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+    assert tools["anywidget_bootstrap"].inputSchema["required"] == [
+        "bootstrap_id",
+        "operation_id",
+    ]
     assert tools["anywidget_assets"].inputSchema["required"] == [
         "instance_id",
         "asset_ids",
     ]
+    assert tools["anywidget_dispose"].inputSchema["required"] == ["session_id"]
     assert "operation_id" in tools["anywidget_comm"].inputSchema["required"]
     assert "operation_id" in tools["anywidget_poll"].inputSchema["required"]
     assert "acknowledged_model_ids" in tools["anywidget_poll"].inputSchema["properties"]
@@ -507,8 +652,11 @@ async def test_app_resource_exposes_mime_type_and_csp() -> None:
         }
     }
     assert len(contents) == 1
+    assert isinstance(contents[0], TextResourceContents)
     assert contents[0].mimeType == "text/html;profile=mcp-app"
     assert contents[0].meta == resources[0].meta
+    assert "Initializing widget…" in contents[0].text
+    assert 'aria-busy="true"' in contents[0].text
 
 
 def test_streamable_http_app_allows_configured_browser_origin() -> None:

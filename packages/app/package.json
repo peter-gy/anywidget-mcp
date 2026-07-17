@@ -17,7 +17,8 @@
 	},
 	"dependencies": {
 		"@modelcontextprotocol/ext-apps": "catalog:",
-		"@modelcontextprotocol/sdk": "catalog:"
+		"@modelcontextprotocol/sdk": "catalog:",
+		"es-module-lexer": "2.3.1"
 	},
 	"devDependencies": {
 		"@types/node": "catalog:",

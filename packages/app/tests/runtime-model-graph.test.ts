@@ -58,7 +58,7 @@ describe("WidgetRuntime launch and model graph", () => {
 		expect(callNow).toHaveBeenCalledOnce();
 		expect(callNow).toHaveBeenCalledWith(
 			"anywidget_dispose",
-			{ instance_id: "mount-session" },
+			{ session_id: "mount-session" },
 			expect.any(AbortSignal),
 		);
 	});
@@ -303,7 +303,7 @@ describe("WidgetRuntime launch and model graph", () => {
 		await runtime.dispose();
 		expect(callNow).toHaveBeenCalledWith(
 			"anywidget_dispose",
-			{ instance_id: "instance-1" },
+			{ session_id: "instance-1" },
 			expect.any(AbortSignal),
 		);
 	});
@@ -482,7 +482,7 @@ describe("WidgetRuntime launch and model graph", () => {
 			expect(callNow).toHaveBeenCalledOnce();
 			expect(callNow).toHaveBeenCalledWith(
 				"anywidget_dispose",
-				{ instance_id: "instance-1" },
+				{ session_id: "instance-1" },
 				expect.any(AbortSignal),
 			);
 			expect(
@@ -562,7 +562,7 @@ describe("WidgetRuntime launch and model graph", () => {
 		expect(disposed).toEqual(expect.arrayContaining([firstId, failedId]));
 		expect(callNow).toHaveBeenCalledWith(
 			"anywidget_dispose",
-			{ instance_id: "instance-1" },
+			{ session_id: "instance-1" },
 			expect.any(AbortSignal),
 		);
 		expect(consoleError).toHaveBeenCalledWith(

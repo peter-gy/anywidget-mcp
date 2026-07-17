@@ -359,7 +359,7 @@ describe("WidgetRuntime asset hydration", () => {
 			expect(app.callServerTool).toHaveBeenCalledWith(
 				{
 					name: "anywidget_dispose",
-					arguments: { instance_id: "invalid-session" },
+					arguments: { session_id: "invalid-session" },
 				},
 				{ signal: expect.any(AbortSignal) },
 			);
@@ -544,7 +544,7 @@ describe("WidgetRuntime asset hydration", () => {
 		expect(names).toEqual(["anywidget_assets", "anywidget_dispose"]);
 		expect(callServerTool.mock.calls.at(-1)?.[0]).toEqual({
 			name: "anywidget_dispose",
-			arguments: { instance_id: "failed-session" },
+			arguments: { session_id: "failed-session" },
 		});
 	});
 

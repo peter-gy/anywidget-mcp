@@ -147,6 +147,62 @@ describe("content-addressed widget assets", () => {
 		);
 	});
 
+	test("retries a thrown asset transport failure with the same request", async () => {
+		vi.useFakeTimers();
+		try {
+			const esm = await fixtureAsset("esm", "export default { render() {} }");
+			const call = vi
+				.fn<QueuedToolCall>()
+				.mockRejectedValueOnce(new Error("response lost"))
+				.mockResolvedValue(assetResult(esm));
+
+			const resolution = new AssetStore("session-1").resolve(
+				manifest(esm),
+				[{ _esm: esm.id }],
+				call,
+			);
+			await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+			await vi.advanceTimersByTimeAsync(100);
+
+			await expect(resolution).resolves.toEqual(new Map([[esm.id, esm.text]]));
+			expect(call).toHaveBeenCalledTimes(2);
+			expect(call.mock.calls[1]?.[1]).toBe(call.mock.calls[0]?.[1]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("returns an asset tool error without retrying it", async () => {
+		const esm = await fixtureAsset("esm", "export default { render() {} }");
+		const call = vi.fn<QueuedToolCall>().mockResolvedValue({
+			content: [{ type: "text", text: "asset access denied" }],
+			isError: true,
+		});
+
+		await expect(
+			new AssetStore("session-1").resolve(manifest(esm), [{ _esm: esm.id }], call),
+		).rejects.toThrow("asset access denied");
+		expect(call).toHaveBeenCalledOnce();
+	});
+
+	test("stops asset transport retries when resolution is aborted", async () => {
+		const esm = await fixtureAsset("esm", "export default { render() {} }");
+		const call = vi.fn<QueuedToolCall>().mockRejectedValue(new Error("offline"));
+		const controller = new AbortController();
+		const resolution = new AssetStore("session-1").resolve(
+			manifest(esm),
+			[{ _esm: esm.id }],
+			call,
+			controller.signal,
+		);
+		await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+
+		controller.abort(new DOMException("superseded", "AbortError"));
+
+		await expect(resolution).rejects.toMatchObject({ name: "AbortError" });
+		expect(call).toHaveBeenCalledOnce();
+	});
+
 	test("chunks more than 128 cache misses into bounded fetch requests", async () => {
 		const assets = await Promise.all(
 			Array.from({ length: 129 }, (_, index) =>

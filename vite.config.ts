@@ -46,7 +46,7 @@ export default defineConfig({
 				},
 			},
 			{
-				files: ["packages/app/src/app.ts", "packages/app/src/model.ts"],
+				files: ["packages/app/src/model.ts", "packages/app/src/runtime.ts"],
 				rules: {
 					// Polling and model operations cross a stateful protocol boundary in order.
 					"no-await-in-loop": "off",

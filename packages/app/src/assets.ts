@@ -1,6 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import type { QueuedToolCall } from "./tool-calls";
+import { retryTransport } from "./transport";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -168,10 +169,10 @@ export class AssetStore {
 			instance_id: this.instanceId,
 			asset_ids: assetIds,
 		};
-		const request = signal
-			? call("anywidget_assets", args, signal)
-			: call("anywidget_assets", args);
-		const result = signal ? await abortable(request, signal) : await request;
+		const result = await retryTransport(
+			() => (signal ? call("anywidget_assets", args, signal) : call("anywidget_assets", args)),
+			signal,
+		);
 		signal?.throwIfAborted();
 		if (result.isError) throw new Error(toolErrorText(result));
 		const meta = isRecord(result._meta) ? result._meta.anywidget : undefined;
@@ -377,25 +378,6 @@ function withDeadline<T>(task: Promise<T>, milliseconds: number, signal?: AbortS
 			(error: unknown) => finish(() => reject(error)),
 		);
 		if (signal?.aborted) abort();
-	});
-}
-
-function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		let settled = false;
-		const finish = (callback: () => void): void => {
-			if (settled) return;
-			settled = true;
-			signal.removeEventListener("abort", abort);
-			callback();
-		};
-		const abort = (): void => finish(() => reject(signal.reason));
-		signal.addEventListener("abort", abort, { once: true });
-		void task.then(
-			(value) => finish(() => resolve(value)),
-			(error: unknown) => finish(() => reject(error)),
-		);
-		if (signal.aborted) abort();
 	});
 }
 

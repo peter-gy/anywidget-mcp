@@ -1,4 +1,5 @@
 import { scopedModel, type AnyModel, type BridgeModel } from "./model";
+import { loadModule } from "./module-loader";
 import type { QueuedToolCall } from "./tool-calls";
 
 export interface Experimental {
@@ -39,11 +40,6 @@ export interface WidgetDefinition {
 		host: Host;
 		experimental: Experimental;
 	}): unknown;
-}
-
-interface WidgetModule {
-	default?: WidgetDefinition | (() => WidgetDefinition | Promise<WidgetDefinition>);
-	render?: WidgetDefinition["render"];
 }
 
 export interface BindingRuntime {
@@ -633,30 +629,14 @@ export async function loadWidget(esm: string, signal?: AbortSignal): Promise<Wid
 	signal?.throwIfAborted();
 	const module = await loadModule(esm, signal);
 	signal?.throwIfAborted();
-	if (module.render) return { render: module.render };
+	if (typeof module.render === "function") {
+		return { render: module.render as WidgetDefinition["render"] };
+	}
 	const exported = module.default;
 	if (!exported) throw new Error("anywidget module must export a default definition or render");
 	const definition = typeof exported === "function" ? await exported() : exported;
 	if (!isRecord(definition)) throw new Error("anywidget default export must return a definition");
 	return definition as WidgetDefinition;
-}
-
-async function loadModule(source: string, signal?: AbortSignal): Promise<WidgetModule> {
-	signal?.throwIfAborted();
-	if (isUrl(source)) {
-		const module = (await import(/* @vite-ignore */ source)) as WidgetModule;
-		signal?.throwIfAborted();
-		return module;
-	}
-
-	const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-	try {
-		const module = (await import(/* @vite-ignore */ url)) as WidgetModule;
-		signal?.throwIfAborted();
-		return module;
-	} finally {
-		URL.revokeObjectURL(url);
-	}
 }
 
 export async function replaceCss(
