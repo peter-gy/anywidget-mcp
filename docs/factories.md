@@ -30,9 +30,11 @@ def pick_color(color: str = "#315efb") -> ColorPicker:
 mcp.run(transport="streamable-http")
 ```
 
-The factory signature becomes the JSON input schema for `pick_color`. Its
-docstring becomes the tool description, and `state="color"` exposes the current
-selection to the model.
+The explicit `color` parameter defines the widget argument in the JSON input
+schema for `pick_color`. `anywidget-mcp` also adds the optional
+`loading_message` field, which a model can set to progress text shown in the
+host while the widget initializes. The docstring becomes the tool description,
+and `state="color"` exposes the current selection to the model.
 
 Use explicit named parameters for factory input. Positional parameters that
 accept keyword arguments are supported. Positional-only, `*args`, and
@@ -93,8 +95,10 @@ through the required `code` argument, so serve the widget class:
 anywidget-mcp serve wigglystuff:LiveEdit --port 8010
 ```
 
-`anywidget-mcp` derives the `live_edit` tool schema from the constructor. The
-required `code` argument carries the Python source used to create the widget.
+The `LiveEdit` constructor defines required `code` as the widget argument for
+the `live_edit` tool. It carries the Python source used to create the widget.
+`anywidget-mcp` adds the optional `loading_message` field for host progress
+text.
 
 ::: warning
 `LiveEdit` executes `code` in the MCP server process to collect the trace. Run
@@ -289,7 +293,7 @@ Widget class names become snake-case tool names. `ColorPicker` registers
 
 Registration accepts a class or factory. Pass a factory when each tool call
 needs arguments that differ from the widget constructor. Pass a class when its
-constructor defines the intended tool schema.
+constructor parameters define the intended widget arguments.
 
 ## Attach to an existing server
 
@@ -309,7 +313,8 @@ widgets.widget(ColorPicker, state="color")
 
 The adapter composes widget cleanup into the existing server lifespan. Use
 `await widgets.aclose()` inside an active lifespan to close live widget
-sessions early.
+sessions early. Call `attach()` before creating the server's
+`streamable_http_app()`.
 
 ## Use the request context
 

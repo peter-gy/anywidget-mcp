@@ -67,6 +67,11 @@ session ownership.
   and finite.
 - `fastmcp_options` are forwarded to `FastMCP`.
 
+The streamable HTTP app owns widget sessions for its Starlette application
+lifespan. MCP connection rotation keeps existing widget sessions addressable
+through their `instance_id`. Explicit disposal, idle expiry, `aclose()`, and
+application shutdown close those sessions.
+
 ### `AnyWidgetMCP.widget()`
 
 ```text
@@ -86,12 +91,25 @@ mcp.widget(
 Registers an AnyWidget class or factory as an MCP App tool. Pass `target`
 directly or omit it to use `widget()` as a decorator.
 
-The method returns the registered target unchanged. The target signature
-defines the MCP input schema after FastMCP removes its injected `Context`
-parameter. A factory may return an AnyWidget or a non-empty
-`Sequence[AnyWidget]`. It may also return a synchronous or asynchronous context
-manager that yields either result. An async factory may resolve to any of these
-forms.
+The method returns the registered target unchanged. Explicit target parameters
+define widget fields in the MCP input schema. FastMCP removes its injected
+`Context` parameter from that schema. Registration adds an optional
+`loading_message` string when the target has no parameter with that name. It defaults to
+`"Initializing {tool title}…"` when that text passes the status bounds, with
+`"Initializing widget…"` as the fallback. A model can set it to describe the
+current invocation while the app initializes. The adapter normalizes the value
+to one line and uses the fallback for empty values, values longer than 120
+characters, control characters, and directional control characters. It removes
+the generated argument before calling the target.
+
+A target that declares `loading_message` keeps its annotation, default, schema,
+and Python argument. A valid string value also supplies the app status. A value
+that cannot be used as status text selects the generated status default while
+the target receives its validated argument.
+
+A factory may return an AnyWidget or a non-empty `Sequence[AnyWidget]`. It may
+also return a synchronous or asynchronous context manager that yields either
+result. An async factory may resolve to any of these forms.
 
 A sequence renders its widgets in order through one MCP App result. The same
 `state` specification applies to each widget. With state projection enabled,
@@ -130,11 +148,13 @@ attach(
 
 Adds the MCP App resource, widget registration, session tools, and cleanup to an
 existing `FastMCP` server. The returned `WidgetTools` provides `widget()` with
-the same registration contract as `AnyWidgetMCP.widget()`.
+the same registration contract and streamable HTTP session ownership as
+`AnyWidgetMCP.widget()`. Call `attach()` before creating the server's
+`streamable_http_app()` so the application lifespan owns widget sessions.
 
 `attach()` raises `TypeError` when `mcp` is not a `FastMCP` server. It raises
 `ValueError` when widget tools are already attached, a reserved tool name is in
-use, or `app_uri` is invalid.
+use, `app_uri` is invalid, or the streamable HTTP app already exists.
 
 ### `WidgetTools.aclose()`
 
@@ -212,7 +232,7 @@ must exist on every returned widget.
 
 ### Resource constants
 
-| Name               | Value                              |
-| ------------------ | ---------------------------------- |
-| `APP_RESOURCE_URI` | `"ui://anywidget-mcp/widget.html"` |
-| `APP_MIME_TYPE`    | `"text/html;profile=mcp-app"`      |
+| Name               | Value                           |
+| ------------------ | ------------------------------- |
+| `APP_RESOURCE_URI` | `"ui://anywidget-mcp/app.html"` |
+| `APP_MIME_TYPE`    | `"text/html;profile=mcp-app"`   |

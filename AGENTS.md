@@ -33,16 +33,25 @@ pnpm --filter @anywidget-mcp/python build && uv run --package anywidget-mcp pyte
 - `packages/app/` owns the browser MCP App, AnyWidget Frontend Model
   implementation, model bindings, host context, bridge calls, content-addressed
   source resolution and caching, and `updateModelContext` delivery.
+  `app.ts` owns host connection and the DOM shell. `runtime.ts` owns the live
+  model graph and ordered protocol scheduler. `runtime-payload.ts` and
+  `runtime-lifecycle.ts` own decoding and bounded teardown.
 - `packages/anywidget-mcp/src/anywidget_mcp/server.py` owns the public
-  `WidgetTools`, `attach()`, `AnyWidgetMCP`, and `serve()` APIs, MCP resources,
-  compiled target registration, injected FastMCP context, managed factory
-  lifetimes, session leases, CORS, and async shutdown. Every entry point uses the
-  same registration adapter.
+  `attach()`, `AnyWidgetMCP`, and `serve()` facade plus HTTP and CORS wrapping.
+- `_widget_tools.py` owns `WidgetTools`, MCP resources, protocol tool
+  registration, and shared FastMCP lifespan composition. `_targets.py` owns
+  target schemas and invocation binding.
+- `_factory.py` owns factory acquisition and managed result cleanup.
+  `_runtime.py` owns session leases, bootstrap and state handles, replay, idle
+  expiry, disposal, and async shutdown.
 - `packages/anywidget-mcp/src/anywidget_mcp/_bridge.py` owns widget identity,
-  graph enrollment, canonical comm messages, buffers, content-addressed source
-  externalization, polling, and disposal.
+  graph enrollment, snapshots, and canonical comm application. `_comm.py`,
+  `_notifications.py`, `_model_connection.py`, `_detachment.py`,
+  `_source_assets.py`, and `_widget_protocol.py` own their named bridge
+  boundaries.
 - `packages/anywidget-mcp/src/anywidget_mcp/_state.py` owns model-visible
-  projections, observation, deterministic summaries, and projection versions.
+  projections, observation, and projection versions. `_projection_json.py`
+  owns bounded deterministic serialization.
 - `packages/anywidget-mcp/` composes the private browser app into the
   single-file HTML resource shipped by the `anywidget-mcp` distribution.
 
@@ -58,18 +67,24 @@ package. The root Vite+ configuration rejects package imports in that direction,
 and the app test suite rejects a reverse workspace dependency in its manifest.
 Keep relative imports inside `packages/app`.
 
-Python and the browser meet through four explicit protocol surfaces:
+Python and the browser meet through five explicit protocol surfaces:
 
 1. MCP tool arguments plus an injected FastMCP `Context` create a fresh Python
    widget graph or enter a managed factory.
-2. Versioned tool result metadata carries the serialized model graph, queued
-   launch messages, buffers, content-addressed source references, an asset
-   manifest, and one matching initial state projection.
-3. Four app-visible tools provide source assets, canonical AnyWidget comms,
-   polling, and disposal through `anywidget_assets`, `anywidget_comm`,
-   `anywidget_poll`, and `anywidget_dispose`.
+2. The primary tool result links the app resource and includes a machine marker
+   with the exact form
+   `urn:anywidget-mcp:bootstrap:<32-lowercase-hex-capability>`.
+   `anywidget_bootstrap` claims that capability and returns the versioned model
+   graph, launch messages, source manifest, loading message, idle timeout, and
+   initial state projection.
+3. Five app-only tools provide bootstrap, source assets, canonical AnyWidget
+   comms, polling, and disposal through `anywidget_bootstrap`,
+   `anywidget_assets`, `anywidget_comm`, `anywidget_poll`, and
+   `anywidget_dispose`.
 4. `updateModelContext` publishes the latest complete model-visible projection
    after Python validation and observers run.
+5. The model-only `anywidget_state` tool reads the current retained projection
+   by `state_id` when a host omits `updateModelContext`.
 
 Change both runtimes and their boundary tests when a message, metadata, trait,
 buffer, resource, asset, protocol version, or projection shape changes.
@@ -81,6 +96,9 @@ through `anywidget_comm`, traitlets validate and observe them, and the response
 returns every resulting model update plus one complete state projection.
 The app applies those updates in order before publishing that projection to the
 host.
+
+`anywidget_state` reads the same Python-authoritative projection without
+consuming pending app messages, models, removals, or projection delivery.
 
 `WidgetSession` captures messages, model membership, and model context through
 one snapshot boundary. Default and selected projections serialize the last
@@ -96,6 +114,13 @@ retries. Python replays the complete success or error for a repeated comm ID.
 Poll replay identity includes the browser's acknowledged model-removal set.
 Detached comms remain live until the browser applies their removals and a later
 poll acknowledges those IDs.
+
+The bootstrap capability is distinct from the widget instance ID. The first
+bootstrap operation ID claims it, the same ID replays its response, and another
+claimant is rejected. An unclaimed launch expires after the shorter of 30
+seconds and the configured idle timeout. The first later successful app call
+retires the bootstrap replay and releases its pinned launch assets.
+
 Live model sources, the latest snapshot, and bounded replay entries retain the
 source assets needed by those responses. Superseded unpinned versions are
 released during the next snapshot. Replay eviction releases versions retained

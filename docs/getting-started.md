@@ -79,7 +79,9 @@ anywidget-mcp inspect wigglystuff:ColorPicker --json
 ```
 
 Inspection reports the target kind, tool name, title, description, and JSON
-input schema.
+input schema. Explicit target parameters define widget arguments in that
+schema. `anywidget-mcp` also adds the optional `loading_message` field. A model
+can set it to progress text shown in the host while the widget initializes.
 
 ## Serve from Python
 

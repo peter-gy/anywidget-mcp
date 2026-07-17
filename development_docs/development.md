@@ -101,9 +101,11 @@ uv run --package anywidget-mcp anywidget-mcp inspect wigglystuff:ColorPicker --j
 
 The inspector and server resolve the same `MODULE:OBJECT` target and use the
 same compiled registration description. Inspection reports `widget-class` or
-`factory`. FastMCP `Context` parameters stay outside the input schema. A class
-with variadic constructor parameters has an empty input schema. Use an explicit
-factory signature when the MCP tool accepts arguments.
+`factory`. Explicit target parameters define widget arguments in the input
+schema, and FastMCP `Context` parameters stay outside it. `anywidget-mcp` adds
+optional `loading_message` for host progress text. A class with variadic
+constructor parameters exposes this framework field and no widget arguments.
+Use an explicit factory signature when the MCP tool accepts widget arguments.
 
 Run the browser fixture used for protocol checks:
 

@@ -6,6 +6,12 @@ Python, the app publishes the latest complete projection through
 [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview)
 `updateModelContext` when the host supports that method.
 
+Each launch with model-visible state also returns a `state_id`. The
+model-visible `anywidget_state` tool accepts that ID and returns the latest
+complete projection. This gives hosts that do not implement
+`updateModelContext` a pull path for later state questions. Reading state does
+not consume a projection waiting for the browser app.
+
 The examples use `ColorPicker` and `SortableList` from
 [Wigglystuff](https://koaning.github.io/wigglystuff/). The same state API
 applies to other [AnyWidget](https://anywidget.dev/) classes.
@@ -29,7 +35,7 @@ The `state` option accepts these forms:
 | Omitted                                   | Public synchronized root traits except `layout`, `tabbable`, and `tooltip` |
 | `"color"`                                 | One selected root trait                                                    |
 | `("color", "show_label")`                 | Selected root traits                                                       |
-| `None`                                    | State projection and model-context updates are disabled                    |
+| `None`                                    | Model-visible state is disabled                                            |
 | `lambda widget: {...}`                    | A custom mapping invalidated by changes in the enrolled widget graph       |
 | `StateProjection(project, watch="value")` | A custom mapping invalidated by selected root traits                       |
 
@@ -99,3 +105,7 @@ deterministic summaries.
 Structured tool results and model context identify the registered tool through
 the `tool` field. Use `name=` during registration when that identity should
 differ from the class or factory name.
+
+Launch results with a projection contain `state_id`. Models pass that value to
+`anywidget_state` when they need a fresh projection after user interaction.
+The state handle expires with its widget session and is revoked on disposal.

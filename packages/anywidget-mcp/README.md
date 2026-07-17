@@ -78,9 +78,10 @@ anywidget-mcp serve my_widgets:create_picker
 ```
 
 The command serves a streamable HTTP endpoint at
-`http://127.0.0.1:8000/mcp`. The class constructor or factory signature becomes
-the MCP tool input schema, so the host can inspect and invoke the widget with
-typed arguments.
+`http://127.0.0.1:8000/mcp`. Explicit parameters on the class constructor or
+factory define widget arguments in the MCP tool input schema. `anywidget-mcp`
+also adds the optional `loading_message` field. A model can set it to progress
+text shown in the host while the widget initializes.
 
 Inspect that contract before starting the server:
 
@@ -165,10 +166,12 @@ and descriptor-backed protocol objects use the same session. Repeated
 references use one model, and container changes enroll new models before the
 parent update reaches the browser.
 
-`AnyWidgetMCP` composes widget cleanup into the FastMCP lifespan. Server
-shutdown closes every widget session and exits each managed factory. Inside an
-active server lifespan, `await mcp.aclose()` closes all sessions early and
-stops accepting widget calls until the next lifespan starts.
+`AnyWidgetMCP` composes widget cleanup into the FastMCP lifespan. For
+streamable HTTP, the Starlette application owns widget sessions across MCP
+connection changes. Server shutdown closes every widget session and exits each
+managed factory. Inside an active server lifespan, `await mcp.aclose()` closes
+all sessions early and stops accepting widget calls until the next lifespan
+starts.
 
 ## Attach to an existing FastMCP server
 
@@ -187,12 +190,15 @@ widgets.widget(ColorPicker, state="color")
 
 `attach()` composes cleanup with the server's existing lifespan. Inside an
 active lifespan, `await widgets.aclose()` closes all widget sessions early and
-stops accepting widget calls until the next lifespan starts.
+stops accepting widget calls until the next lifespan starts. Call `attach()`
+before creating the server's `streamable_http_app()`.
 
 ## Prepare widgets with factories
 
 A factory can validate arguments, load data, or configure the widget before it
-is rendered. Its explicit parameters define the tool schema:
+is rendered. Its explicit parameters define widget arguments in the tool
+schema. The schema also includes optional `loading_message`, which a model can
+set for host progress text:
 
 ```python
 from anywidget_mcp import AnyWidgetMCP
@@ -262,11 +268,13 @@ encode a large list as a bounded sequence summary with `type` and `length`. The
 summary may also include retained `items`, an `omitted` count, and `jsonBytes`.
 Set `state=None` to disable the aggregate projection. The manager stays active
 until app disposal, idle expiry, `aclose()`, or server shutdown. The widget
-graph closes before the manager exits. The class or factory signature defines
-the input contract after FastMCP removes its injected `Context` parameter. An
-AnyWidget class whose constructor is `(*args, **kwargs)` produces an
-empty input schema. Register a factory with named parameters when callers need
-to configure that widget.
+graph closes before the manager exits. Explicit parameters on the class
+constructor or factory define widget arguments after FastMCP removes its
+injected `Context` parameter. `anywidget-mcp` adds the optional
+`loading_message` field for host progress text. An AnyWidget class whose
+constructor is `(*args, **kwargs)` exposes this framework field and no widget
+arguments. Register a factory with named parameters when callers need to
+configure that widget.
 
 Cancellation interrupts factory acquisition. When a manager acquires a
 resource before its final pre-yield await, shield that partial-acquisition
@@ -358,6 +366,12 @@ When the host supports model-context updates, the app publishes the latest
 complete projection through MCP Apps `updateModelContext` so later chat turns
 can reason about the current widget state.
 
+The launch result also includes a `state_id` and tells the model how to call
+`anywidget_state`. A host that does not implement `updateModelContext` can use
+that read-only tool before answering a later question about the widget. The
+tool returns the latest complete Python-authoritative projection without
+consuming updates queued for the app.
+
 Tool text uses the registered title, such as `Opened Color Picker`. Structured
 results and model context use the registered tool name through the `tool`
 field.
@@ -389,7 +403,7 @@ mcp = AnyWidgetMCP(
 )
 ```
 
-The app resource uses `ui://anywidget-mcp/widget.html`. Add external ESM and
+The app resource uses `ui://anywidget-mcp/app.html`. Add external ESM and
 CSS origins to `resourceDomains`. Add API origins to `connectDomains`.
 
 ## Author widgets in marimo

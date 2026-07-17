@@ -4,7 +4,7 @@
 
 Use an adapter-owned comm for each AnyWidget model. The MCP App browser runtime
 implements the AnyWidget Frontend Model API and carries canonical ipywidgets
-messages and content-addressed widget sources through four app-visible MCP
+messages and content-addressed widget sources through five app-only MCP
 tools.
 
 Python applies each widget's state contract, including trait validation,
@@ -39,26 +39,66 @@ The comm prototype produced these traces:
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Widget construction      | A class creates one AnyWidget. A factory returns one AnyWidget or a non-empty ordered sequence. Managed factories remain active until session teardown. |
 | Request context          | FastMCP injects `Context` after compiling the model-facing input schema                                                                                 |
+| Initialization status    | Generated `loading_message` input reaches the app through `ui/notifications/tool-input` and the bootstrap response                                      |
 | Initial state            | `widget.send_state()` emits canonical state, buffer paths, buffers, and widget sources                                                                  |
+| Runtime bootstrap        | A machine text block carries a 32-hex capability. `anywidget_bootstrap` claims it and returns the versioned runtime payload.                            |
 | Widget source            | `_esm` and `_css` become typed SHA-256 references. `anywidget_assets` returns session-owned source text for browser verification.                       |
 | Browser comm             | `anywidget_comm` delivers an ipywidgets `update` or `custom` message with an idempotent operation ID                                                    |
 | Python state change      | Comm output is returned immediately or collected by an idempotent `anywidget_poll` cycle                                                                |
+| Model state read         | `anywidget_state` accepts a launch `state_id` and returns the latest complete projection without draining app updates                                   |
 | Child composition        | References nested in synchronized dicts, lists, and tuples share the session and AFM host. Replacements enroll before the parent update is applied.     |
 | Child removal            | The browser acknowledges applied removals through a later `anywidget_poll`, then Python closes the detached models.                                     |
 | App teardown             | `anywidget_dispose` closes every enrolled model and exits the factory manager                                                                           |
-| MCP App discovery        | Tool `_meta.ui.resourceUri` points to `ui://anywidget-mcp/widget.html`                                                                                  |
-| Internal tool discovery  | `_meta.ui.visibility=["app"]` keeps session tools app-facing                                                                                            |
+| HTTP runtime ownership   | The Starlette application lifespan retains widget sessions across MCP connection rotation                                                               |
+| MCP App discovery        | Tool `_meta.ui.resourceUri` points to `ui://anywidget-mcp/app.html`                                                                                     |
+| Internal tool discovery  | `_meta.ui.visibility=["app"]` keeps bootstrap, assets, comm, poll, and disposal app-only. `anywidget_state` is model-only                               |
 | Live model context       | `ui/update-model-context` replaces the previous state projection                                                                                        |
 
-The runtime payload lives in the tool result `_meta`. `content` gives the model
-an initial state projection. `structuredContent` identifies the registered tool
-and exposes that projection to the app. `_meta.anywidget` carries
-`protocolVersion`, the asset manifest, binary parts, model IDs, ordered launch
-messages, and the session ID. Model and message payloads use `sourceRefs` for
-ESM and CSS. The app verifies and hydrates those references before registering
-the launch graph or applying a transaction. Tool results and model context use
-the `tool` field for the registered identity. After interaction, the app sends
-Python-authoritative projections through `ui/update-model-context`.
+The primary tool result separates host discovery, model output, and app
+bootstrap. Its top-level `_meta` contains a single `ui` object with
+`resourceUri`. Its content contains the model-facing summary and a separate
+text block whose complete value has the form
+`urn:anywidget-mcp:bootstrap:<32-lowercase-hex-capability>`. The capability is
+distinct from the widget `instanceId`. `structuredContent` identifies the
+registered tool and carries the optional initial state projection. Projected
+results also carry a distinct `state_id`.
+
+The browser parses the capability from that exact marker and calls the app-only
+`anywidget_bootstrap` tool with `bootstrap_id` and `operation_id`. That direct
+response `_meta.anywidget` is the sole full runtime payload. It carries
+`protocolVersion: 1`, `instanceId`, `rootModelId`, `sessionIdleTimeoutMs`,
+`assetManifest`, `models`, ordered `messages`, `loadingMessage`, and optional
+`context`. Model and message payloads use `sourceRefs` for ESM and CSS. The app
+verifies and hydrates those references before registering the launch graph or
+applying a transaction. Tool results and model context use the `tool` field for
+the registered identity. After interaction, the app sends Python-authoritative
+projections through `ui/update-model-context`.
+
+Hosts that omit `ui/update-model-context` retain a model-visible pull path.
+The launch summary tells the model to pass `state_id` to `anywidget_state`
+before answering later questions about the widget. The tool reads the retained
+Python-authoritative projection under the session protocol lock. It does not
+consume messages, pending models, removals, or the projection waiting for the
+app. The state handle shares the widget session lifetime and is revoked during
+disposal, idle expiry, launch failure, or server shutdown.
+
+Registration adds an optional `loading_message` tool argument when the target
+has no parameter with that name. The MCP Apps host sends complete arguments
+through `ui/notifications/tool-input`, which lets the app show the message
+before the launch result arrives. Python normalizes the value, removes a
+generated argument before target construction, and repeats the selected text in
+the bootstrap response as `_meta.anywidget.loadingMessage`. A target-defined
+`loading_message` keeps its schema and receives its validated value. The browser
+treats the bootstrap response value as authoritative when it mounts after tool
+execution.
+
+Hosts may deliver the same primary tool result more than once. The app records
+each accepted bootstrap capability for its lifetime. It resolves and mounts the
+first delivery, ignores later deliveries for that capability, and accepts a
+result with a new capability as a runtime replacement. The first bootstrap
+operation ID claims the capability. Repeating that ID replays the same response,
+while another operation ID is rejected. A host replay cannot reapply launch
+messages or dispose the active Python session.
 
 A sequence result receives one internal group model as its wire root. The
 returned widgets become child models in sequence order and render through that
@@ -96,11 +136,12 @@ every source referenced by the latest snapshot. Bounded comm and poll replay
 entries pin the sources required by their stored responses. The app hydrates a
 snapshot before it issues another comm or poll. Each ordered snapshot releases
 unpinned superseded versions. Replay eviction releases versions retained by
-that replay. Asset requests are repeatable during the active transaction and do
-not consume registry entries.
+that replay. The bootstrap replay pins its launch sources until the first later
+successful app call retires the replay. Asset requests are repeatable during the
+active transaction and do not consume registry entries.
 
 The current wire contract uses `protocolVersion: 1`. The field is required on
-launch, comm, poll, and asset responses. The browser rejects a payload whose
+bootstrap, comm, poll, and asset responses. The browser rejects a payload whose
 version differs from its runtime contract.
 
 Each browser comm and poll cycle keeps one `operation_id` across bounded
@@ -142,6 +183,24 @@ continues. Exhausting delivery retries or failing to apply a response disposes
 the runtime because the browser can no longer prove that its model graph
 matches Python.
 
+## Runtime ownership
+
+The stdio transport holds one widget runtime for its server lifespan. The
+streamable HTTP adapter also acquires that runtime from the Starlette
+application lifespan. Individual MCP connections may enter and leave the
+FastMCP lifespan while the application reference keeps the application-level
+session registry active for the serving process. This applies to
+`AnyWidgetMCP` and to a `FastMCP` server configured through `attach()`.
+
+An `instance_id` therefore remains valid when a streamable HTTP host opens a
+new MCP connection. `anywidget_dispose`, idle expiry, `aclose()`, and
+application shutdown remove the session through the same cleanup path.
+
+An unclaimed launch expires after the shorter of 30 seconds and the configured
+session idle timeout. A claimed bootstrap response reports that configured
+timeout as `sessionIdleTimeoutMs` so the browser can align its lifecycle with
+the Python lease.
+
 Python keeps a detached model comm active after announcing its ID in
 `removedModelIds`. The browser initializes newly announced models, applies
 messages, disposes removed bindings, then records those IDs for acknowledgment.
@@ -161,10 +220,11 @@ live comm.
 
 ## Resource and model graph boundaries
 
-Verified source ESM loads from a `blob:` URL. URL-based ESM and CSS retain their
-original URL after source hydration and require their origins in the resource
-CSP. Camera, microphone, geolocation, and clipboard access require matching
-resource permissions and host approval.
+Verified inline ESM runs in an appended module script. URL-based ESM and CSS
+retain their original URL after source hydration and require their origins in
+the resource CSP. The app resource includes `blob:` for widgets that construct
+blob-backed modules at runtime. Camera, microphone, geolocation, and clipboard
+access require matching resource permissions and host approval.
 
 The factory's child graph is enrolled at launch. A sequence adds its returned
 widgets beneath one internal group root. Graph discovery recursively walks

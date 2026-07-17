@@ -30,27 +30,34 @@ dependencies and package-specific tests or builds.
 
 ```text
 tool arguments
-  -> server.py uses one compiled target for registration and CLI inspection
+  -> _targets.py compiles one target for registration and CLI inspection
   -> FastMCP injects Context while the factory creates or yields widget output
-  -> server.py normalizes a sequence into one internal group render root
-  -> server.py keeps the factory manager active in the session lifespan
+  -> _factory.py normalizes output and keeps its manager active
+  -> _runtime.py owns the session lease, bootstrap, state handle, and cleanup
   -> _bridge.py claims widget identities and serializes models
-  -> _bridge.py externalizes ESM and CSS as content-addressed source references
-  -> server.py snapshots the graph, messages, asset manifest, and projection
-  -> assets.ts verifies and hydrates source references through anywidget_assets
-  -> app.ts creates every browser model and applies hydrated launch messages
+  -> _source_assets.py externalizes ESM and CSS as content-addressed references
+  -> _bridge.py snapshots the graph, messages, asset manifest, and projection
+  -> the primary result links the app resource and includes a bootstrap marker
+  -> app.ts accepts the host result and starts runtime replacement
+  -> runtime-results.ts claims the bootstrap capability with one operation ID
+  -> anywidget_bootstrap returns the versioned runtime payload
+  -> assets.ts verifies source references through anywidget_assets
+  -> runtime-payload.ts hydrates and validates models and messages
+  -> runtime.ts creates every browser model and applies launch messages
   -> binding.ts loads ESM and CSS, then renders AnyWidget views
   -> model.ts emits canonical state and custom messages
-  -> tool-calls.ts sends app-visible bridge calls in order
+  -> tool-calls.ts sends app-only bridge calls in order
   -> _bridge.py applies comm messages through each model's Python state handler
   -> validation and observers produce authoritative updates when provided
   -> _state.py produces one complete versioned projection
   -> context.ts publishes the projection with updateModelContext
+  -> anywidget_state provides a model-visible pull path for other hosts
 ```
 
-Each module owns one transition. `server.py` composes the transitions and
-manages leases. Model event behavior stays in the app, which consumes explicit
-protocol payloads while Python process state stays behind the bridge tools.
+Each module owns one transition. `server.py` exposes the public FastMCP facade.
+`_widget_tools.py` registers resources and tools. `_runtime.py` manages leases.
+Model event behavior stays in the app, which consumes explicit protocol
+payloads while Python process state stays behind the bridge tools.
 
 ## Python ownership
 
@@ -108,32 +115,43 @@ snapshot. Bounded comm and poll replay entries pin the sources needed to apply
 their stored responses. Each ordered snapshot releases unpinned superseded
 versions. Replay eviction releases versions retained by that replay.
 
-The async session runtime in `WidgetTools` owns factory tasks, active-call
-counting, idle expiry, disposal, and shutdown. `attach()` composes that runtime
-with the existing FastMCP lifespan. Lifespan exit closes every session, while
-`WidgetTools.aclose()` and `AnyWidgetMCP.aclose()` close sessions early inside
-an active lifespan.
+The async `SessionRuntime` in `_runtime.py` owns factory tasks, active-call
+counting, state handles, idle expiry, disposal, and shutdown. `WidgetTools` in
+`_widget_tools.py` composes that runtime with the existing FastMCP lifespan.
+Lifespan exit closes every session. `WidgetTools.aclose()` and
+`AnyWidgetMCP.aclose()` close sessions early inside an active lifespan.
 
 `StateContext` records the last notified value for each observed trait. Default
 and selected projections serialize that committed shadow. A custom projector
 runs outside the session lock only when live traits match the shadow, then
 rechecks the shadow before committing. Browser comms invalidate custom
 projections for protocol objects that have no observable trait API. Projectors
-are read-only. Their output is summarized into bounded JSON and versioned for
-the model. For a factory sequence, each emitted projection applies the selected
-state specification to every returned widget and aggregates the results as
+are read-only. `_projection_json.py` summarizes their output into bounded JSON,
+then `StateContext` versions the projection for the model. For a factory
+sequence, each emitted projection applies the selected state specification to
+every returned widget and aggregates the results as
 `{"widgets": [state, ...]}`. The internal group root stays outside that public
 projection.
 
 ## Browser ownership
 
-`WidgetRuntime` owns one launched tool result. It registers the full model
-graph, applies queued launch messages, initializes bindings, renders the root
-view, schedules comms and polls in API call order, applies model membership
-changes, and disposes the session. It requires the matching `protocolVersion`
-before applying a launch or transaction. Its protocol scheduler coalesces
-adjacent updates for the same model while custom messages, other models, and
-polls remain ordering barriers.
+`app.ts` owns the Ext Apps connection, host event handlers, DOM shell, loading
+state, runtime replacement, and visible errors. It installs every event handler
+before connecting to the host. Runtime failures use the error reporter passed
+when the app creates `WidgetRuntime`.
+
+`WidgetRuntime` owns one bootstrapped runtime payload. It claims the bootstrap
+capability with an operation ID, registers the full model graph, applies queued
+launch messages, initializes bindings, renders the root view, schedules comms
+and polls in API call order, applies model membership changes, and disposes the
+session. It requires the matching `protocolVersion` before applying the
+bootstrap payload or a transaction. Its protocol scheduler coalesces adjacent
+updates for the same model while custom messages, other models, and polls remain
+ordering barriers.
+
+`runtime-payload.ts` owns payload and transaction decoding, source hydration,
+model normalization, and context metadata validation. `runtime-lifecycle.ts`
+owns bounded session disposal, abort propagation, and timeout helpers.
 
 `AssetStore` validates each manifest entry and source digest. It reads verified
 sources from a process-local memory cache and the browser Cache API, then asks
@@ -169,17 +187,25 @@ settles after a replacement runtime.
 
 The Python and browser packages share behavior through data contracts:
 
-- Tool result `_meta.anywidget` carries session identity, root identity, the
-  protocol version, model graph, ordered launch messages, source manifest, and
-  binary parts.
-- Tool result `structuredContent` and model context identify the registered
-  tool through the `tool` field.
+- The primary tool result top-level `_meta` contains a single `ui` object with
+  `resourceUri`. Its content contains the model-facing summary and a separate
+  text block whose complete value is
+  `urn:anywidget-mcp:bootstrap:<32-lowercase-hex-capability>`.
+- Tool result `structuredContent` identifies the registered tool through the
+  `tool` field. A projected result also carries a distinct `state_id`.
+- `anywidget_bootstrap` accepts the capability as `bootstrap_id` and a bounded
+  `operation_id`. Its response `_meta.anywidget` is the sole full runtime
+  payload. The payload carries protocol version 1, session and root identity,
+  `sessionIdleTimeoutMs`, model graph, ordered launch messages, source manifest,
+  loading message, initial model context, and binary parts.
 - `anywidget_assets` returns session-owned ESM and CSS source text for browser
   verification.
 - `anywidget_comm` accepts one canonical comm message plus an idempotent
   operation ID, then returns resulting model updates and the latest projection.
 - `anywidget_poll` uses one idempotent operation ID per poll cycle and returns
   queued Python-originated updates and projection changes.
+- `anywidget_state` accepts the model-visible `state_id` and returns the latest
+  complete projection without consuming app protocol state.
 - `anywidget_dispose` releases the session and its complete widget graph.
 - `ui/update-model-context` replaces the model-visible projection used by
   later chat turns.
@@ -199,8 +225,14 @@ within its global queue slot. Exhausted delivery, an MCP tool error, or a
 response-application failure aborts and disposes the runtime before later
 protocol work can advance. The error remains visible in the app.
 
-The browser mounts a new tool result after joining disposal of the prior
-runtime. One abort scope spans cache lookup, source fetch, binding
+The browser claims a new bootstrap capability after joining disposal of the
+prior runtime. The first operation ID owns that claim. Repeating the same ID
+replays the bootstrap response, while another ID is rejected. An unclaimed
+launch expires after the shorter of 30 seconds and the configured idle timeout.
+The first later successful app call retires the bootstrap replay and releases
+its pinned launch assets.
+
+One abort scope spans bootstrap, cache lookup, source fetch, binding
 initialization, and root render. A cancelled or superseded mount cannot proceed
 to render after its initialization settles. Hot reload, experimental commands,
 and resolved child renders use the runtime abort signal. Teardown cancels
@@ -211,7 +243,7 @@ to close the session.
 
 `pnpm --filter @anywidget-mcp/python build` writes
 `packages/anywidget-mcp/src/anywidget_mcp/static/index.html`. Python serves
-that file through `importlib.resources` at `ui://anywidget-mcp/widget.html`.
+that file through `importlib.resources` at `ui://anywidget-mcp/app.html`.
 
 The generated path stays outside source control. Distribution builds require
 the file, and the package gate rebuilds it before producing the sdist and wheel.
