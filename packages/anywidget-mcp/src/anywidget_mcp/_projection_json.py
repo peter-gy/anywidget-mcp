@@ -1,3 +1,5 @@
+"""Bound model-visible widget state to deterministic JSON for MCP context."""
+
 from __future__ import annotations
 
 import json
@@ -26,6 +28,12 @@ class _ReadBudget:
 
 
 def bounded_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Return deterministic JSON-safe state within context and traversal limits.
+
+    Oversized, recursive, deep, or truncated values become summaries that
+    preserve their type and bounded previews where available.
+    """
+
     budget = _ReadBudget()
     items, has_more, overflow, budget_exhausted = _limited_items(
         mapping.items(), budget

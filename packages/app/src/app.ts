@@ -107,6 +107,8 @@ function startApp(): void {
 	app.onerror = (error) => showError(error);
 	app.onteardown = async () => {
 		resultGate.abort(new DOMException("Widget app is closing", "AbortError"));
+		// A queued replacement can publish a runtime after the first disposal.
+		// Drain the render queue, then close anything that it committed.
 		await disposeRuntime();
 		await renderRequest;
 		await disposeRuntime();
@@ -150,6 +152,8 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 					signal,
 				);
 				signal.throwIfAborted();
+				// Disposal starts with the bootstrap capability, then switches to the
+				// established session ID once bootstrap materialization succeeds.
 				sessionHandle = requiredString(materialized.payload.instanceId, "instance ID");
 				loadingMessage = loadingMessageFromResult(materialized.result) ?? loadingMessage;
 				showLoadingStatus();
@@ -166,6 +170,8 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 					showError,
 				);
 			} catch (error) {
+				// WidgetRuntime.create owns session cleanup once entered. Failures before
+				// that boundary still need disposal through the bootstrap capability.
 				if (!runtimeCreationStarted) {
 					await disposeServerSession(
 						calls,
@@ -217,6 +223,8 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 }
 
 async function disposeRuntime(preserve?: AbortSignal): Promise<void> {
+	// Replacement passes its own signal so disposing the current runtime cannot
+	// abort the creation attempt that requested that disposal.
 	const pending = pendingAttempt;
 	if (pending && pending.controller.signal !== preserve) {
 		pendingAttempt = undefined;

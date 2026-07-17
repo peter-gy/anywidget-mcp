@@ -1,3 +1,5 @@
+"""Coordinate one live AnyWidget graph as a browser-facing session."""
+
 from __future__ import annotations
 
 import copy
@@ -49,6 +51,8 @@ class WidgetSessionInitializationError(ExceptionGroup):
 
 
 class WidgetSession:
+    """Own one claimed widget graph from enrollment through acknowledged teardown."""
+
     def __init__(
         self,
         instance_id: str,
@@ -339,6 +343,8 @@ class WidgetSession:
         self._notifications.install(widgets)
 
     def _snapshot(self, *, full_models: bool) -> SessionSnapshot:
+        """Build one coherent snapshot and drain its pending protocol effects."""
+
         retries = 0
         while True:
             with self._notification_condition:
@@ -545,6 +551,8 @@ class WidgetSession:
                 raise
 
     def _sync_widget_graph(self, _change: object) -> None:
+        """Reconcile nested models and restore their owning trait on failure."""
+
         with self._lock:
             if self._closed or self._graph_sync_suspended:
                 return

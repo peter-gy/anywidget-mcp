@@ -1,3 +1,5 @@
+"""Project synchronized widget state into bounded, versioned model context."""
+
 from __future__ import annotations
 
 import copy
@@ -103,6 +105,13 @@ class _RefreshStatus(Enum):
 
 
 class StateContext:
+    """Track, compute, and version one session's model-visible projection.
+
+    Trait notifications provide committed values for selected projections.
+    Callable projections commit only while their observed generation remains
+    stable, and they may not mutate synchronized traits.
+    """
+
     def __init__(
         self,
         root: AnyWidget,
@@ -305,6 +314,12 @@ class StateContext:
         return self.take_cached()
 
     def refresh(self) -> _RefreshStatus:
+        """Compute a dirty projection and report whether its generation settled.
+
+        The projector runs outside the state lock. Its result commits only when
+        observed state still matches the captured generation.
+        """
+
         with self._lock:
             if (
                 self._closed

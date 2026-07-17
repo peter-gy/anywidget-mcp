@@ -20,6 +20,8 @@ export class ToolCallQueue {
 	transaction<T>(task: (call: QueuedToolCall) => Promise<T>, signal?: AbortSignal): Promise<T> {
 		const result = this.tail.then(() => {
 			signal?.throwIfAborted();
+			// Nested calls bypass this queue. Enqueuing them would place them behind the
+			// transaction that is currently waiting for their result.
 			const active = Promise.resolve(
 				task((name, args, callSignal) =>
 					this.invoke(name, args, combineSignals(signal, callSignal)),

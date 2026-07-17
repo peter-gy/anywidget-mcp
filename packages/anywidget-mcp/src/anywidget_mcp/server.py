@@ -1,3 +1,5 @@
+"""Expose public FastMCP integration and transport helpers for AnyWidget MCP Apps."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -31,6 +33,8 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
 class _MCPMethodMiddleware:
+    """Normalize HEAD and OPTIONS responses at the configured MCP endpoint."""
+
     def __init__(self, app: ASGIApp, path: str) -> None:
         self._app = app
         self._path = path
@@ -93,7 +97,7 @@ def attach(
 
 
 class AnyWidgetMCP(FastMCP):
-    """Run a FastMCP server that owns its AnyWidget session adapter."""
+    """FastMCP server with AnyWidget registration, session cleanup, and HTTP policy."""
 
     def __init__(
         self,
@@ -170,6 +174,8 @@ class AnyWidgetMCP(FastMCP):
         )
 
     def streamable_http_app(self) -> Starlette:
+        """Build the HTTP app with MCP method handling and configured CORS."""
+
         app = super().streamable_http_app()
         app.add_middleware(
             _MCPMethodMiddleware,

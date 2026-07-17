@@ -87,6 +87,8 @@ async function callBootstrapWithRetry(
 }
 
 export class ToolResultGate {
+	// Retain accepted bootstrap IDs for the app lifetime so a replay cannot replace
+	// a pending, mounted, or newer runtime.
 	private readonly retained = new Set<string>();
 	private current?: AbortController;
 	private launchAccepted = false;

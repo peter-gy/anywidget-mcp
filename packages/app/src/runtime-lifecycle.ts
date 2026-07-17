@@ -15,6 +15,8 @@ export function disposeServerSession(
 	const signal = AbortSignal.timeout(timeout);
 	const args: Record<string, unknown> = { session_id: sessionId };
 	if (operationId !== undefined) args.operation_id = operationId;
+	// callNow bypasses stalled protocol work. Reuse this argument object across
+	// transport retries so disposal keeps one replay identity.
 	const request = retryTransport(
 		() => calls.callNow("anywidget_dispose", args, signal),
 		signal,

@@ -1,3 +1,5 @@
+"""Register AnyWidget MCP resources, tools, and their shared runtime lifespan."""
+
 from __future__ import annotations
 
 import math
@@ -41,6 +43,8 @@ APP_RESOURCE_URI = "ui://anywidget-mcp/app.html"
 
 
 class AppCSP(TypedDict, total=False):
+    """Content security policy metadata attached to the app resource."""
+
     connectDomains: list[str]
     resourceDomains: list[str]
     frameDomains: list[str]
@@ -48,6 +52,8 @@ class AppCSP(TypedDict, total=False):
 
 
 class AppPermissions(TypedDict, total=False):
+    """Browser capability requests attached to the app resource."""
+
     camera: dict[str, Any]
     microphone: dict[str, Any]
     geolocation: dict[str, Any]
@@ -56,6 +62,8 @@ class AppPermissions(TypedDict, total=False):
 
 @dataclass
 class _RuntimeGeneration:
+    """Track references to one runtime shared by overlapping lifespans."""
+
     references: int = 1
     runtime: SessionRuntime | None = None
     closing: bool = False
@@ -65,7 +73,7 @@ class _RuntimeGeneration:
 
 
 class WidgetTools:
-    """Register AnyWidget tools on a FastMCP server and own their sessions."""
+    """Register AnyWidget tools and share their runtime across server lifespans."""
 
     def __init__(
         self,
@@ -264,6 +272,12 @@ class WidgetTools:
         self._mcp._mcp_server.lifespan = lifespan
 
     def _install_streamable_http_app(self) -> None:
+        """Keep sessions alive while Streamable HTTP connections rotate.
+
+        FastMCP enters its low-level lifespan per connection. The outer ASGI
+        lifespan retains the shared runtime across those connections.
+        """
+
         create_app = self._mcp.streamable_http_app
 
         def streamable_http_app() -> Starlette:
@@ -272,9 +286,6 @@ class WidgetTools:
 
             @asynccontextmanager
             async def lifespan(starlette_app: Starlette):
-                # FastMCP starts the low-level server lifespan for each MCP
-                # connection. This outer owner keeps widget sessions alive for
-                # the ASGI process while those connections rotate.
                 async with self._runtime_lifespan():
                     async with previous_lifespan(starlette_app) as state:
                         yield state
@@ -286,6 +297,11 @@ class WidgetTools:
 
     @asynccontextmanager
     async def _runtime_lifespan(self):
+        """Borrow the active runtime generation or own its task group.
+
+        The owning lifespan waits for every borrower before closing sessions.
+        """
+
         generation, owner = await self._join_runtime_generation()
         if not owner:
             try:
@@ -393,6 +409,12 @@ class WidgetTools:
             )
 
     def _register_session_tools(self) -> None:
+        """Register the model-state reader and browser protocol tools.
+
+        Comm and poll calls serialize through each lease's protocol lock.
+        Recorded operation IDs replay their stored outcome before new widget work.
+        """
+
         app_only = {"ui": {"visibility": ["app"]}}
         model_only = {"ui": {"visibility": ["model"]}}
 
@@ -607,6 +629,8 @@ def _validated_app_uri(mcp: FastMCP, app_uri: str) -> str:
 
 
 def _app_csp(csp: AppCSP | None) -> AppCSP:
+    """Copy CSP metadata and permit blob-backed widget modules."""
+
     result: AppCSP = {}
     if csp is not None:
         if "connectDomains" in csp:

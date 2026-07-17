@@ -1,3 +1,5 @@
+"""Externalize widget ESM and CSS with content IDs and replay retention."""
+
 from __future__ import annotations
 
 import hashlib
@@ -18,7 +20,11 @@ def _asset_id(kind: str, source: str) -> str:
 
 
 class SourceAssets:
-    """Own content-addressed widget sources and their replay references."""
+    """Own content-addressed widget sources and their retention roots.
+
+    Live models, the latest snapshot, and pinned replay entries keep assets
+    addressable. Assets with no retention root are pruned.
+    """
 
     def __init__(self) -> None:
         self._assets: dict[str, tuple[str, int, str]] = {}
@@ -91,6 +97,12 @@ class SourceAssets:
         list[dict[str, Any]],
         dict[str, dict[str, Any]],
     ]:
+        """Replace inline ESM and CSS with source references and return a manifest.
+
+        The update also advances the latest-snapshot retention root and records
+        source ownership for models that remain live.
+        """
+
         assets = dict(self._assets)
         model_source_refs = {
             model_id: dict(refs)

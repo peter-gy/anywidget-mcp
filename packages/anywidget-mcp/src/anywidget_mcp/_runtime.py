@@ -1,3 +1,5 @@
+"""Own widget session leases, capabilities, replay, expiry, and MCP payloads."""
+
 from __future__ import annotations
 
 import copy
@@ -41,6 +43,8 @@ UNCLAIMED_SESSION_TIMEOUT = 30.0
 
 @dataclass
 class CommReplay:
+    """Cached comm outcome with source assets pinned for replay."""
+
     fingerprint: str
     result: CallToolResult | None
     error: str | None
@@ -49,6 +53,8 @@ class CommReplay:
 
 @dataclass
 class PollReplay:
+    """Cached poll result keyed by operation and removal acknowledgments."""
+
     operation_id: str
     acknowledged_model_ids: tuple[str, ...]
     result: CallToolResult
@@ -57,6 +63,8 @@ class PollReplay:
 
 @dataclass
 class SessionLease:
+    """Hold capabilities, replay state, and ownership for one live session."""
+
     session: WidgetSession
     owner: FactoryOwner
     tool_name: str
@@ -80,6 +88,12 @@ class SessionLease:
 
 
 class SessionRuntime:
+    """Own widget sessions from factory acquisition through disposal.
+
+    Protocol calls borrow leases while cleanup waits. Each lease serializes comm,
+    poll, asset, and projection operations through its protocol lock.
+    """
+
     def __init__(
         self,
         task_group: TaskGroup,
@@ -109,6 +123,13 @@ class SessionRuntime:
         tool_title: str,
         loading_message: str = "Initializing widget…",
     ) -> CallToolResult:
+        """Acquire, initialize, and atomically publish a widget session.
+
+        The initial graph and projection complete before capability handles become
+        reachable. Failures attempt cleanup and report cleanup errors with the
+        launch error.
+        """
+
         owner = FactoryOwner()
         lease: SessionLease | None = None
         instance_id: str | None = None
@@ -227,6 +248,8 @@ class SessionRuntime:
         *,
         renew: bool = True,
     ) -> Generator[SessionLease, None, None]:
+        """Borrow a live lease and optionally renew its idle deadline."""
+
         with self._lock:
             lease = self._sessions.get(instance_id)
             if lease is not None:
@@ -248,6 +271,12 @@ class SessionRuntime:
                     lease.idle.set()
 
     def bootstrap(self, bootstrap_id: str, operation_id: str) -> CallToolResult:
+        """Claim a bootstrap capability and replay its initial runtime payload.
+
+        The first operation ID owns the capability. Repeating that ID returns the
+        original result, while a different operation ID is rejected.
+        """
+
         validate_bootstrap_id(bootstrap_id)
         validate_operation_id(operation_id)
         with self._lock:
@@ -275,6 +304,11 @@ class SessionRuntime:
             return replay.model_copy(deep=True)
 
     def state(self, state_id: str) -> tuple[str, ProjectionUpdate]:
+        """Read current state without draining pending browser delivery.
+
+        Reads before bootstrap preserve the shorter unclaimed-session deadline.
+        """
+
         validate_state_id(state_id)
         with self._lock:
             lease = self._state_handles.get(state_id)
@@ -316,6 +350,8 @@ class SessionRuntime:
         return True
 
     async def aclose(self) -> None:
+        """Stop launches and close active, closing, and acquiring factories."""
+
         with anyio.CancelScope(shield=True):
             async with self._close_lock:
                 with self._lock:
@@ -411,6 +447,8 @@ class SessionRuntime:
         return lease
 
     def complete_bootstrap(self, lease: SessionLease) -> None:
+        """Retire bootstrap replay and release its asset pins after app activity."""
+
         with self._lock:
             if lease.bootstrap_operation_id is None:
                 return
@@ -518,6 +556,12 @@ def launch_result(
     app_uri: str,
     session_idle_timeout_ms: float,
 ) -> CallToolResult:
+    """Build a launch result and retain its browser bootstrap payload.
+
+    Source assets needed by the initial graph stay pinned until the bootstrap
+    capability is retired or the lease closes.
+    """
+
     projection = launch.projection
     structured: dict[str, Any] = {"tool": lease.tool_name}
     if projection is None:
@@ -621,6 +665,8 @@ def remember_comm_replay(
     operation_id: str,
     replay: CommReplay,
 ) -> None:
+    """Cache a comm replay and release asset pins from the oldest eviction."""
+
     replay.asset_ids = lease.session.pin_assets(replay.asset_ids)
     lease.comm_replays[operation_id] = replay
     if len(lease.comm_replays) > COMM_REPLAY_LIMIT:

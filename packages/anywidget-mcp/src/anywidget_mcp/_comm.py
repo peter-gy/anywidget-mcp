@@ -1,3 +1,5 @@
+"""Adapt AnyWidget comm messages and binary buffers to the browser protocol."""
+
 from __future__ import annotations
 
 import base64
@@ -30,6 +32,12 @@ class WidgetMessage:
 
 
 class BridgeComm:
+    """Implement the kernel-style comm interface expected by AnyWidget.
+
+    Outbound buffers become base64 wire values. Inbound values are decoded into
+    the callback envelope consumed by widget comm handlers.
+    """
+
     kernel = True
 
     def __init__(self, comm_id: str, emit: Callable[[WidgetMessage], None]) -> None:

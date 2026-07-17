@@ -20,6 +20,8 @@ export async function loadModule(source: string, signal?: AbortSignal): Promise<
 		return module;
 	}
 	const [imports, exports] = parse(source);
+	// Inline scripts avoid blob dynamic-import failures in embedded hosts.
+	// Namespace re-exports require a module namespace and use the Blob fallback.
 	if (requiresNamespaceImport(source, imports, exports)) {
 		return loadBlobModule(source, signal);
 	}
@@ -27,6 +29,8 @@ export async function loadModule(source: string, signal?: AbortSignal): Promise<
 }
 
 export function instrumentInlineModule(source: string, receiverName: string): InlineModule {
+	// Inline module scripts do not expose their namespace to the creator. Rewrite
+	// supported exports and publish them through a one-shot receiver.
 	const [, exports] = parse(source);
 	const defaultExport = findExport(exports, "default");
 	const renderExport = findExport(exports, "render");

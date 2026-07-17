@@ -110,6 +110,8 @@ export class AssetStore {
 			Array.from(references, async (assetId): Promise<[string, string | undefined]> => {
 				const descriptor = manifest.get(assetId);
 				if (!descriptor) throw new Error(`Missing manifest entry for widget asset ${assetId}`);
+				// Cache entries outlive a widget session, so verify byte length and digest
+				// before reuse.
 				const memory = memoryCache.get(assetId);
 				if (memory !== undefined && (await verifyAsset(assetId, descriptor, memory))) {
 					return [assetId, memory];

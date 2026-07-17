@@ -1,3 +1,5 @@
+"""Acquire widget factories, normalize their outputs, and coordinate cleanup."""
+
 from __future__ import annotations
 
 import inspect
@@ -21,12 +23,20 @@ from ._widget_protocol import close_unclaimed_widget_graphs
 
 @dataclass(frozen=True)
 class WidgetOutput:
+    """Normalized render root and model-state roots from a widget factory."""
+
     render_root: AnyWidget
     state_roots: tuple[AnyWidget, ...]
     sequence: bool
 
 
 def normalize_widget_output(value: object, *, origin: str) -> WidgetOutput:
+    """Normalize one widget or a non-empty sequence into session roots.
+
+    A sequence renders through ``_WidgetGroup`` while retaining each widget as a
+    state root. Validation failure closes widgets found in the returned graph.
+    """
+
     if isinstance(value, AnyWidget):
         return WidgetOutput(
             render_root=value,
@@ -99,6 +109,8 @@ def _raise_after_output_cleanup(
 
 
 def _returned_widgets(values: Sequence[object]) -> tuple[AnyWidget, ...]:
+    """Collect widgets from cyclic or partially malformed containers for cleanup."""
+
     widgets: list[AnyWidget] = []
     pending = list(reversed(values))
     seen_containers: set[int] = set()
@@ -133,6 +145,12 @@ def _returned_widgets(values: Sequence[object]) -> tuple[AnyWidget, ...]:
 
 
 class FactoryOwner:
+    """Own one factory acquisition until its widget session closes.
+
+    Synchronous and asynchronous context managers remain entered for the
+    session lifetime. Cleanup is shielded from request cancellation.
+    """
+
     def __init__(self) -> None:
         self.ready = anyio.Event()
         self.close_requested = anyio.Event()
@@ -150,6 +168,8 @@ class FactoryOwner:
         candidate: Any,
         arguments: dict[str, Any],
     ) -> None:
+        """Acquire factory output, publish it when ready, and hold its resources."""
+
         try:
             with anyio.CancelScope(shield=True):
                 # Manager exits stay outside the cancellable acquisition scope so

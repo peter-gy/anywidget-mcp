@@ -181,6 +181,8 @@ export class WidgetRuntime {
 		if (!this.models.has(this.rootModelId)) {
 			throw new Error(`Root model ${this.rootModelId} is missing from the widget payload`);
 		}
+		// Apply launch messages before binding initialization so lifecycle hooks see
+		// authoritative state and receive queued custom messages.
 		this.applyLaunchMessages(payload.messages);
 		this.contextSync = new ModelContextSync(app, connected, (error) =>
 			console.warn("Failed to update model context", error),
@@ -189,6 +191,8 @@ export class WidgetRuntime {
 	}
 
 	async mount(element: HTMLElement, signal = this.controller.signal): Promise<void> {
+		// Start polling before binding initialization so a slow initializer cannot let
+		// the server session expire.
 		this.pollTask ??= this.poll();
 		const initialized = await abortable(
 			Promise.allSettled(Array.from(this.bindings.values(), (binding) => binding.initialize())),
@@ -350,6 +354,8 @@ export class WidgetRuntime {
 					};
 					const abort = () => {
 						const error = abortReason(signal);
+						// Remove commands that have not reached the server. Once dispatched, keep the
+						// transaction alive to apply authoritative state, then fail if it stalls.
 						if (operation) {
 							const index = this.protocolOperations.indexOf(operation);
 							if (index >= 0) {
@@ -622,6 +628,8 @@ export class WidgetRuntime {
 		operation: CustomProtocolOperation,
 		signal: AbortSignal,
 	): Promise<void> {
+		// Drain initializer commands through the tool call whose result created the
+		// model. Waiting for another global queue slot would deadlock result application.
 		const task = scope.tail.then(async () => {
 			try {
 				signal.throwIfAborted();
@@ -734,6 +742,8 @@ export class WidgetRuntime {
 		signal = this.controller.signal,
 		beforeDispatch?: () => void,
 	): Promise<CallToolResult> {
+		// Keep the same arguments and operation ID across transport attempts so the
+		// server replays one logical operation.
 		return retryTransport(() => {
 			signal.throwIfAborted();
 			beforeDispatch?.();
@@ -775,6 +785,8 @@ export class WidgetRuntime {
 			rawModels = hydrateRawModels(rawModels, assets);
 			rawMessages = hydrateRawMessages(rawMessages, assets);
 		}
+		// Apply graph changes as one browser transaction: register additions, deliver
+		// references, initialize additions, dispose removals, then queue acknowledgments.
 		const added = normalizeModelChanges(rawModels);
 		const registered: string[] = [];
 		try {

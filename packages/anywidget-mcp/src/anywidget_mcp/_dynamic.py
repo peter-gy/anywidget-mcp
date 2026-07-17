@@ -1,3 +1,5 @@
+"""Create AnyWidgets from Python source and manage generated module lifetimes."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -12,6 +14,8 @@ from anywidget import AnyWidget
 
 
 class _GeneratedModuleLease:
+    """Keep a generated module registered while returned widgets remain reachable."""
+
     def __init__(self, name: str, module: ModuleType) -> None:
         self._name = name
         self._module = module
@@ -67,6 +71,9 @@ def create_anywidget(
 
     The code runs with the MCP server process permissions. Run this factory in
     a sandbox with scoped filesystem, network, credential, and process access.
+
+    The generated module remains in ``sys.modules`` until every returned widget
+    is garbage-collected, preserving the globals used by its live classes.
 
     Args:
         code: Complete Python source defining the widget classes.
@@ -133,6 +140,8 @@ def _resolve_widget_classes(
     module: ModuleType,
     classnames: Sequence[str],
 ) -> tuple[type[AnyWidget], ...]:
+    """Resolve explicit bindings or the last source-defined top-level widget."""
+
     if not classnames:
         candidates = tuple(
             value

@@ -1,3 +1,5 @@
+"""Keep widget notification chains atomic with snapshots and teardown."""
+
 from __future__ import annotations
 
 import threading
@@ -11,7 +13,11 @@ NOTIFICATION_WAIT_SECONDS = 3.0
 
 
 class NotificationGate:
-    """Keep trait notification chains atomic across widget snapshots."""
+    """Coordinate session operations with complete trait notification chains.
+
+    The gate wraps assignable ``notify_change`` methods and tracks nested
+    callbacks by thread and source until the outermost callback finishes.
+    """
 
     def __init__(
         self,
@@ -47,6 +53,8 @@ class NotificationGate:
         self.condition.notify_all()
 
     def wait(self, action: str) -> None:
+        """Wait for active callbacks or reject a reentrant session operation."""
+
         thread_id = threading.get_ident()
         if self._depths.get(thread_id, 0):
             raise RuntimeError(
@@ -66,6 +74,8 @@ class NotificationGate:
             self.condition.wait(remaining)
 
     def install(self, widgets: Iterable[object]) -> None:
+        """Wrap assignable notification callbacks and retain them for teardown."""
+
         for widget in widgets:
             identity = id(widget)
             if identity in self._originals:

@@ -187,6 +187,8 @@ export class BridgeModel implements AnyModel {
 	receive(data: CommData, buffers: DataView[]): void {
 		if (this.disposed) return;
 		if (data.method === "custom") {
+			// Command responses belong to experimental.invoke and must not enter the
+			// widget-visible msg:custom queue.
 			if (isRecord(data.content) && data.content.kind === "anywidget-command-response") {
 				const id = data.content.id;
 				if (typeof id === "string") {

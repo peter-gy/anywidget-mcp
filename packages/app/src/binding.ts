@@ -86,6 +86,8 @@ interface BindingGeneration {
 
 const INITIAL_SOURCE_REVISION_MILLISECONDS = 100;
 const MAX_INITIAL_SOURCE_REVISIONS = 16;
+// The latest binding to render an element owns its contents. Older cleanup
+// must not clear output installed by a replacement binding.
 const viewOwners = new WeakMap<HTMLElement, object>();
 
 function ownsView(view: ActiveView): boolean {
@@ -389,6 +391,8 @@ export class WidgetBinding implements RuntimeBinding {
 			this.trackTeardown(this.destroyGeneration(next));
 			return;
 		}
+		// A replacement may initialize during teardown, but it cannot render until
+		// prior generation cleanup settles.
 		await this.joinTeardownTasks();
 		if (this.disposed || controller.signal.aborted || version !== this.esmVersion) {
 			this.trackTeardown(this.destroyGeneration(next));
@@ -419,6 +423,8 @@ export class WidgetBinding implements RuntimeBinding {
 				"anywidget ESM load",
 			);
 			signal.throwIfAborted();
+			// Initializer commands reuse the active tool call. Waiting for the global
+			// scheduler would block the transaction that is creating this model.
 			const protocolScope: InitializeProtocolScope | undefined = call
 				? { call, active: true, tail: Promise.resolve() }
 				: undefined;
@@ -604,6 +610,8 @@ export class WidgetBinding implements RuntimeBinding {
 		}
 	}
 
+	// Keep teardown promises reachable because cancelled initialize and render
+	// calls can still settle with cleanup functions.
 	private trackTeardown(task: Promise<void>): void {
 		const tracked = task.catch((error) => {
 			console.error("Failed to destroy anywidget generation", error);

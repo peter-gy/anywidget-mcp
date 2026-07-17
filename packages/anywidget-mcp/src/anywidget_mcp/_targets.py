@@ -1,3 +1,5 @@
+"""Compile widget classes and factories into model-facing MCP tool contracts."""
+
 from __future__ import annotations
 
 import functools
@@ -49,6 +51,8 @@ MAX_LOADING_MESSAGE_LENGTH = 120
 
 @dataclass(frozen=True)
 class WidgetTargetDescription:
+    """Inspectable target metadata and its derived MCP input schema."""
+
     target_name: str
     tool_name: str
     title: str
@@ -60,6 +64,8 @@ class WidgetTargetDescription:
 
 @dataclass(frozen=True)
 class CompiledWidgetTarget:
+    """Validated tool metadata plus an adapter awaiting runtime binding."""
+
     description: WidgetTargetDescription
     tool: Tool
     invocation_adapter: Callable[..., Awaitable[CallToolResult]] = field(
@@ -106,6 +112,12 @@ def compile_widget_target(
     icons: list[Icon] | None = None,
     meta: dict[str, Any] | None = None,
 ) -> CompiledWidgetTarget:
+    """Compile a widget class or factory into its MCP tool contract.
+
+    The adapter preserves the target's keyword parameters and adds a
+    ``loading_message`` input when the target has no parameter by that name.
+    """
+
     if isinstance(candidate, AnyWidget):
         raise TypeError(
             f"widgets.widget() received a {type(candidate).__name__} instance. "
@@ -197,6 +209,8 @@ def _invocation_adapter(
     Callable[..., Awaitable[CallToolResult]],
     Callable[[Callable[[dict[str, Any], str], Awaitable[CallToolResult]]], None],
 ]:
+    """Create a signature-preserving adapter and one-shot runtime binder."""
+
     bound: list[Callable[[dict[str, Any], str], Awaitable[CallToolResult]] | None] = [
         None
     ]
@@ -248,6 +262,12 @@ def _tool_signature(
     is_widget_class: bool,
     loading_message: str,
 ) -> tuple[inspect.Signature, bool]:
+    """Resolve annotations and derive the keyword-callable MCP signature.
+
+    Widget-class variadics are omitted. Factory variadics and positional-only
+    parameters are rejected because their schema cannot express invocation.
+    """
+
     signature = inspect.signature(candidate)
     globalns, localns = _annotation_namespace(candidate)
     raw_annotations = {
@@ -351,6 +371,8 @@ def _default_loading_message(title: str) -> str:
 
 
 def _normalize_loading_message(value: Any, *, fallback: str) -> str:
+    """Return safe one-line status text or the registered fallback."""
+
     if not isinstance(value, str):
         return fallback
     normalized = re.sub(r"\s+", " ", value).strip()

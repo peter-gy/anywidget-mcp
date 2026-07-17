@@ -1,3 +1,5 @@
+"""Import, inspect, and serve AnyWidget targets from the command line."""
+
 from __future__ import annotations
 
 import argparse
@@ -110,6 +112,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _resolve_target(target: str) -> Any:
+    """Import a ``MODULE:OBJECT`` target and resolve its dotted attribute path."""
+
     _prioritize_working_directory()
     module_name, separator, attribute_path = target.partition(":")
     if not separator or not module_name or not attribute_path:
@@ -133,6 +137,8 @@ def _resolve_target(target: str) -> Any:
 
 
 def _prepare_targets(targets: Sequence[str]) -> list[Any]:
+    """Resolve targets and reject model-facing tool name collisions."""
+
     prepared: list[Any] = []
     tool_sources: dict[str, str] = {}
 
@@ -156,6 +162,8 @@ def _prepare_targets(targets: Sequence[str]) -> list[Any]:
 
 
 def _prioritize_working_directory() -> None:
+    """Place the working directory first on ``sys.path`` for local imports."""
+
     working_directory = str(Path.cwd())
     if sys.path and sys.path[0] == working_directory:
         return

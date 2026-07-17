@@ -1,3 +1,5 @@
+"""Retain removed widget models until browser removal is acknowledged."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
@@ -12,6 +14,8 @@ from ._widget_protocol import close_widget, finalize_claim
 
 @dataclass
 class DetachedModel:
+    """Record cleanup progress for one model removed from the live graph."""
+
     widget: object
     comm: BridgeComm | None
     comm_closed: bool = False
@@ -20,7 +24,11 @@ class DetachedModel:
 
 
 class DetachedModels:
-    """Track removed models until the browser acknowledges their disposal."""
+    """Manage models between graph removal and browser acknowledgment.
+
+    Announced models remain callable until acknowledgment completes their comm,
+    notification gate, widget, and ownership cleanup.
+    """
 
     def __init__(self) -> None:
         self._pending: dict[str, DetachedModel] = {}
@@ -50,6 +58,12 @@ class DetachedModels:
         controllers: dict[int, ReprMimeBundle],
         restore_gate: Callable[[object], None],
     ) -> list[Any]:
+        """Finalize acknowledged models and retain messages for failed cleanup.
+
+        Successful IDs remain recognized until the full acknowledgment set
+        completes, which lets callers retry a partially failed set.
+        """
+
         acknowledged = tuple(dict.fromkeys(model_ids))
         unknown = next(
             (
@@ -98,6 +112,8 @@ class DetachedModels:
         controllers: dict[int, ReprMimeBundle],
         restore_gate: Callable[[object], None],
     ) -> None:
+        """Finalize models removed before their removal reached the browser."""
+
         failed, errors = _finalize(
             dict(self._pending),
             comms=comms,
@@ -122,6 +138,8 @@ def _finalize(
     controllers: dict[int, ReprMimeBundle],
     restore_gate: Callable[[object], None],
 ) -> tuple[dict[str, DetachedModel], list[Exception]]:
+    """Advance each model through retryable comm, gate, widget, and claim cleanup."""
+
     failed: dict[str, DetachedModel] = {}
     errors: list[Exception] = []
     for model_id, detached_model in detached.items():

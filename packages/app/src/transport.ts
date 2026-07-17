@@ -1,6 +1,8 @@
 const TRANSPORT_RETRY_DELAYS_MS = [100, 200] as const;
 
 export function retryTransport<T>(request: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+	// Each attempt invokes the same closure. Callers must keep request arguments
+	// and replay identity stable across retries.
 	return retryTransportAttempt(request, signal, 0);
 }
 

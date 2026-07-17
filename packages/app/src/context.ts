@@ -18,6 +18,8 @@ interface ContextCoordinator {
 	owner?: ModelContextSync;
 }
 
+// updateModelContext requests can settle after their runtime is disposed. Epochs
+// let those completions ask the current runtime to republish its latest snapshot.
 const contextCoordinators = new WeakMap<object, ContextCoordinator>();
 
 export class ModelContextSync {
@@ -68,6 +70,8 @@ export class ModelContextSync {
 		this.pending = undefined;
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = undefined;
+		// Some hosts ignore abort signals. Bound teardown while keeping request
+		// callbacks live so a late settlement can trigger the republish path.
 		const tasks = [this.inFlight, ...this.requestTasks].filter(
 			(task): task is Promise<unknown> => task !== undefined,
 		);
@@ -166,6 +170,7 @@ export class ModelContextSync {
 		try {
 			await waitForUpdate(task, signal, request, this.updateTimeoutMilliseconds);
 		} catch (error) {
+			// The host may continue processing after the local wait is aborted.
 			if (
 				!this.controller.signal.aborted &&
 				request.signal.aborted &&

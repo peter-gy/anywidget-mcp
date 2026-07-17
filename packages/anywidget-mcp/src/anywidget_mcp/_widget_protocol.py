@@ -1,3 +1,5 @@
+"""Unify graph identity and lifecycle for native and descriptor-backed widgets."""
+
 from __future__ import annotations
 
 import threading
@@ -18,6 +20,8 @@ class WidgetInUseError(RuntimeError):
 
 
 class WidgetClaimCleanupError(ExceptionGroup):
+    """Report claim rejection with models whose cleanup can be retried."""
+
     widgets: tuple[object, ...]
 
 
@@ -25,6 +29,12 @@ def claim_widgets(
     widgets: list[object],
     controllers: dict[int, ReprMimeBundle] | None = None,
 ) -> None:
+    """Claim a fresh model graph for one session.
+
+    If any model is already claimed, fresh models in the rejected graph are
+    closed before the ownership error is raised.
+    """
+
     with _claimed_widgets_lock:
         reused = next(
             (widget for widget in widgets if claim_for(widget, controllers)),
@@ -127,6 +137,8 @@ def collect_widgets(
     controllers: dict[int, ReprMimeBundle] | None = None,
     collected: list[object] | None = None,
 ) -> list[object]:
+    """Return the distinct model graph reachable through synchronized state."""
+
     widgets = collected if collected is not None else []
     pending: list[object] = [root]
     seen: set[int] = set()
@@ -181,6 +193,8 @@ def protocol_controller(
     widget: object,
     controllers: dict[int, ReprMimeBundle] | None = None,
 ) -> ReprMimeBundle | None:
+    """Resolve and optionally cache a descriptor-backed model controller."""
+
     if isinstance(widget, AnyWidget):
         return None
     identity = id(widget)
@@ -253,6 +267,12 @@ def replace_widget_refs(
     controllers: dict[int, ReprMimeBundle] | None = None,
     seen: set[int] | None = None,
 ) -> object:
+    """Replace nested models with browser references while preserving containers.
+
+    Recursive containers raise ``ValueError`` because synchronized browser state
+    cannot represent their cycles.
+    """
+
     if isinstance(value, AnyWidget) or protocol_controller(value, controllers):
         return f"anywidget:{model_id(value, controllers)}"
     if isinstance(value, Mapping):

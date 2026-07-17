@@ -1,3 +1,5 @@
+"""Define the snapshot record transferred from widget sessions to MCP tools."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,6 +10,8 @@ from ._state import ProjectionUpdate
 
 @dataclass(frozen=True)
 class SessionSnapshot:
+    """One atomic batch of browser effects and model-visible state."""
+
     messages: list[dict[str, Any]]
     models: dict[str, dict[str, Any]]
     asset_manifest: dict[str, dict[str, Any]]

@@ -1,3 +1,5 @@
+"""Compose multiple AnyWidgets into one render root and ordered state projection."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

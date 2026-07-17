@@ -1,3 +1,5 @@
+"""Connect widget models to bridge comms and capture their initial browser state."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -18,6 +20,12 @@ def connect_models(
     messages: list[WidgetMessage],
     capture: Callable[[object, WidgetMessage], None],
 ) -> dict[str, dict[str, Any]]:
+    """Replace model comms and return their initial browser records.
+
+    Initialization emissions become model state instead of entering the
+    incremental outbound message queue.
+    """
+
     protocol_sync: dict[int, bool] = {}
     for widget in widgets:
         current_model_id = model_id(widget, controllers)

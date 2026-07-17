@@ -86,6 +86,8 @@ export function pollDelayLimit(value: unknown, fallback: number): number {
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
 		throw new Error("Widget session idle timeout must be a positive number");
 	}
+	// Cap the client wait at half the server idle timeout so the next poll is
+	// scheduled before lease expiry.
 	return Math.max(1, Math.floor(value / 2));
 }
 
