@@ -3,17 +3,20 @@
 [![PyPI](https://img.shields.io/pypi/v/anywidget-mcp.svg)](https://pypi.org/project/anywidget-mcp/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://spdx.org/licenses/MIT.html)
 
-`anywidget-mcp` turns an [AnyWidget](https://anywidget.dev/) class or factory
-into an interactive
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview). The widget
-renders inside the conversation. User interactions update its Python traits,
-and the model can use the current widget state in later turns.
+Some answers work better as interfaces.
 
-Develop the widget once and use the same class in Jupyter, marimo, or an MCP
-host. Serve an existing class, construct one from runtime inputs in a factory,
-or register several widgets alongside other FastMCP tools.
+`anywidget-mcp` brings [AnyWidget](https://anywidget.dev/) to
+[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview). Build a
+widget once, use it in Jupyter or marimo, then let people open the same
+interface right inside the conversation.
 
-[Read the documentation](https://peter-gy.github.io/anywidget-mcp/).
+Color pickers, data explorers, diagrams, and interactive explanations stay
+connected to Python, so the model can respond to what the user does next.
+
+Start with a widget library or bring your own.
+
+**Documentation:**
+[peter-gy.github.io/anywidget-mcp](https://peter-gy.github.io/anywidget-mcp/)
 
 ## Install
 
@@ -55,7 +58,7 @@ Browse the [AnyWidget gallery](https://try.anywidget.dev/) for other widgets.
 
 ## Serve your AnyWidget
 
-Point the CLI at any importable AnyWidget class or factory:
+Point the CLI at any importable AnyWidget class:
 
 ```sh
 anywidget-mcp serve my_widgets:MyWidget
@@ -70,16 +73,18 @@ from my_widgets import MyWidget
 serve(MyWidget)
 ```
 
-`MyWidget` stays an ordinary `anywidget.AnyWidget` subclass and keeps the same
-Python traits and frontend module used in notebook environments.
+`anywidget-mcp` supplies the MCP tool, app resource, session lifecycle, and
+state synchronization. `MyWidget` stays an ordinary `anywidget.AnyWidget`
+subclass with the same Python traits and frontend module used in notebooks.
 
-Factories can accept model-supplied inputs and construct a widget for each tool
-call. `AnyWidgetMCP` can register several classes and factories on one server.
+When the widget needs data from the conversation, use a Python function that
+accepts the input and returns the widget. [Runtime inputs and
+composition](https://peter-gy.github.io/anywidget-mcp/factories) covers that
+workflow, multiple widgets, and existing FastMCP servers.
 
 ## Documentation
 
 - [Getting started](https://peter-gy.github.io/anywidget-mcp/getting-started)
-- [Factories and composition](https://peter-gy.github.io/anywidget-mcp/factories)
 - [Model-visible state](https://peter-gy.github.io/anywidget-mcp/state)
 - [How it works](https://peter-gy.github.io/anywidget-mcp/how-it-works)
 - [API reference](https://peter-gy.github.io/anywidget-mcp/api)
