@@ -77,7 +77,7 @@ wheels = [
 
 [[package]]
 name = "anywidget-mcp"
-version = "0.0.1rc3"
+version = "0.0.1"
 source = { editable = "packages/anywidget-mcp" }
 dependencies = [
     { name = "anyio" },
