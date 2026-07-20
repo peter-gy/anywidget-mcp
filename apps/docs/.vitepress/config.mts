@@ -7,6 +7,16 @@ export default defineConfig({
 	base: basePath ? `${basePath}/` : "/",
 	cleanUrls: true,
 	description: "Expose AnyWidget classes and factories as interactive MCP Apps.",
+	head: [
+		[
+			"script",
+			{
+				defer: "",
+				"data-website-id": "186c2175-f7d1-42f4-9896-18cd7107c0e5",
+				src: "https://umami.peter.gy/script.js",
+			},
+		],
+	],
 	lastUpdated: true,
 	srcDir: "../../docs",
 	themeConfig: {
