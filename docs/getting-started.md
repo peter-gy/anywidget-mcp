@@ -5,7 +5,7 @@ as an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) tool.
 A tool invocation creates a fresh widget, renders it in the host, and keeps its
 synchronized traits connected to Python.
 
-Install Python 3.12 or newer and the adapter:
+Install Python 3.11 or newer and the adapter:
 
 ```sh
 pip install anywidget-mcp

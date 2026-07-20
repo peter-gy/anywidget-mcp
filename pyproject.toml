@@ -19,4 +19,4 @@ search-path = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
 testpaths = ["packages/anywidget-mcp/tests"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"

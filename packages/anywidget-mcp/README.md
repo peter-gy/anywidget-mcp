@@ -17,7 +17,7 @@ or register several widgets alongside other FastMCP tools.
 
 ## Install
 
-Requires Python 3.12 or newer.
+Requires Python 3.11 or newer.
 
 ```sh
 pip install anywidget-mcp
