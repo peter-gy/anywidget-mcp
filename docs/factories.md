@@ -1,18 +1,17 @@
-# Factories and composition
+# Pass input to widgets
 
-A widget factory turns typed MCP tool input into a fresh
-[AnyWidget](https://anywidget.dev/). Use one when a tool call needs to validate
-arguments, load data, configure a widget, or hold a resource for the widget
-session.
+Use a typed Python function when the model should provide values before an
+[AnyWidget](https://anywidget.dev/) opens. Its parameters define the tool input.
+The server validates that input before it calls the function to create the
+widget. This function is a widget factory.
 
 The examples use widgets from
-[Wigglystuff](https://koaning.github.io/wigglystuff/). The factory and
-composition APIs accept AnyWidget classes from other packages and widgets you
-author.
+[Wigglystuff](https://koaning.github.io/wigglystuff/). You can use AnyWidgets
+from any package, including widgets you author.
 
-## Accept runtime input
+## Let the model choose the starting value
 
-Register a factory with `@mcp.widget`:
+Register the function with `@mcp.widget`:
 
 ```python
 from anywidget_mcp import AnyWidgetMCP
@@ -30,16 +29,26 @@ def pick_color(color: str = "#315efb") -> ColorPicker:
 mcp.run(transport="streamable-http")
 ```
 
-The explicit `color` parameter defines the widget argument in the JSON input
-schema for `pick_color`. `anywidget-mcp` also adds the optional
+When the model calls `pick_color`, the requested color becomes the picker's
+starting value. You can change it in the conversation, then ask the model which
+color you chose. `state="color"` exposes the picker's current color.
+
+The explicit `color` parameter also defines the widget argument in the JSON
+input schema. `anywidget-mcp` adds the optional
 `loading_message` field, which a model can set to progress text shown in the
-host while the widget initializes. The docstring becomes the tool description,
-and `state="color"` exposes the current selection to the model.
+host while the widget initializes. The docstring becomes the tool description.
 
 Use explicit named parameters for factory input. Positional parameters that
 accept keyword arguments are supported. Positional-only, `*args`, and
 `**kwargs` factory parameters raise `TypeError` during registration because
 they cannot define object properties in the tool schema.
+
+## Choose between a widget and a factory
+
+Register an AnyWidget class directly when its constructor already matches the
+input the model should provide. Use a widget factory to rename or validate
+inputs, load data, configure the widget, or hold a resource while the widget is
+active.
 
 ## Return several widgets from one call
 
@@ -111,7 +120,7 @@ Open [Inspector Chat](./getting-started#see-it-in-inspector-chat) and ask:
 > self-contained, zero-argument Python function so I can step through it.
 
 The model supplies Python source as tool input. Each call constructs a fresh
-`LiveEdit` instance, and the user steps through the rendered trace in the
+`LiveEdit` instance, and you can step through the rendered trace in the
 conversation. `LiveEdit` owns the tracing interface and can render through
 AnyWidget support in Jupyter and marimo. `anywidget-mcp` supplies the MCP tool,
 widget session, and host bridge.
@@ -254,9 +263,9 @@ class RetryBudget(anywidget.AnyWidget):
 
 :::
 
-Moving either slider sends `attempts`, `base_delay`, and `total_wait` through
-the AnyWidget comm path. The latest values become model-visible state for the
-next chat turn. The `RetryBudget` class also runs in Jupyter or marimo.
+Move either slider, then ask the model about the retry schedule. Model-visible
+state includes `attempts`, `base_delay`, and `total_wait`. The `RetryBudget`
+class also runs in Jupyter or marimo.
 `anywidget-mcp` renders each generated instance in MCP App hosts.
 
 ## Register several widget tools

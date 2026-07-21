@@ -1,39 +1,23 @@
 # Getting started
 
-`anywidget-mcp` registers an [AnyWidget](https://anywidget.dev/) class or factory
-as an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) tool.
-A tool invocation creates a fresh widget, renders it in the host, and keeps its
-synchronized traits connected to Python.
+Run a `ColorPicker` in Inspector Chat, choose a color, and ask the model which
+color you chose.
 
-Install Python 3.11 or newer and the adapter:
+Requires Python 3.11 or newer.
 
-```sh
-pip install anywidget-mcp
-```
+## Run the ColorPicker
 
-## Try an existing widget library
-
-The `ColorPicker` examples use
-[Wigglystuff](https://koaning.github.io/wigglystuff/), an AnyWidget library.
-Install it with:
+Start [Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` in
+one command:
 
 ```sh
-pip install wigglystuff
+uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
-The [AnyWidget gallery](https://try.anywidget.dev/) lists other widget packages
-that can be registered through the same class or factory API.
+The MCP endpoint is `http://127.0.0.1:8010/mcp`.
 
-## Serve a Wigglystuff widget
-
-Start a streamable HTTP server for `ColorPicker`:
-
-```sh
-anywidget-mcp serve wigglystuff:ColorPicker --port 8010
-```
-
-The MCP endpoint is `http://127.0.0.1:8010/mcp`. Each tool invocation owns a
-new `ColorPicker` instance.
+Browse the [AnyWidget gallery](https://try.anywidget.dev/) for more widgets and
+links to their packages.
 
 ## See it in Inspector Chat
 
@@ -48,59 +32,25 @@ npx --yes @mcp-use/inspector@12.0.3 \
 ```
 
 Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
-model provider, and ask: `Use color_picker so I can choose a color.` The model
-invokes the tool and the widget renders in Chat. Changing the color updates
-Python traitlets and the model context used by later turns.
+model provider, and ask: `Use color_picker so I can choose a color.` The picker
+opens in the conversation. Choose a color, then ask: `Which color did I choose?`
+The model reads the picker's current color when it answers. This value is the
+widget's model-visible state.
 
-For an end-to-end browser check, keep `--no-open`, drive the same Chat prompt,
-interact with the widget, and ask the model to report the selected color. If
-port 7878 is busy, use the Inspector URL printed in the terminal.
+If port 7878 is busy, use the Inspector URL printed in the terminal.
 
-## Serve several widget tools
+## Install in a project
 
-Stop the `ColorPicker` server, then pass several targets to expose several tools
-through the same endpoint:
+Install `anywidget-mcp` in the Python environment that owns your widget code:
 
 ```sh
-anywidget-mcp serve \
-  wigglystuff:ManimWeb \
-  wigglystuff:ColorPicker \
-  --port 8010
+uv pip install anywidget-mcp
 ```
 
-The command registers `manim_web` and `color_picker` in argument order. Calls to
-each tool create their own widget sessions on the shared server.
+## Bring your own AnyWidget
 
-Inspect a target's tool contract from another terminal:
-
-```sh
-anywidget-mcp inspect wigglystuff:ColorPicker
-anywidget-mcp inspect wigglystuff:ColorPicker --json
-```
-
-Inspection reports the target kind, tool name, title, description, and JSON
-input schema. Explicit target parameters define widget arguments in that
-schema. `anywidget-mcp` also adds the optional `loading_message` field. A model
-can set it to progress text shown in the host while the widget initializes.
-
-## Serve from Python
-
-Use `serve()` when one class or factory defines the server:
-
-```python
-from anywidget_mcp import serve
-from wigglystuff import ColorPicker
-
-serve(ColorPicker, state="color")
-```
-
-`serve()` listens on streamable HTTP by default and blocks until the transport
-exits. Set `transport="stdio"` when the MCP host launches the process.
-
-## Serve your own AnyWidget
-
-Define the widget with the same traitlets and frontend module used in a
-notebook:
+Define a counter with the same Python state and frontend module you would use in
+a notebook:
 
 ```python
 # counter.py
@@ -109,7 +59,7 @@ import traitlets
 
 
 class Counter(anywidget.AnyWidget):
-    """Let the user adjust a counter and inspect its current value."""
+    """Adjust a counter and inspect its current value."""
 
     _esm = """
     function render({ model, el, signal }) {
@@ -134,47 +84,18 @@ class Counter(anywidget.AnyWidget):
     value = traitlets.Int(0, help="Current counter value.").tag(sync=True)
 ```
 
-Serve the class from the module:
+Point the CLI at the widget's import path:
 
 ```sh
 anywidget-mcp serve counter:Counter
 ```
 
-A button click updates `Counter.value` through the AnyWidget comm path.
-The default model-visible state includes `value`.
+A button click updates `Counter.value` in Python. The default model-visible
+state includes `value`.
 
-[How it works](./how-it-works) explains how the class name, docstring,
-constructor, synchronized traits, and frontend sources map to the MCP tool,
-shared app resource, browser model, and model context.
+## Use the same widget in marimo
 
-## Serve model-generated AnyWidgets
-
-`create_anywidget(code, classnames=...)` constructs AnyWidget classes supplied
-as tool input. The `code` argument executes with the server process permissions,
-and each widget's JavaScript loads in the app iframe. Run this factory in a
-sandbox with scoped filesystem, network, credential, and process access.
-
-Serve the factory:
-
-```sh
-anywidget-mcp serve anywidget_mcp:create_anywidget --port 8010
-```
-
-Pass an ordered `classnames` list with the code. Each name must resolve to a
-zero-argument AnyWidget class after execution. One selected class renders as
-the root widget. Several selected classes render in the requested order through
-the same MCP App result. If `classnames` is omitted, the last source-defined
-top-level AnyWidget class binding in the final namespace is selected. Within
-projection limits, the default model-visible state for several widgets is
-`{"widgets": [state, ...]}`. Larger lists use a bounded sequence summary under
-`widgets`.
-
-See [Factories](./factories#create-anywidgets-from-source-at-runtime) for a
-retry-budget explorer generated from a chat request.
-
-## Develop in marimo
-
-Render the same class while developing it in a marimo notebook:
+Render `Counter` while developing it in a marimo notebook:
 
 ```python
 import marimo as mo
@@ -185,6 +106,31 @@ counter = mo.ui.anywidget(Counter())
 counter
 ```
 
-The notebook and MCP App use the same AnyWidget class and synchronized trait
-contract. Use the [`state` option](./state) to control which values the MCP
-host receives as model context.
+The notebook and MCP App use the same widget code and synchronized `value`.
+
+## Start the server from Python
+
+Call `serve()` when the widget module should start the MCP server:
+
+```python
+from anywidget_mcp import serve
+from counter import Counter
+
+serve(Counter, state="value")
+```
+
+`serve()` listens on streamable HTTP by default and blocks until the transport
+exits. Set `transport="stdio"` when the MCP host launches the process.
+
+[How it works](./how-it-works) explains how the widget becomes an MCP tool, how
+browser changes reach Python, and how the model reads the current value.
+
+## Next steps
+
+- [Model-visible state](./state) chooses which widget values the model can use.
+- [Pass input to widgets](./factories) accepts values from the model, loads
+  data, returns several widgets, and adds widgets to an existing MCP server.
+- [Create AnyWidgets from source at runtime](./factories#create-anywidgets-from-source-at-runtime)
+  covers generated widget code and its sandbox requirements.
+- [Deployment](./deployment) covers tool inspection, HTTP and standard-input
+  transports, browser policy, and session lifetime.

@@ -1,10 +1,12 @@
 # How it works
 
-`anywidget-mcp` registers an AnyWidget class or factory as an MCP tool and serves
-the shared [MCP App](https://modelcontextprotocol.io/extensions/apps/overview)
-that renders its result. The widget keeps the same
-[AnyWidget](https://anywidget.dev/) frontend module, synchronized traitlets,
-validation, and observers it uses in Jupyter or marimo.
+Each widget tool call opens a fresh session in an MCP Apps host. The browser
+renders the returned [AnyWidget](https://anywidget.dev/) or widget group and
+sends your changes to Python. The model can read the current widget state.
+
+The widget keeps the same frontend module, Python traits, validation, and
+observers it uses in Jupyter or marimo. `anywidget-mcp` connects those pieces to
+an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview).
 
 ## One widget, four contracts
 
@@ -19,7 +21,7 @@ from anywidget_mcp import serve
 
 
 class Counter(anywidget.AnyWidget):
-    """Let the user adjust a counter and inspect its current value."""
+    """Adjust a counter and inspect its current value."""
 
     _esm = """
     function render({ model, el, signal }) {
@@ -179,8 +181,8 @@ for the policy options.
 7. The app verifies the widget sources, creates the frontend model graph,
    applies launch messages, initializes each module, and renders the root
    widget.
-8. User interaction changes browser state. `model.save_changes()` sends the
-   pending values through the AnyWidget comm path to Python.
+8. When you interact with the widget, `model.save_changes()` sends pending
+   browser values through the AnyWidget comm path to Python.
 9. Python applies Traitlets deserialization, validation, and observers. The
    resulting updates return to the browser before the latest state projection
    is published to the host.
@@ -271,7 +273,7 @@ projection limits.
 
 The same launch result provides a `state_id` for the model-visible
 `anywidget_state` tool. Hosts that omit `updateModelContext` can call this tool
-before answering a later question about the widget. The tool reads the current
+when the model needs the widget's current state. The tool reads the current
 Python-authoritative projection without draining comm messages, model changes,
 or the projection queued for the app. Each live widget call has a distinct
 state handle. Disposal and idle expiry revoke it.
@@ -292,6 +294,6 @@ nested widget references keep their AnyWidget behavior. The same class can run
 in a notebook and through an MCP host. A factory adds inference-time arguments
 or session resources around that class.
 
-Continue with [Factories and composition](./factories) for runtime inputs and
+Continue with [Pass input to widgets](./factories) for runtime inputs and
 managed resources, or use the [API reference](./api) for registration defaults
 and errors.

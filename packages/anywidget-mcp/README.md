@@ -3,62 +3,77 @@
 [![PyPI](https://img.shields.io/pypi/v/anywidget-mcp.svg)](https://pypi.org/project/anywidget-mcp/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://spdx.org/licenses/MIT.html)
 
-Some answers work better as interfaces.
+`anywidget-mcp` runs [AnyWidgets](https://anywidget.dev/) inside AI
+conversations. You can interact with a widget directly, and the model can
+respond to your input.
 
-`anywidget-mcp` brings [AnyWidget](https://anywidget.dev/) to
-[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview). Build a
-widget once, use it in Jupyter or marimo, then let people open the same
-interface right inside the conversation.
+Start with a widget from an existing package, or bring the same widget you use in
+Jupyter or marimo.
 
-Color pickers, data explorers, diagrams, and interactive explanations stay
-connected to Python, so the model can respond to what the user does next.
+[Read the documentation](https://peter-gy.github.io/anywidget-mcp/).
 
-Start with a widget library or bring your own.
+## Try an AnyWidget
 
-**Documentation:**
-[peter-gy.github.io/anywidget-mcp](https://peter-gy.github.io/anywidget-mcp/)
-
-## Install
-
-Requires Python 3.11 or newer.
+Requires Python 3.11 or newer. Start
+[Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` with one
+command:
 
 ```sh
-pip install anywidget-mcp
+uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
-## See a widget in chat
-
-This example uses
-[Wigglystuff](https://koaning.github.io/wigglystuff/), an AnyWidget library:
-
-```sh
-pip install wigglystuff
-anywidget-mcp serve wigglystuff:ColorPicker --port 8010
-```
-
-Keep the server running. Start
-[mcp-use Inspector](https://mcp-use.com/docs/inspector) in another terminal:
-
-```sh
-npx --yes @mcp-use/inspector@12.0.3 \
-  --url http://127.0.0.1:8010/mcp \
-  --port 7878 \
-  --no-open
-```
-
-Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
-model provider, and ask:
+Connect a host that supports
+[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) to
+`http://127.0.0.1:8010/mcp`, then ask:
 
 > Use `color_picker` so I can choose a color.
 
-The widget renders in the conversation. Change the color, then ask the model
-what color it is. The answer comes from the widget's current Python state.
+The picker opens in the conversation. Choose a color, then ask the model which
+color you chose. The model reads the picker's current color when it answers.
 
-Browse the [AnyWidget gallery](https://try.anywidget.dev/) for other widgets.
+[Getting started](https://peter-gy.github.io/anywidget-mcp/getting-started)
+walks through this flow in Inspector Chat.
 
-## Serve your AnyWidget
+## But why?
 
-Point the CLI at any importable AnyWidget class:
+A standalone web app sends you to a separate page. An
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview) stays in the
+conversation, exchanges data through MCP, and runs in a host-controlled
+sandbox. With your consent, it can ask the host to use tools you already
+connected.
+
+Building an MCP App directly means wiring together tools, UI resources, browser
+code, the host connection, and shared state. `anywidget-mcp` handles that
+integration. You define an [AnyWidget](https://anywidget.dev/) that keeps
+browser behavior and Python state in one component.
+
+The same widget runs in Jupyter and marimo. Create it from Python, inspect its
+state, and use marimo's reactive execution to test scenarios before serving it
+through MCP.
+
+One server can expose multiple widgets as separate tools, or one call can open
+several together. Combine widgets from the
+[AnyWidget gallery](https://try.anywidget.dev/) into an interactive environment
+for the task, then add your own.
+
+When you cannot enumerate every useful interface in advance, serve
+[`create_anywidget`](https://peter-gy.github.io/anywidget-mcp/factories#create-anywidgets-from-source-at-runtime).
+Supply Python source directly or ask an agent to invent a fresh AnyWidget during
+the conversation. Use that natural-language loop to develop widgets and test
+concepts. Run the factory in a sandbox because supplied source executes with the
+MCP server's permissions.
+
+## Install in a project
+
+Install `anywidget-mcp` in the Python environment that owns your widget code:
+
+```sh
+uv pip install anywidget-mcp
+```
+
+## Bring your own AnyWidget
+
+Point the CLI at your AnyWidget's import path:
 
 ```sh
 anywidget-mcp serve my_widgets:MyWidget
@@ -73,19 +88,19 @@ from my_widgets import MyWidget
 serve(MyWidget)
 ```
 
-`anywidget-mcp` supplies the MCP tool, app resource, session lifecycle, and
-state synchronization. `MyWidget` stays an ordinary `anywidget.AnyWidget`
-subclass with the same Python traits and frontend module used in notebooks.
+`MyWidget` remains the same `anywidget.AnyWidget` subclass you use in
+notebooks. Browser changes stay synchronized with its Python traits.
 
 When the widget needs data from the conversation, use a Python function that
-accepts the input and returns the widget. [Runtime inputs and
-composition](https://peter-gy.github.io/anywidget-mcp/factories) covers that
-workflow, multiple widgets, and existing FastMCP servers.
+accepts the input and returns an AnyWidget. This function is a widget factory.
+[Pass input to widgets](https://peter-gy.github.io/anywidget-mcp/factories)
+covers that workflow, multiple widgets, and existing MCP servers.
 
 ## Documentation
 
 - [Getting started](https://peter-gy.github.io/anywidget-mcp/getting-started)
 - [Model-visible state](https://peter-gy.github.io/anywidget-mcp/state)
+- [Pass input to widgets](https://peter-gy.github.io/anywidget-mcp/factories)
 - [How it works](https://peter-gy.github.io/anywidget-mcp/how-it-works)
 - [API reference](https://peter-gy.github.io/anywidget-mcp/api)
 - [Deployment](https://peter-gy.github.io/anywidget-mcp/deployment)

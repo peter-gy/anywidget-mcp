@@ -6,7 +6,7 @@ const basePath = process.env.BASE_PATH?.replace(/\/$/, "");
 export default defineConfig({
 	base: basePath ? `${basePath}/` : "/",
 	cleanUrls: true,
-	description: "Expose AnyWidget classes and factories as interactive MCP Apps.",
+	description: "Run AnyWidgets as interactive MCP Apps.",
 	head: [
 		[
 			"script",
@@ -26,15 +26,15 @@ export default defineConfig({
 		},
 		nav: [
 			{ text: "Getting started", link: "/getting-started" },
-			{ text: "How it works", link: "/how-it-works" },
 			{
 				text: "Guides",
 				items: [
-					{ text: "Factories and composition", link: "/factories" },
-					{ text: "Model-visible state", link: "/state" },
+					{ text: "Share state with the model", link: "/state" },
+					{ text: "Pass input to widgets", link: "/factories" },
 					{ text: "Deployment", link: "/deployment" },
 				],
 			},
+			{ text: "How it works", link: "/how-it-works" },
 			{ text: "API reference", link: "/api" },
 		],
 		search: { provider: "local" },
@@ -44,10 +44,10 @@ export default defineConfig({
 				items: [
 					{ text: "Overview", link: "/" },
 					{ text: "Getting started", link: "/getting-started" },
-					{ text: "How it works", link: "/how-it-works" },
-					{ text: "Factories and composition", link: "/factories" },
-					{ text: "Model-visible state", link: "/state" },
+					{ text: "Share state with the model", link: "/state" },
+					{ text: "Pass input to widgets", link: "/factories" },
 					{ text: "Deployment", link: "/deployment" },
+					{ text: "How it works", link: "/how-it-works" },
 					{ text: "API reference", link: "/api" },
 				],
 			},
