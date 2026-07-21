@@ -1,13 +1,15 @@
 .PHONY: check package
 
+VP := node_modules/.bin/vp
+
 check:
-	pnpm check
-	pnpm test
-	pnpm build
+	$(VP) run check
+	$(VP) run -r test
+	$(VP) run -r build
 	uv lock --check
-	uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp
-	uv run --package anywidget-mcp ruff check packages/anywidget-mcp
-	uv run --package anywidget-mcp ty check packages/anywidget-mcp
+	uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp scripts
+	uv run --package anywidget-mcp ruff check packages/anywidget-mcp scripts
+	uv run --package anywidget-mcp ty check packages/anywidget-mcp scripts
 	uv run --package anywidget-mcp pyrefly check --min-severity warn
 	uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
 	$(MAKE) package
@@ -18,7 +20,7 @@ package:
 	cmp -s README.md packages/anywidget-mcp/README.md
 	cmp -s LICENSE packages/anywidget-mcp/LICENSE
 	rm -rf dist
-	pnpm build
+	$(VP) run -r build
 	uv build --package anywidget-mcp --out-dir dist
 	uv run --no-project python scripts/verify_package.py \
 		"$$(find dist -maxdepth 1 -name '*.whl' -print -quit)" \

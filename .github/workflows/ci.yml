@@ -1,17 +1,21 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -20,37 +24,43 @@ jobs:
         id: node-version
         run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install "$(cat .python-version)"
+
       - name: Set up Vite+
         uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
         with:
           version: 0.2.4
           node-version: ${{ steps.node-version.outputs.version }}
-          sfw: true
           cache: true
+          sfw: true
           run-install: |
             - args: ['--frozen-lockfile']
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        with:
-          version: 11.11.0
+      - name: Check JavaScript formatting, linting, and types
+        run: vp run check
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
-        with:
-          enable-cache: true
-          python-version: "3.12"
+      - name: Check Python formatting, linting, and types
+        run: |
+          uv lock --check
+          uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp scripts
+          uv run --package anywidget-mcp ruff check packages/anywidget-mcp scripts
+          uv run --package anywidget-mcp ty check packages/anywidget-mcp scripts
+          uv run --package anywidget-mcp pyrefly check --min-severity warn
 
-      - name: Install Python workspace
-        run: uv sync --frozen --python 3.12
+      - name: Check shell scripts
+        run: shellcheck scripts/*.sh
 
-      - name: Verify workspace
-        run: make check
+      - name: Check whitespace
+        run: git diff --check
 
-      - name: Check generated diff
-        run: git diff --exit-code
-
-  python-compatibility:
+  test-python:
     name: Python ${{ matrix.python-version }} compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -66,32 +76,114 @@ jobs:
         id: node-version
         run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install "${{ matrix.python-version }}"
+
       - name: Set up Vite+
         uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
         with:
           version: 0.2.4
           node-version: ${{ steps.node-version.outputs.version }}
-          sfw: true
           cache: true
+          sfw: true
           run-install: |
             - args: ['--frozen-lockfile']
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - name: Build browser resource
+        run: vp run -F @anywidget-mcp/python build
+
+      - name: Run Python tests
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
+        run: uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
+
+  test-js:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Read Node.js version
+        id: node-version
+        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
         with:
-          version: 11.11.0
+          version: 0.2.4
+          node-version: ${{ steps.node-version.outputs.version }}
+          cache: true
+          sfw: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      - name: Run JavaScript tests
+        run: vp run -r test
+
+      - name: Build browser package
+        run: vp run -F @anywidget-mcp/app build
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Read Node.js version
+        id: node-version
+        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           enable-cache: true
-          python-version: ${{ matrix.python-version }}
+          cache-dependency-glob: uv.lock
 
-      - name: Install Python workspace
-        run: uv sync --frozen --python ${{ matrix.python-version }}
+      - name: Install Python
+        run: uv python install "$(cat .python-version)"
 
-      - name: Build browser resource
-        run: pnpm --filter @anywidget-mcp/python build
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
+        with:
+          version: 0.2.4
+          node-version: ${{ steps.node-version.outputs.version }}
+          cache: true
+          sfw: true
+          run-install: |
+            - args: ['--frozen-lockfile']
 
-      - name: Run Python tests
-        run: uv run --python ${{ matrix.python-version }} --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
+      - name: Build and check package artifacts
+        run: make package
+
+      - name: Check generated files
+        run: git diff --exit-code
+
+  required:
+    if: always()
+    needs: [quality, test-python, test-js, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required jobs
+        env:
+          PACKAGE: ${{ needs.package.result }}
+          QUALITY: ${{ needs.quality.result }}
+          TEST_JS: ${{ needs.test-js.result }}
+          TEST_PYTHON: ${{ needs.test-python.result }}
+        run: |
+          if [ "$QUALITY" != success ] || \
+             [ "$TEST_PYTHON" != success ] || \
+             [ "$TEST_JS" != success ] || \
+             [ "$PACKAGE" != success ]; then
+            printf 'Required jobs: quality=%s test-python=%s test-js=%s package=%s\n' \
+              "$QUALITY" "$TEST_PYTHON" "$TEST_JS" "$PACKAGE" >&2
+            exit 1
+          fi
