@@ -60,7 +60,7 @@ annotations, and installed widget dependencies match the server process.
 ## Configure browser and app policy
 
 `AnyWidgetMCP` accepts FastMCP server options plus
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview) resource
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp) resource
 policy:
 
 ```python

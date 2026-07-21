@@ -15,19 +15,17 @@
 > **Experimental**: `anywidget-mcp` is experimental software. Its API is subject
 > to breaking changes.
 
-`anywidget-mcp` runs [AnyWidgets](https://anywidget.dev/) inside AI
+`anywidget-mcp` runs [AnyWidgets](https://anywidget.dev/?utm_source=anywidget-mcp) inside AI
 conversations. You can interact with a widget directly, and the model can
 respond to your input.
 
 Start with a widget from an existing package, or bring the same widget you use in
 Jupyter or marimo.
 
-[Read the documentation](https://peter-gy.github.io/anywidget-mcp/).
-
 ## Try a multi-widget conversation
 
 Requires Python 3.11 or newer. Serve
-[Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` and
+[Wigglystuff](https://koaning.github.io/wigglystuff/?utm_source=anywidget-mcp)'s `ColorPicker` and
 `LiveEdit` together:
 
 ```sh
@@ -38,15 +36,14 @@ uvx --with wigglystuff anywidget-mcp serve \
 ```
 
 Connect a host that supports
-[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview). For a
+[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp). For a
 quick local setup, start the
-[mcp-use Inspector](https://github.com/mcp-use/mcp-use) in another terminal:
+[mcp-use Inspector](https://github.com/mcp-use/mcp-use?utm_source=anywidget-mcp) in another terminal:
 
 ```sh
 npx --yes @mcp-use/inspector@12.0.3 \
   --url http://127.0.0.1:8010/mcp \
-  --port 7878 \
-  --no-open
+  --port 7878
 ```
 
 Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
@@ -54,16 +51,16 @@ model provider, then ask:
 
 > let me pick a color
 
-Choose a color, then ask:
+Choose a color using [ColorPicker](https://molab.marimo.io/github/koaning/wigglystuff/blob/main/demos/colorpicker.py/wasm?utm_source=anywidget-mcp), then ask:
 
 > given my current selection help explain the HEX to RGB algo interactively
 
-The model reads the picker's current color and opens `LiveEdit` for the
+The model reads the picker's current color and opens [LiveEdit](https://molab.marimo.io/github/koaning/wigglystuff/blob/main/demos/liveedit.py/wasm?utm_source=anywidget-mcp) for the
 interactive explanation. One server exposes both widgets, so the conversation
 can move from selection to explanation without leaving the chat.
 
 <p align="center">
-  <img alt="ColorPicker selection followed by an interactive HEX-to-RGB explanation in LiveEdit" src="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo.gif" width="900">
+  <img alt="ColorPicker selection followed by an interactive HEX-to-RGB explanation in LiveEdit" src="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo-00.gif" width="900">
 </p>
 
 [Getting started](https://peter-gy.github.io/anywidget-mcp/getting-started)
@@ -72,7 +69,7 @@ explains the Inspector flow and other MCP clients.
 ## But why?
 
 **💬 Stay in context:** A standalone web app sends you to a separate page. An
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview) stays in the
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp) stays in the
 conversation, exchanges data through MCP, and runs in a host-controlled
 sandbox. With your consent, it can ask the host to use tools you already
 connected.
@@ -80,7 +77,7 @@ connected.
 **🧩 Skip the scaffolding:** Building an MCP App directly means wiring together
 tools, UI resources, browser code, the host connection, and shared state.
 `anywidget-mcp` handles that integration. You define an
-[AnyWidget](https://anywidget.dev/) that keeps browser behavior and Python state
+[AnyWidget](https://anywidget.dev/?utm_source=anywidget-mcp) that keeps browser behavior and Python state
 in one component.
 
 **🧪 Develop in notebooks:** The same widget runs in Jupyter and marimo. Create
@@ -89,7 +86,7 @@ scenarios before serving it through MCP.
 
 **🧰 Combine widgets:** One server can expose multiple widgets as separate
 tools, or one call can open several together. Combine widgets from the
-[AnyWidget gallery](https://try.anywidget.dev/) into an interactive environment
+[AnyWidget gallery](https://try.anywidget.dev/?utm_source=anywidget-mcp) into an interactive environment
 for the task, then add your own.
 
 **✨ Invent at runtime:** When you cannot enumerate every useful interface in

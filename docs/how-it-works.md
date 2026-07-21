@@ -1,12 +1,12 @@
 # How it works
 
 Each widget tool call opens a fresh session in an MCP Apps host. The browser
-renders the returned [AnyWidget](https://anywidget.dev/) or widget group and
+renders the returned [AnyWidget](https://anywidget.dev/?utm_source=anywidget-mcp) or widget group and
 sends your changes to Python. The model can read the current widget state.
 
 The widget keeps the same frontend module, Python traits, validation, and
 observers it uses in Jupyter or marimo. `anywidget-mcp` connects those pieces to
-an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview).
+an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp).
 
 ## One widget, four contracts
 

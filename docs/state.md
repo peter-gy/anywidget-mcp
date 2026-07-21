@@ -6,8 +6,8 @@ then ask the model which color you chose. The exposed value is the widget's
 model-visible state.
 
 The examples use `ColorPicker` and `SortableList` from
-[Wigglystuff](https://koaning.github.io/wigglystuff/). The same state API
-applies to other [AnyWidgets](https://anywidget.dev/).
+[Wigglystuff](https://koaning.github.io/wigglystuff/?utm_source=anywidget-mcp). The same state API
+applies to other [AnyWidgets](https://anywidget.dev/?utm_source=anywidget-mcp).
 
 ## Choose what the model can read
 
@@ -104,7 +104,7 @@ differ from the class or factory name.
 
 The initial tool result includes one complete projection. After browser
 interaction reaches Python, the app publishes the latest complete projection
-through [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview)
+through [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp)
 `updateModelContext` when the host supports that method.
 
 Each launch with model-visible state also returns a `state_id`. The

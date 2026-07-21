@@ -1,12 +1,12 @@
 # Pass input to widgets
 
 Use a typed Python function when the model should provide values before an
-[AnyWidget](https://anywidget.dev/) opens. Its parameters define the tool input.
+[AnyWidget](https://anywidget.dev/?utm_source=anywidget-mcp) opens. Its parameters define the tool input.
 The server validates that input before it calls the function to create the
 widget. This function is a widget factory.
 
 The examples use widgets from
-[Wigglystuff](https://koaning.github.io/wigglystuff/). You can use AnyWidgets
+[Wigglystuff](https://koaning.github.io/wigglystuff/?utm_source=anywidget-mcp). You can use AnyWidgets
 from any package, including widgets you author.
 
 ## Let the model choose the starting value
@@ -96,7 +96,7 @@ and `jsonBytes`.
 
 ## Turn an explanation into an interactive trace
 
-[LiveEdit](https://koaning.github.io/wigglystuff/reference/live-edit/) renders a
+[LiveEdit](https://molab.marimo.io/github/koaning/wigglystuff/blob/main/demos/liveedit.py/wasm?utm_source=anywidget-mcp) renders a
 step-through trace of a Python function. Its constructor accepts Python source
 through the required `code` argument, so serve the widget class:
 

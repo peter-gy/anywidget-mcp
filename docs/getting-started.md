@@ -1,3 +1,7 @@
+<script setup>
+import { withBase } from 'vitepress'
+</script>
+
 # Getting started
 
 Run `ColorPicker` and `LiveEdit` in Inspector Chat. Choose a color, then ask for
@@ -7,7 +11,7 @@ Requires Python 3.11 or newer.
 
 ## Run both widgets
 
-Serve [Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` and
+Serve [Wigglystuff](https://koaning.github.io/wigglystuff/?utm_source=anywidget-mcp)'s `ColorPicker` and
 `LiveEdit` together:
 
 ```sh
@@ -20,19 +24,18 @@ uvx --with wigglystuff anywidget-mcp serve \
 The MCP endpoint is `http://127.0.0.1:8010/mcp`. The server exposes both widgets
 as tools.
 
-Browse the [AnyWidget gallery](https://try.anywidget.dev/) for more widgets and
+Browse the [AnyWidget gallery](https://try.anywidget.dev/?utm_source=anywidget-mcp) for more widgets and
 links to their packages.
 
 ## See it in Inspector Chat
 
 Keep the widget server running. In another terminal, start the
-[mcp-use Inspector](https://github.com/mcp-use/mcp-use), a local MCP Apps host:
+[mcp-use Inspector](https://github.com/mcp-use/mcp-use?utm_source=anywidget-mcp), a local MCP Apps host:
 
 ```sh
 npx --yes @mcp-use/inspector@12.0.3 \
   --url http://127.0.0.1:8010/mcp \
-  --port 7878 \
-  --no-open
+  --port 7878
 ```
 
 Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
@@ -47,7 +50,7 @@ Choose a color, then ask:
 The model reads the picker's current color from its model-visible state and can
 open `LiveEdit` for an interactive explanation.
 
-<video class="demo-video" controls muted playsinline preload="metadata" poster="/demos/anywidget-mcp-demo-poster.jpg" aria-label="A conversation uses ColorPicker to choose a color and LiveEdit to explain HEX-to-RGB conversion" src="/demos/anywidget-mcp-demo.mp4"></video>
+<video class="demo-video" controls muted playsinline preload="metadata" :poster="withBase('/demos/anywidget-mcp-demo-poster.jpg')" aria-label="A conversation uses ColorPicker to choose a color and LiveEdit to explain HEX-to-RGB conversion" :src="withBase('/demos/anywidget-mcp-demo.mp4')"></video>
 
 If port 7878 is busy, use the Inspector URL printed in the terminal.
 
@@ -55,7 +58,7 @@ If port 7878 is busy, use the Inspector URL printed in the terminal.
 
 Codex can connect to MCP servers, but inline widget rendering requires MCP Apps
 support. ChatGPT on the web and Claude Desktop support MCP Apps. Check the
-[current client support list](https://modelcontextprotocol.io/extensions/apps/overview#client-support)
+[current client support list](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp#client-support)
 before configuring another client.
 
 ## Install in a project

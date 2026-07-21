@@ -128,8 +128,7 @@ Start the pinned Inspector after the fixture is listening:
 ```sh
 npx --yes @mcp-use/inspector@12.0.3 \
   --url http://127.0.0.1:8766/mcp \
-  --port 8082 \
-  --no-open
+  --port 8082
 ```
 
 Open `http://127.0.0.1:8082/inspector?tab=chat` with one named `agent-browser`
