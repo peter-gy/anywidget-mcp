@@ -20,6 +20,9 @@ package:
 	rm -rf dist
 	pnpm build
 	uv build --package anywidget-mcp --out-dir dist
+	uv run --no-project python scripts/verify_package.py \
+		"$$(find dist -maxdepth 1 -name '*.whl' -print -quit)" \
+		"$$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
 	uvx twine check dist/*.whl dist/*.tar.gz
 	mkdir -p dist/from-sdist
 	uv build --wheel "$$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)" --out-dir dist/from-sdist
