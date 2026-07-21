@@ -36,27 +36,29 @@ walks through this flow in Inspector Chat.
 
 ## But why?
 
-A standalone web app sends you to a separate page. An
+**💬 Stay in context:** A standalone web app sends you to a separate page. An
 [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) stays in the
 conversation, exchanges data through MCP, and runs in a host-controlled
 sandbox. With your consent, it can ask the host to use tools you already
 connected.
 
-Building an MCP App directly means wiring together tools, UI resources, browser
-code, the host connection, and shared state. `anywidget-mcp` handles that
-integration. You define an [AnyWidget](https://anywidget.dev/) that keeps
-browser behavior and Python state in one component.
+**🧩 Skip the scaffolding:** Building an MCP App directly means wiring together
+tools, UI resources, browser code, the host connection, and shared state.
+`anywidget-mcp` handles that integration. You define an
+[AnyWidget](https://anywidget.dev/) that keeps browser behavior and Python state
+in one component.
 
-The same widget runs in Jupyter and marimo. Create it from Python, inspect its
-state, and use marimo's reactive execution to test scenarios before serving it
-through MCP.
+**🧪 Develop in notebooks:** The same widget runs in Jupyter and marimo. Create
+it from Python, inspect its state, and use marimo's reactive execution to test
+scenarios before serving it through MCP.
 
-One server can expose multiple widgets as separate tools, or one call can open
-several together. Combine widgets from the
+**🧰 Combine widgets:** One server can expose multiple widgets as separate
+tools, or one call can open several together. Combine widgets from the
 [AnyWidget gallery](https://try.anywidget.dev/) into an interactive environment
 for the task, then add your own.
 
-When you cannot enumerate every useful interface in advance, serve
+**✨ Invent at runtime:** When you cannot enumerate every useful interface in
+advance, serve
 [`create_anywidget`](https://peter-gy.github.io/anywidget-mcp/factories#create-anywidgets-from-source-at-runtime).
 Supply Python source directly or ask an agent to invent a fresh AnyWidget during
 the conversation. Use that natural-language loop to develop widgets and test

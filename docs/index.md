@@ -14,12 +14,27 @@ hero:
       link: ./api
 
 features:
-  - title: Open existing widgets
-    details: Launch a ready-made AnyWidget with one command.
-  - title: Bring your own widget
-    details: Reuse the same AnyWidget in Jupyter, marimo, and AI conversations.
-  - title: Ask about the widget
-    details: The model can respond to your input.
+  - title: 🧩 Skip the scaffolding
+    details: >-
+      Turn an AnyWidget into an MCP App without wiring tools, UI resources,
+      browser code, and shared state yourself. Keep browser behavior and Python
+      state in one component.
+    link: https://anywidget.dev/
+    linkText: Learn about AnyWidget
+  - title: 🧪 Develop in notebooks
+    details: >-
+      Build the same widget in Jupyter or marimo, inspect its state, and test
+      interactions before serving it through MCP.
+    link: https://marimo.io/blog/anywidget
+    linkText: Develop AnyWidgets in marimo
+  - title: ✨ Combine or invent
+    details: >-
+      Expose any number of widgets as tools and open several together. Start
+      with the AnyWidget gallery, or let an agent create a new interface at
+      runtime with <code>create_anywidget</code>. Run generated source in a
+      sandbox.
+    link: https://try.anywidget.dev/
+    linkText: Browse existing AnyWidgets
 ---
 
 `anywidget-mcp` opens an [AnyWidget](https://anywidget.dev/) inside an AI
@@ -43,35 +58,6 @@ model reads the picker's current color when it answers.
 
 [Getting started](./getting-started) walks through the complete Inspector Chat
 flow.
-
-## But why?
-
-A standalone web app sends you to a separate page. An
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview) stays in the
-conversation, exchanges data through MCP, and runs in a host-controlled
-sandbox. With your consent, it can ask the host to use tools you already
-connected.
-
-Building an MCP App directly means wiring together tools, UI resources, browser
-code, the host connection, and shared state. `anywidget-mcp` handles that
-integration. You define an [AnyWidget](https://anywidget.dev/) that keeps
-browser behavior and Python state in one component.
-
-The same widget runs in Jupyter and marimo. Create it from Python, inspect its
-state, and use marimo's reactive execution to test scenarios before serving it
-through MCP.
-
-One server can expose multiple widgets as separate tools, or one call can open
-several together. Combine widgets from the
-[AnyWidget gallery](https://try.anywidget.dev/) into an interactive environment
-for the task, then add your own.
-
-When you cannot enumerate every useful interface in advance, serve
-[`create_anywidget`](./factories#create-anywidgets-from-source-at-runtime). You
-can supply Python source directly or ask an agent to invent a fresh AnyWidget
-during the conversation. Use that natural-language loop to develop widgets and
-test concepts. Run the factory in a sandbox because supplied source executes
-with the MCP server's permissions.
 
 ## Install in a project
 
