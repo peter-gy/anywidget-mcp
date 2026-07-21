@@ -46,19 +46,32 @@ conversation and keeps its Python state synchronized. Interact with the widget,
 then ask the model about your input. Each widget runs as an
 [MCP App](https://modelcontextprotocol.io/extensions/apps/overview).
 
-## Try an AnyWidget
+## Try a multi-widget conversation
 
-Requires Python 3.11 or newer. Start
-[Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` with one
-command:
+Requires Python 3.11 or newer. Serve
+[Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` and
+`LiveEdit` together:
 
 ```sh
-uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
+uvx --with wigglystuff anywidget-mcp serve \
+  wigglystuff:ColorPicker \
+  wigglystuff:LiveEdit \
+  --port 8010
 ```
 
-Connect a host that supports MCP Apps to `http://127.0.0.1:8010/mcp` and open
-`color_picker`. Choose a color, then ask the model which color you chose. The
-model reads the picker's current color when it answers.
+Connect a host that supports MCP Apps to `http://127.0.0.1:8010/mcp`, then ask:
+
+> let me pick a color
+
+Choose a color, then ask:
+
+> given my current selection help explain the HEX to RGB algo interactively
+
+The model reads the picker's current color and opens `LiveEdit` for the
+interactive explanation. One server exposes both widgets, so the conversation
+can move from selection to explanation without leaving the chat.
+
+<video class="demo-video" controls muted playsinline preload="metadata" poster="/demos/anywidget-mcp-demo-poster.jpg" aria-label="A conversation uses ColorPicker to choose a color and LiveEdit to explain HEX-to-RGB conversion" src="/demos/anywidget-mcp-demo.mp4"></video>
 
 [Getting started](./getting-started) walks through the complete Inspector Chat
 flow.
@@ -73,7 +86,7 @@ uv pip install anywidget-mcp
 
 ## Next steps
 
-- [Getting started](./getting-started) runs a widget in Inspector Chat and then
+- [Getting started](./getting-started) runs two widgets in Inspector Chat and then
   serves one you author.
 - [Model-visible state](./state) chooses which widget values the model can use.
 - [Pass input to widgets](./factories) accepts values from the model, loads

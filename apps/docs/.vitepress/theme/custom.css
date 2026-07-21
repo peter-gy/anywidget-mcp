@@ -25,3 +25,12 @@
 	height: 38px;
 	margin-right: 10px;
 }
+
+.vp-doc .demo-video {
+	display: block;
+	width: 100%;
+	margin: 24px 0 8px;
+	border: 1px solid var(--vp-c-divider);
+	border-radius: 12px;
+	background: var(--vp-c-bg-soft);
+}

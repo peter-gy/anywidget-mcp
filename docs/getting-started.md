@@ -1,20 +1,24 @@
 # Getting started
 
-Run a `ColorPicker` in Inspector Chat, choose a color, and ask the model which
-color you chose.
+Run `ColorPicker` and `LiveEdit` in Inspector Chat. Choose a color, then ask for
+an interactive explanation based on your selection.
 
 Requires Python 3.11 or newer.
 
-## Run the ColorPicker
+## Run both widgets
 
-Start [Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` in
-one command:
+Serve [Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` and
+`LiveEdit` together:
 
 ```sh
-uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
+uvx --with wigglystuff anywidget-mcp serve \
+  wigglystuff:ColorPicker \
+  wigglystuff:LiveEdit \
+  --port 8010
 ```
 
-The MCP endpoint is `http://127.0.0.1:8010/mcp`.
+The MCP endpoint is `http://127.0.0.1:8010/mcp`. The server exposes both widgets
+as tools.
 
 Browse the [AnyWidget gallery](https://try.anywidget.dev/) for more widgets and
 links to their packages.
@@ -32,10 +36,18 @@ npx --yes @mcp-use/inspector@12.0.3 \
 ```
 
 Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
-model provider, and ask: `Use color_picker so I can choose a color.` The picker
-opens in the conversation. Choose a color, then ask: `Which color did I choose?`
-The model reads the picker's current color when it answers. This value is the
-widget's model-visible state.
+model provider, and ask:
+
+> let me pick a color
+
+Choose a color, then ask:
+
+> given my current selection help explain the HEX to RGB algo interactively
+
+The model reads the picker's current color from its model-visible state and can
+open `LiveEdit` for an interactive explanation.
+
+<video class="demo-video" controls muted playsinline preload="metadata" poster="/demos/anywidget-mcp-demo-poster.jpg" aria-label="A conversation uses ColorPicker to choose a color and LiveEdit to explain HEX-to-RGB conversion" src="/demos/anywidget-mcp-demo.mp4"></video>
 
 If port 7878 is busy, use the Inspector URL printed in the terminal.
 
