@@ -537,6 +537,34 @@ describe("WidgetBinding live source lifecycle", () => {
 		expect(await stalledRenderError).toBeDefined();
 	});
 
+	test("waits for a cold render beyond the cleanup deadline", async () => {
+		vi.useFakeTimers();
+		const pendingRender = deferred<unknown>();
+		const binding = new WidgetBinding(createRuntime(), createModel({ _esm: "first" }), {
+			reportError: vi.fn(),
+			replaceCss: async () => undefined,
+			loadWidget: async () => ({ render: () => pendingRender.promise }),
+		});
+		await binding.initialize();
+
+		let outcome = "pending";
+		const rendering = binding.render(element(), new AbortController().signal);
+		void rendering.then(
+			() => {
+				outcome = "resolved";
+			},
+			() => {
+				outcome = "rejected";
+			},
+		);
+		await vi.advanceTimersByTimeAsync(3001);
+
+		expect(outcome).toBe("pending");
+		pendingRender.resolve(undefined);
+		await rendering;
+		await binding.dispose();
+	});
+
 	test("joins cleanup returned after an initializer is cancelled", async () => {
 		const lateInitialize = deferred<unknown>();
 		const cleanup = vi.fn();

@@ -561,7 +561,7 @@ export class WidgetBinding implements RuntimeBinding {
 		);
 		let cleanup: unknown;
 		try {
-			cleanup = await waitForTask(render, signal, this.timeoutMilliseconds, "anywidget render");
+			cleanup = await waitForTask(render, signal, undefined, "anywidget render");
 		} catch (error) {
 			this.trackTeardown(
 				render.then(
@@ -744,7 +744,7 @@ async function runCleanup(
 function waitForTask<T>(
 	task: Promise<T>,
 	signal: AbortSignal | undefined,
-	timeoutMilliseconds: number,
+	timeoutMilliseconds: number | undefined,
 	label: string,
 ): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -752,7 +752,7 @@ function waitForTask<T>(
 		const finish = (callback: () => void): void => {
 			if (settled) return;
 			settled = true;
-			globalThis.clearTimeout(timeout);
+			if (timeout !== undefined) globalThis.clearTimeout(timeout);
 			signal?.removeEventListener("abort", abort);
 			callback();
 		};
@@ -760,10 +760,13 @@ function waitForTask<T>(
 			finish(() => {
 				reject(signal?.reason ?? new Error(`${label} cancelled`));
 			});
-		const timeout = globalThis.setTimeout(
-			() => finish(() => reject(new Error(`${label} timed out`))),
-			timeoutMilliseconds,
-		);
+		const timeout =
+			timeoutMilliseconds === undefined
+				? undefined
+				: globalThis.setTimeout(
+						() => finish(() => reject(new Error(`${label} timed out`))),
+						timeoutMilliseconds,
+					);
 		if (signal?.aborted) {
 			abort();
 			return;

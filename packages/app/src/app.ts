@@ -25,6 +25,7 @@ import {
 	toolResultError,
 } from "./status";
 import { ToolCallQueue } from "./tool-calls";
+import { mountDetachedWidget } from "./widget-mount";
 
 export { disposeServerSession, WidgetRuntime };
 
@@ -199,12 +200,15 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 	pendingAttempt = replacement;
 	let next: WidgetRuntime | undefined;
 	try {
-		next = await creation;
+		const prepared = await creation;
+		next = prepared;
 		controller.signal.throwIfAborted();
-		runtime = next;
-		await abortable(next.mount(root, controller.signal), controller.signal);
-		controller.signal.throwIfAborted();
-
+		runtime = prepared;
+		await mountDetachedWidget(
+			root,
+			(element) => abortable(prepared.mount(element, controller.signal), controller.signal),
+			controller.signal,
+		);
 		root.hidden = false;
 		status.hidden = true;
 		setBusy(false);
