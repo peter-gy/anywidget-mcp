@@ -12,6 +12,9 @@
   <a href="https://spdx.org/licenses/MIT.html"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
+> **Experimental**: `anywidget-mcp` is experimental software. Its API is subject
+> to breaking changes.
+
 `anywidget-mcp` runs [AnyWidgets](https://anywidget.dev/) inside AI
 conversations. You can interact with a widget directly, and the model can
 respond to your input.
@@ -21,24 +24,41 @@ Jupyter or marimo.
 
 [Read the documentation](https://peter-gy.github.io/anywidget-mcp/).
 
-## Try an AnyWidget
+## Try a multi-widget conversation
 
-Requires Python 3.11 or newer. Start
-[Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` with one
-command:
+Requires Python 3.11 or newer. Serve
+[Wigglystuff](https://koaning.github.io/wigglystuff/)'s `ColorPicker` and
+`LiveEdit` together:
 
 ```sh
-uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
+uvx --with wigglystuff anywidget-mcp serve \
+  wigglystuff:ColorPicker \
+  wigglystuff:LiveEdit \
+  --port 8010
 ```
 
 Connect a host that supports
 [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) to
 `http://127.0.0.1:8010/mcp`, then ask:
 
-> Use `color_picker` so I can choose a color.
+> let me pick a color
 
-The picker opens in the conversation. Choose a color, then ask the model which
-color you chose. The model reads the picker's current color when it answers.
+Choose a color, then ask:
+
+> given my current selection help explain the HEX to RGB algo interactively
+
+The model reads the picker's current color and opens `LiveEdit` for the
+interactive explanation. One server exposes both widgets, so the conversation
+can move from selection to explanation without leaving the chat.
+
+<p align="center">
+  <a href="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo.mp4">
+    <img alt="ColorPicker selection followed by an interactive HEX-to-RGB explanation in LiveEdit" src="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo-poster.jpg" width="900">
+  </a>
+</p>
+<p align="center">
+  <a href="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo.mp4">Watch the 47-second demo</a>
+</p>
 
 [Getting started](https://peter-gy.github.io/anywidget-mcp/getting-started)
 walks through this flow in Inspector Chat.
