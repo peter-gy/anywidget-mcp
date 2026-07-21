@@ -1,7 +1,16 @@
-# anywidget-mcp
+<p align="center">
+  <a href="https://peter-gy.github.io/anywidget-mcp/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://peter-gy.github.io/anywidget-mcp/brand/anywidget-mcp-logo-horizontal-inverse.svg">
+      <img alt="anywidget-mcp" src="https://peter-gy.github.io/anywidget-mcp/brand/anywidget-mcp-logo-horizontal.svg" width="620">
+    </picture>
+  </a>
+</p>
 
-[![PyPI](https://img.shields.io/pypi/v/anywidget-mcp.svg)](https://pypi.org/project/anywidget-mcp/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://spdx.org/licenses/MIT.html)
+<p align="center">
+  <a href="https://pypi.org/project/anywidget-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/anywidget-mcp.svg"></a>
+  <a href="https://spdx.org/licenses/MIT.html"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
 
 `anywidget-mcp` runs [AnyWidgets](https://anywidget.dev/) inside AI
 conversations. You can interact with a widget directly, and the model can

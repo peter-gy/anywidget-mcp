@@ -5,6 +5,10 @@ hero:
   name: anywidget-mcp
   text: Bring AnyWidgets into the conversation.
   tagline: Run the same Python widgets in notebooks and AI conversations. You can interact with a widget directly, and the model can respond to your input.
+  image:
+    light: /brand/anywidget-mcp-mark.svg
+    dark: /brand/anywidget-mcp-mark-inverse.svg
+    alt: anywidget-mcp
   actions:
     - theme: brand
       text: Get started

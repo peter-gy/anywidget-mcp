@@ -1,0 +1,27 @@
+:root {
+	--vp-c-brand-1: #3d666d;
+	--vp-c-brand-2: #456f77;
+	--vp-c-brand-3: #4e7a82;
+	--vp-c-brand-soft: rgba(78, 122, 130, 0.14);
+	--vp-button-brand-hover-bg: #456f77;
+	--vp-button-brand-active-bg: #3d666d;
+}
+
+.dark {
+	--vp-c-brand-1: #8bb9c0;
+	--vp-c-brand-2: #6e9da5;
+	--vp-c-brand-3: #4e7a82;
+	--vp-c-brand-soft: rgba(78, 122, 130, 0.18);
+}
+
+.VPNavBarTitle .title {
+	font-size: 18px;
+	font-weight: 500;
+	letter-spacing: -0.01em;
+}
+
+.VPNavBarTitle .logo {
+	width: 38px;
+	height: 38px;
+	margin-right: 10px;
+}
