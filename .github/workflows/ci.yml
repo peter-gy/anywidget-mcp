@@ -44,7 +44,7 @@ jobs:
             - args: ['--frozen-lockfile']
 
       - name: Check JavaScript formatting, linting, and types
-        run: pnpm check
+        run: vp run check
 
       - name: Check Python formatting, linting, and types
         run: |
@@ -96,7 +96,7 @@ jobs:
             - args: ['--frozen-lockfile']
 
       - name: Build browser resource
-        run: pnpm --filter @anywidget-mcp/python build
+        run: vp run -F @anywidget-mcp/python build
 
       - name: Run Python tests
         env:
@@ -125,10 +125,10 @@ jobs:
             - args: ['--frozen-lockfile']
 
       - name: Run JavaScript tests
-        run: pnpm test
+        run: vp run -r test
 
       - name: Build browser package
-        run: pnpm --filter @anywidget-mcp/app build
+        run: vp run -F @anywidget-mcp/app build
 
   package:
     runs-on: ubuntu-latest
