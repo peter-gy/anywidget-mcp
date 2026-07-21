@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anywidget-mcp"
-version = "0.0.2"
+version = "0.0.3"
 description = "Expose AnyWidget interfaces as interactive MCP Apps"
 readme = "README.md"
 authors = [{ name = "Péter Ferenc Gyarmati", email = "dev.petergy@gmail.com" }]
