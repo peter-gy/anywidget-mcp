@@ -59,7 +59,18 @@ uvx --with wigglystuff anywidget-mcp serve \
   --port 8010
 ```
 
-Connect a host that supports MCP Apps to `http://127.0.0.1:8010/mcp`, then ask:
+Connect a host that supports MCP Apps. For a quick local setup, start the
+[mcp-use Inspector](https://github.com/mcp-use/mcp-use) in another terminal:
+
+```sh
+npx --yes @mcp-use/inspector@12.0.3 \
+  --url http://127.0.0.1:8010/mcp \
+  --port 7878 \
+  --no-open
+```
+
+Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
+model provider, then ask:
 
 > let me pick a color
 
@@ -73,8 +84,8 @@ can move from selection to explanation without leaving the chat.
 
 <video class="demo-video" controls muted playsinline preload="metadata" poster="/demos/anywidget-mcp-demo-poster.jpg" aria-label="A conversation uses ColorPicker to choose a color and LiveEdit to explain HEX-to-RGB conversion" src="/demos/anywidget-mcp-demo.mp4"></video>
 
-[Getting started](./getting-started) walks through the complete Inspector Chat
-flow.
+[Getting started](./getting-started) explains the Inspector flow and other MCP
+clients.
 
 ## Install in a project
 

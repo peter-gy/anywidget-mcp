@@ -38,8 +38,19 @@ uvx --with wigglystuff anywidget-mcp serve \
 ```
 
 Connect a host that supports
-[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) to
-`http://127.0.0.1:8010/mcp`, then ask:
+[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview). For a
+quick local setup, start the
+[mcp-use Inspector](https://github.com/mcp-use/mcp-use) in another terminal:
+
+```sh
+npx --yes @mcp-use/inspector@12.0.3 \
+  --url http://127.0.0.1:8010/mcp \
+  --port 7878 \
+  --no-open
+```
+
+Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
+model provider, then ask:
 
 > let me pick a color
 
@@ -52,16 +63,11 @@ interactive explanation. One server exposes both widgets, so the conversation
 can move from selection to explanation without leaving the chat.
 
 <p align="center">
-  <a href="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo.mp4">
-    <img alt="ColorPicker selection followed by an interactive HEX-to-RGB explanation in LiveEdit" src="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo-poster.jpg" width="900">
-  </a>
-</p>
-<p align="center">
-  <a href="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo.mp4">Watch the 47-second demo</a>
+  <img alt="ColorPicker selection followed by an interactive HEX-to-RGB explanation in LiveEdit" src="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo.gif" width="900">
 </p>
 
 [Getting started](https://peter-gy.github.io/anywidget-mcp/getting-started)
-walks through this flow in Inspector Chat.
+explains the Inspector flow and other MCP clients.
 
 ## But why?
 
