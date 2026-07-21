@@ -3,7 +3,7 @@
 	"private": true,
 	"scripts": {
 		"build": "vp run -r build",
-		"check": "vp check --no-error-on-unmatched-pattern apps development_docs docs packages \"*.json\" \"*.md\" \"*.toml\" \"*.ts\" \"*.yaml\" \"*.yml\" && vp run -r typecheck",
+		"check": "vp check --no-error-on-unmatched-pattern .github apps development_docs docs packages scripts AGENTS.md CLAUDE.md README.md package.json pnpm-lock.yaml pnpm-workspace.yaml pyproject.toml tsconfig.json vite.config.ts && vp run -r typecheck",
 		"dev": "vp run @anywidget-mcp/python#dev",
 		"test": "vp run -r test"
 	},

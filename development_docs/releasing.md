@@ -1,8 +1,8 @@
 # Releasing
 
-Releases use an annotated version tag as the publishing boundary. The
-`Publish` workflow rebuilds and validates the distribution, publishes it to
-PyPI through Trusted Publishing, then creates GitHub release notes.
+A release-bearing pull request updates the package version. CI validates that
+commit and builds the distributions. After the pull request is merged,
+`scripts/release.sh` tags the green `main` commit and starts Trusted Publishing.
 
 ## Trusted publisher
 
@@ -15,58 +15,52 @@ Configure the PyPI project with this publisher identity:
 | Workflow    | `publish.yml`   |
 | Environment | `pypi`          |
 
-The GitHub `pypi` environment is the publishing boundary. The publish job has
-`id-token: write` permission and receives the wheel and source distribution
-from the validated build job.
+The `pypi` environment grants the publish job an OpenID Connect token. The
+workflow builds the wheel and source distribution, publishes both artifacts,
+installs the public package, and creates the GitHub release notes.
 
-## Prepare a release
+## Prepare the version
 
-Start from a clean, current `main` branch. Pass an explicit PEP 440 version to
-start a prerelease series:
-
-```sh
-./scripts/release.sh 0.0.1rc1
-```
-
-The helper updates the package with uv, runs `make check`, creates a
-`release: 0.0.1rc1` commit, and adds the annotated `v0.0.1rc1` tag. The tag is
-local until you push it.
-
-Advance the candidate series or promote it to the final version:
+Create a branch and update the package version with uv:
 
 ```sh
-./scripts/release.sh rc
-./scripts/release.sh stable
+git switch -c release/0.0.3
+uv version --package anywidget-mcp 0.0.3
+git add packages/anywidget-mcp/pyproject.toml uv.lock
+git commit -m "chore: release 0.0.3"
 ```
 
-Use `major`, `minor`, or `patch` for a stable version bump. Run the helper with
-no argument when the committed package version is already the intended
-release.
+Open a pull request and merge it after the `required` CI check passes.
 
-Review the commit and tag, then push them atomically:
+## Start the release
+
+Update local `main`, inspect the release boundary, then push the tag:
 
 ```sh
-git push --atomic origin main v0.0.1rc1
+git switch main
+git pull --ff-only origin main
+./scripts/release.sh --dry-run
+./scripts/release.sh
 ```
 
-The tag must equal `v` followed by the version in
-`packages/anywidget-mcp/pyproject.toml`. The workflow stops before publishing
-when those values differ.
+The helper requires a clean `main` branch that matches `origin/main` and has a
+successful push CI run. It creates and pushes the annotated `v<version>` tag.
+The package version remains the PEP 440 value without the `v` prefix.
 
 ## Verify the release
 
-Wait for the `Publish` workflow to finish, then inspect the GitHub release and
-the PyPI project. Prerelease versions receive the GitHub prerelease flag.
+Wait for the `Publish package` workflow to finish. It verifies both artifacts
+on the public PyPI index and installs the released package in an isolated uv
+environment.
 
-Install from the public index in a fresh environment:
+You can repeat the public installation check with:
 
 ```sh
-uv run --isolated --no-project \
-  --with 'anywidget-mcp==0.0.1rc1' \
-  anywidget-mcp --help
+uv run --no-cache --no-project --isolated \
+  --default-index https://pypi.org/simple \
+  --with 'anywidget-mcp==0.0.3' \
+  python scripts/verify_release.py 0.0.3
 ```
 
-PyPI distributions are immutable. Rerun a failed job when the upload completed
-but a later release step failed. The release-note job verifies that both public
-artifacts exist before creating or updating the GitHub release. Publish a new
-version when either accepted artifact differs from the validated build.
+PyPI distributions are immutable. Publish a new version when either accepted
+artifact differs from the validated build.

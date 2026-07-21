@@ -12,7 +12,7 @@ dev = [
 ]
 
 [tool.pyrefly]
-project-includes = ["packages/anywidget-mcp"]
+project-includes = ["packages/anywidget-mcp", "scripts"]
 search-path = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
 
 [tool.pytest.ini_options]

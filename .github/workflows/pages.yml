@@ -1,16 +1,20 @@
 name: GitHub Pages
 
 on:
+  pull_request:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  docs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -37,6 +41,7 @@ jobs:
             - args: ['--frozen-lockfile']
 
       - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
         id: pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
 
@@ -56,12 +61,14 @@ jobs:
           grep -q "href=\"${BASE_PATH}/getting-started\"" "$index"
 
       - name: Upload GitHub Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: apps/docs/.vitepress/dist
 
   deploy:
-    needs: build
+    if: github.event_name != 'pull_request'
+    needs: docs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:

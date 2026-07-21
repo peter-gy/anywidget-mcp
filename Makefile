@@ -5,9 +5,9 @@ check:
 	pnpm test
 	pnpm build
 	uv lock --check
-	uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp
-	uv run --package anywidget-mcp ruff check packages/anywidget-mcp
-	uv run --package anywidget-mcp ty check packages/anywidget-mcp
+	uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp scripts
+	uv run --package anywidget-mcp ruff check packages/anywidget-mcp scripts
+	uv run --package anywidget-mcp ty check packages/anywidget-mcp scripts
 	uv run --package anywidget-mcp pyrefly check --min-severity warn
 	uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
 	$(MAKE) package

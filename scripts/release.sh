@@ -4,141 +4,134 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION_FILES=(
-  packages/anywidget-mcp/pyproject.toml
-  uv.lock
-)
-
 usage() {
-  cat <<'EOF'
-Usage: ./scripts/release.sh [major|minor|patch|stable|alpha|beta|rc|X.Y.Z]
+	cat <<'EOF'
+Usage: ./scripts/release.sh [--dry-run]
 
-With no argument, release the current package version. A bump or explicit PEP
-440 version updates the Python package with uv. The script validates the full
-workspace, creates any needed release commit, and adds an annotated v<version>
-tag locally.
+Releases the package version committed to main. The command requires a clean,
+synchronized main branch and a successful CI run for its current commit. It
+creates and pushes the annotated v<version> tag that starts trusted publishing.
 
-Start a release-candidate series with an explicit version such as 0.0.1rc1.
-Use rc for the next candidate and stable for the final version.
+Add the version change to the release-bearing pull request with:
+
+  uv version --package anywidget-mcp --bump patch
 EOF
 }
 
-die() {
-  printf 'Error: %s\n' "$1" >&2
-  exit 1
-}
-
-step() {
-  printf '\n==> %s\n' "$1"
-}
-
-confirm() {
-  local reply
-  printf '%s [y/N] ' "$1"
-  read -r reply
-  [[ "$reply" == "y" || "$reply" == "yes" ]]
+error() {
+	printf 'ERROR: %s\n' "$1" >&2
 }
 
 require_command() {
-  command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
+	if ! command -v "$1" >/dev/null 2>&1; then
+		error "Missing required command: $1"
+		exit 1
+	fi
 }
 
-restore_version() {
-  local status=$?
-  if [[ "$status" -ne 0 && "${VERSION_UPDATED:-0}" == "1" && "${COMMITTED:-0}" == "0" ]]; then
-    uv version --package anywidget-mcp --no-sync "$CURRENT_VERSION" >/dev/null
-    printf '\nRestored the package version to %s.\n' "$CURRENT_VERSION" >&2
-  fi
-  exit "$status"
-}
+DRY_RUN=0
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
-if [[ "$#" -gt 1 ]]; then
-  usage >&2
-  exit 1
-fi
-
-for command in git make pnpm uv; do
-  require_command "$command"
-done
-
-[[ "$(git branch --show-current)" == "main" ]] || die "Releases must run from main"
-[[ -z "$(git status --porcelain)" ]] || die "Git working directory must be clean"
-
-step "Updating main"
-git fetch origin main --tags
-git pull --ff-only origin main
-
-CURRENT_VERSION="$(uv version --package anywidget-mcp --short)"
-REQUEST="${1:-}"
-VERSION_ARGS=()
-case "$REQUEST" in
-  "")
-    NEW_VERSION="$CURRENT_VERSION"
-    ;;
-  major | minor | patch | stable | alpha | beta | rc)
-    VERSION_ARGS=(--bump "$REQUEST")
-    NEW_VERSION="$(
-      uv version --package anywidget-mcp --dry-run --short "${VERSION_ARGS[@]}"
-    )"
-    ;;
-  *)
-    VERSION_ARGS=("$REQUEST")
-    NEW_VERSION="$(
-      uv version --package anywidget-mcp --dry-run --short "${VERSION_ARGS[@]}"
-    )"
-    ;;
+case "${1:-}" in
+	"") ;;
+	--dry-run)
+		DRY_RUN=1
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		error "Unknown argument: $1"
+		usage >&2
+		exit 1
+		;;
 esac
 
-TAG="v$NEW_VERSION"
-git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "Tag already exists: $TAG"
-
-printf '\nRelease summary:\n'
-printf '  Current version: %s\n' "$CURRENT_VERSION"
-printf '  Release version: %s\n' "$NEW_VERSION"
-printf '  Tag:             %s\n' "$TAG"
-confirm "Continue?" || die "Release cancelled"
-
-VERSION_UPDATED=0
-COMMITTED=0
-trap restore_version EXIT
-
-if [[ "$NEW_VERSION" != "$CURRENT_VERSION" ]]; then
-  step "Updating package version"
-  VERSION_UPDATED=1
-  uv version --package anywidget-mcp --no-sync "${VERSION_ARGS[@]}"
-  [[ "$(uv version --package anywidget-mcp --short)" == "$NEW_VERSION" ]] \
-    || die "Package version did not update to $NEW_VERSION"
+if [[ "$#" -gt 1 ]]; then
+	error "Expected at most one argument"
+	usage >&2
+	exit 1
 fi
 
-step "Validating $TAG"
-make check
+require_command gh
+require_command git
+require_command uv
 
-git diff --quiet -- . \
-  ':(exclude)packages/anywidget-mcp/pyproject.toml' \
-  ':(exclude)uv.lock' \
-  || die "Release checks changed files outside the package version"
-
-git add -- "${VERSION_FILES[@]}"
-if ! git diff --cached --quiet; then
-  step "Committing $NEW_VERSION"
-  if ! git commit -m "release: $NEW_VERSION"; then
-    git restore --staged -- "${VERSION_FILES[@]}"
-    die "Could not create the release commit"
-  fi
-  COMMITTED=1
+BRANCH="$(git branch --show-current)"
+if [[ "$BRANCH" != "main" ]]; then
+	error "Releases must run from main. Current branch: $BRANCH"
+	exit 1
 fi
 
-step "Tagging $TAG"
-git tag -a "$TAG" -m "release: $NEW_VERSION"
-trap - EXIT
+if [[ -n "$(git status --porcelain)" ]]; then
+	error "The working tree must be clean"
+	git status --short >&2
+	exit 1
+fi
 
-cat <<EOF
+git fetch origin main --tags
 
-$TAG is ready locally. Push the commit and tag atomically to publish to PyPI:
+COMMIT="$(git rev-parse HEAD)"
+REMOTE_COMMIT="$(git rev-parse origin/main)"
+if [[ "$COMMIT" != "$REMOTE_COMMIT" ]]; then
+	error "Local main must match origin/main"
+	printf 'Run git pull --ff-only origin main, then retry.\n' >&2
+	exit 1
+fi
 
-  git push --atomic origin main "$TAG"
-EOF
+VERSION="$(uv version --package anywidget-mcp --short)"
+TAG="v$VERSION"
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+	error "Release tag already exists: $TAG"
+	exit 1
+fi
+
+CI_RUN="$(gh run list \
+	--workflow ci.yml \
+	--branch main \
+	--commit "$COMMIT" \
+	--event push \
+	--limit 1 \
+	--json databaseId,status,conclusion,url \
+	--jq 'if length == 0 then "" else (.[0] | [.databaseId, .status, .conclusion, .url] | .[]) end')"
+
+if [[ -z "$CI_RUN" ]]; then
+	error "No main CI run found for $COMMIT"
+	printf 'Wait for the main CI workflow to start, then retry.\n' >&2
+	exit 1
+fi
+
+{
+	IFS= read -r CI_RUN_ID
+	IFS= read -r CI_STATUS
+	IFS= read -r CI_CONCLUSION
+	IFS= read -r CI_URL
+} <<<"$CI_RUN"
+CI_CONCLUSION="${CI_CONCLUSION:-pending}"
+if [[ "$CI_STATUS" != "completed" || "$CI_CONCLUSION" != "success" ]]; then
+	error "Main CI must pass before releasing. Current result: $CI_STATUS/$CI_CONCLUSION"
+	printf 'CI run: %s\n' "$CI_URL" >&2
+	printf 'Run gh run watch %s --exit-status, then retry.\n' "$CI_RUN_ID" >&2
+	exit 1
+fi
+
+REPOSITORY_URL="$(gh repo view --json url --jq .url)"
+
+printf 'Release: %s\n' "$TAG"
+printf 'Commit:  %s\n' "$COMMIT"
+printf 'CI:      %s\n' "$CI_URL"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+	printf '\nDry run complete. Run ./scripts/release.sh to create and push %s.\n' "$TAG"
+	exit 0
+fi
+
+git tag -a "$TAG" -m "release: $VERSION"
+if ! git push origin "$TAG"; then
+	git tag -d "$TAG" >/dev/null
+	error "Failed to push $TAG. The local tag was deleted so the command can be retried."
+	exit 1
+fi
+
+printf '\nRelease %s started.\n' "$TAG"
+printf 'Publish workflow: %s/actions/workflows/publish.yml\n' "$REPOSITORY_URL"
