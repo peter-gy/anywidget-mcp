@@ -7,11 +7,11 @@ check:
 	$(VP) run -r test
 	$(VP) run -r build
 	uv lock --check
-	uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp scripts
-	uv run --package anywidget-mcp ruff check packages/anywidget-mcp scripts
-	uv run --package anywidget-mcp ty check packages/anywidget-mcp scripts
-	uv run --package anywidget-mcp pyrefly check --min-severity warn
-	uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
+	uv run ruff format --check packages/anywidget-mcp scripts
+	uv run ruff check packages/anywidget-mcp scripts
+	uv run ty check packages/anywidget-mcp scripts
+	uv run pyrefly check --min-severity warn
+	uv run pytest -q packages/anywidget-mcp/tests
 	$(MAKE) package
 	printf '@AGENTS.md\n' | cmp -s - CLAUDE.md
 	git diff --check
