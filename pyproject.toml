@@ -1,6 +1,9 @@
 [tool.uv.workspace]
 members = ["packages/anywidget-mcp"]
 
+[tool.uv]
+exclude-newer = "3 days"
+
 [dependency-groups]
 dev = [
 	"marimo[recommended]>=0.23.14",

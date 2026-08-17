@@ -3,24 +3,20 @@ import { describe, expect, test, vi } from "vite-plus/test";
 import {
 	BridgeModel,
 	scopedModel,
+	serializeCustom,
 	serializeUpdate,
 	type ModelPayload,
-	type ModelRuntime,
+	type State,
 } from "../src/model";
 
-function payload(state: Record<string, unknown> = {}): ModelPayload {
+function payload(state: State = {}): ModelPayload {
 	return {
 		modelId: "model-1",
 		state,
 	};
 }
 
-function modelRuntime(): {
-	runtime: ModelRuntime;
-	attach(model: BridgeModel): void;
-	enqueueUpdate: ReturnType<typeof vi.fn>;
-	enqueueCustom: ReturnType<typeof vi.fn>;
-} {
+function modelRuntime() {
 	let current!: BridgeModel;
 	const enqueueUpdate = vi.fn();
 	const enqueueCustom = vi.fn();
@@ -30,7 +26,7 @@ function modelRuntime(): {
 			enqueueUpdate,
 			enqueueCustom,
 		},
-		attach(model) {
+		attach(model: BridgeModel) {
 			current = model;
 		},
 		enqueueUpdate,
@@ -53,7 +49,8 @@ describe("BridgeModel state synchronization", () => {
 		payloadBytes[0] = 9;
 
 		expect(harness.enqueueUpdate).toHaveBeenCalledTimes(1);
-		const state = harness.enqueueUpdate.mock.calls[0]?.[1] as Map<string, unknown>;
+		const state = harness.enqueueUpdate.mock.calls[0]?.[1];
+		if (!state) throw new Error("Expected a queued state update");
 		expect(serializeUpdate(state)).toEqual({
 			data: {
 				method: "update",
@@ -79,6 +76,34 @@ describe("BridgeModel state synchronization", () => {
 			model,
 			{ method: "custom", content: { nested: { value: 1 } } },
 			["AQID"],
+		);
+	});
+
+	test("rejects custom objects outside the runtime value contract", () => {
+		expect(() => serializeCustom(new Date("2026-08-17T00:00:00Z"))).toThrow(
+			"Widget value cannot cross the runtime boundary",
+		);
+	});
+
+	test("rejects cyclic custom content", () => {
+		interface CyclicContent {
+			self?: CyclicContent;
+		}
+		const content: CyclicContent = {};
+		content.self = content;
+
+		expect(() => serializeCustom(content)).toThrow("Widget value cannot contain cycles");
+	});
+
+	test("rejects cyclic state updates", () => {
+		interface CyclicState {
+			self?: CyclicState;
+		}
+		const value: CyclicState = {};
+		value.self = value;
+
+		expect(() => serializeUpdate(new Map([["value", value]]))).toThrow(
+			"Widget value cannot contain cycles",
 		);
 	});
 

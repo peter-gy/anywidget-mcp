@@ -1,4 +1,5 @@
 import { parse, type ExportSpecifier, type ImportSpecifier } from "es-module-lexer/js";
+import { isPlainObject } from "./runtime-value";
 
 export interface WidgetModule {
 	default?: unknown;
@@ -15,7 +16,7 @@ let nextModuleId = 0;
 export async function loadModule(source: string, signal?: AbortSignal): Promise<WidgetModule> {
 	signal?.throwIfAborted();
 	if (isRemoteModule(source)) {
-		const module = (await import(/* @vite-ignore */ source)) as WidgetModule;
+		const module = normalizeWidgetModule(await import(/* @vite-ignore */ source));
 		signal?.throwIfAborted();
 		return module;
 	}
@@ -61,7 +62,7 @@ export function instrumentInlineModule(source: string, receiverName: string): In
 async function loadBlobModule(source: string, signal?: AbortSignal): Promise<WidgetModule> {
 	const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
 	try {
-		const module = (await import(/* @vite-ignore */ url)) as WidgetModule;
+		const module = normalizeWidgetModule(await import(/* @vite-ignore */ url));
 		signal?.throwIfAborted();
 		return module;
 	} finally {
@@ -75,7 +76,6 @@ async function loadInlineModule(source: string, signal?: AbortSignal): Promise<W
 	const script = document.createElement("script");
 	script.type = "module";
 	script.textContent = module.code;
-	const receivers = globalThis as unknown as Record<string, unknown>;
 
 	return new Promise<WidgetModule>((resolve, reject) => {
 		let settled = false;
@@ -85,7 +85,7 @@ async function loadInlineModule(source: string, signal?: AbortSignal): Promise<W
 			script.removeEventListener("error", loadError);
 			script.removeEventListener("load", loaded);
 			script.remove();
-			Reflect.deleteProperty(receivers, receiverName);
+			Reflect.deleteProperty(globalThis, receiverName);
 		};
 		const finish = (callback: () => void): void => {
 			if (settled) return;
@@ -110,7 +110,7 @@ async function loadInlineModule(source: string, signal?: AbortSignal): Promise<W
 		};
 		const receive = (value: WidgetModule): void => finish(() => resolve(value));
 
-		Object.defineProperty(receivers, receiverName, {
+		Object.defineProperty(globalThis, receiverName, {
 			configurable: true,
 			value: receive,
 		});
@@ -128,6 +128,14 @@ async function loadInlineModule(source: string, signal?: AbortSignal): Promise<W
 			finish(() => reject(error));
 		}
 	});
+}
+
+function normalizeWidgetModule<Value>(value: Value): WidgetModule {
+	if (!isPlainObject(value)) throw new Error("anywidget module namespace must be an object");
+	return {
+		default: Object.getOwnPropertyDescriptor(value, "default")?.value,
+		render: Object.getOwnPropertyDescriptor(value, "render")?.value,
+	};
 }
 
 function findExport(

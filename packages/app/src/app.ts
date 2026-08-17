@@ -9,7 +9,7 @@ import {
 import "./app.css";
 import { beginRuntimeReplacement } from "./runtime-replacement";
 import { abortable, randomId, RUNTIME_LIFECYCLE_TIMEOUT_MS } from "./runtime-lifecycle";
-import { requiredString, type RawRuntimePayload } from "./runtime-payload";
+import { requiredString } from "./runtime-payload";
 import {
 	loadWidgetRuntime,
 	parseToolLaunch,
@@ -49,9 +49,9 @@ let renderRequest = Promise.resolve();
 const resultGate = new ToolResultGate();
 
 function startApp(): void {
-	shell = getElement<HTMLElement>("app-shell");
-	status = getElement<HTMLElement>("status");
-	root = getElement<HTMLElement>("widget-root");
+	shell = getElement("app-shell");
+	status = getElement("status");
+	root = getElement("widget-root");
 	app = new App(
 		{ name: "anywidget MCP App", version: __ANYWIDGET_MCP_VERSION__ },
 		{},
@@ -59,7 +59,7 @@ function startApp(): void {
 	);
 	calls = new ToolCallQueue(app);
 	let resolveConnected!: () => void;
-	let rejectConnected!: (error: unknown) => void;
+	let rejectConnected!: (cause: unknown) => void;
 	connected = new Promise<void>((resolve, reject) => {
 		resolveConnected = resolve;
 		rejectConnected = reject;
@@ -135,7 +135,7 @@ function startApp(): void {
 		});
 }
 
-if (typeof document !== "undefined") startApp();
+if ("document" in globalThis) startApp();
 
 async function mountToolResult(launch: ToolLaunch, controller: AbortController): Promise<void> {
 	if (launch.kind !== "bootstrap") return;
@@ -162,7 +162,7 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 				root.hidden = true;
 				runtimeCreationStarted = true;
 				return await WidgetRuntime.create(
-					materialized.payload as RawRuntimePayload,
+					materialized.payload,
 					calls,
 					app,
 					connected,
@@ -271,14 +271,14 @@ function setBusy(busy: boolean): void {
 	shell.setAttribute("aria-busy", String(busy));
 }
 
-function showError(error: unknown): void {
-	const message = error instanceof Error ? error.message : String(error);
+function showError(cause: unknown): void {
+	const message = cause instanceof Error ? cause.message : String(cause);
 	status.hidden = false;
 	status.dataset.kind = "error";
 	status.setAttribute("role", "alert");
 	status.textContent = `Widget error: ${message}`;
 	setBusy(false);
-	console.error(error);
+	console.error(cause);
 }
 
 function queueResultError(error: Error): void {
@@ -294,13 +294,13 @@ function queueResultError(error: Error): void {
 		.catch(showError);
 }
 
-function reportRuntimeError(error: unknown): void {
-	if (typeof document === "undefined") console.error(error);
-	else showError(error);
+function reportRuntimeError(cause: unknown): void {
+	if (!("document" in globalThis)) console.error(cause);
+	else showError(cause);
 }
 
-function getElement<T extends HTMLElement>(id: string): T {
+function getElement(id: string): HTMLElement {
 	const element = document.getElementById(id);
 	if (!element) throw new Error(`Missing element #${id}`);
-	return element as T;
+	return element;
 }

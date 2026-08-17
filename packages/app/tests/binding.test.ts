@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import {
@@ -8,10 +10,12 @@ import {
 	type InitializeProtocolScope,
 	type WidgetDefinition,
 } from "../src/binding";
-import { BridgeModel, type ModelPayload, type ModelRuntime } from "../src/model";
+import { BridgeModel, type ModelPayload, type ModelRuntime, type State } from "../src/model";
+import type { RuntimeValue } from "../src/runtime-value";
 import type { QueuedToolCall } from "../src/tool-calls";
+import { deferred } from "./runtime-test-support";
 
-function createModel(state: Record<string, unknown>): BridgeModel {
+function createModel(state: State): BridgeModel {
 	let model!: BridgeModel;
 	const runtime: ModelRuntime = {
 		model: () => model,
@@ -27,8 +31,8 @@ function createModel(state: Record<string, unknown>): BridgeModel {
 }
 
 function createRuntime(): BindingRuntime {
-	const host = {} as Host;
-	const experimental = {} as Experimental;
+	const host = createHost();
+	const experimental = createExperimental();
 	return {
 		host: () => host,
 		experimental: () => experimental,
@@ -36,32 +40,30 @@ function createRuntime(): BindingRuntime {
 }
 
 function element(): HTMLElement {
-	return { replaceChildren: vi.fn() } as unknown as HTMLElement;
+	return document.createElement("div");
 }
 
 function trackedElement(): HTMLElement {
-	const children = new Set<Node>();
-	return {
-		append: (...nodes: Node[]) => {
-			for (const node of nodes) children.add(node);
-		},
-		contains: (node: Node | null) => node !== null && children.has(node),
-		replaceChildren: vi.fn((...nodes: Node[]) => {
-			children.clear();
-			for (const node of nodes) children.add(node);
-		}),
-	} as unknown as HTMLElement;
+	return document.createElement("div");
 }
 
-function deferred<T>(): {
-	promise: Promise<T>;
-	resolve: (value: T) => void;
-} {
-	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((done) => {
-		resolve = done;
-	});
-	return { promise, resolve };
+function createHost(): Host {
+	return {
+		async getModel() {
+			throw new Error("Host model lookup is unavailable in this fixture");
+		},
+		async getWidget() {
+			throw new Error("Host widget lookup is unavailable in this fixture");
+		},
+	};
+}
+
+function createExperimental(): Experimental {
+	return {
+		async invoke(): Promise<[RuntimeValue, DataView[]]> {
+			return [undefined, []];
+		},
+	};
 }
 
 describe("WidgetBinding live source lifecycle", () => {
@@ -97,12 +99,12 @@ describe("WidgetBinding live source lifecycle", () => {
 		const rendered: string[] = [];
 		let invoked = false;
 		const runtime: BindingRuntime = {
-			host: () => ({}) as Host,
+			host: createHost,
 			experimental: () => ({
-				async invoke<T>() {
+				async invoke() {
 					invoked = true;
 					model.receive({ method: "update", state: { _esm: "second", _css: ".second {}" } }, []);
-					return [{} as T, []];
+					return [{}, []];
 				},
 			}),
 		};
@@ -142,11 +144,11 @@ describe("WidgetBinding live source lifecycle", () => {
 		const scopes: InitializeProtocolScope[] = [];
 		const cleanups: string[] = [];
 		const runtime: BindingRuntime = {
-			host: () => ({}) as Host,
+			host: createHost,
 			experimental: (_model, _signal, scope) => {
 				if (scope) scopes.push(scope);
 				return {
-					async invoke<T>() {
+					async invoke() {
 						const first = model.get("_esm") === "first";
 						model.receive(
 							{
@@ -158,7 +160,7 @@ describe("WidgetBinding live source lifecycle", () => {
 							},
 							[],
 						);
-						return [{} as T, []];
+						return [{}, []];
 					},
 				};
 			},
@@ -249,7 +251,7 @@ describe("WidgetBinding live source lifecycle", () => {
 	test("keeps a rendered mount present through hot-reload cleanup", async () => {
 		const model = createModel({ _esm: "first" });
 		const root = trackedElement();
-		const mount = {} as Node;
+		const mount = document.createTextNode("mount");
 		const cleanup = deferred<void>();
 		let cleanupStarted = false;
 		let presentAfterCleanup: boolean | undefined;
@@ -287,7 +289,7 @@ describe("WidgetBinding live source lifecycle", () => {
 
 	test("keeps a rendered mount present through disposal cleanup", async () => {
 		const root = trackedElement();
-		const mount = {} as Node;
+		const mount = document.createTextNode("mount");
 		const cleanup = deferred<void>();
 		let cleanupStarted = false;
 		let presentAfterCleanup: boolean | undefined;
@@ -320,8 +322,8 @@ describe("WidgetBinding live source lifecycle", () => {
 
 	test("preserves replacement-owned content when an old binding finishes disposal", async () => {
 		const root = trackedElement();
-		const oldMount = {} as Node;
-		const replacementMount = {} as Node;
+		const oldMount = document.createTextNode("old mount");
+		const replacementMount = document.createTextNode("replacement mount");
 		const cleanup = deferred<void>();
 		let cleanupStarted = false;
 		const oldBinding = new WidgetBinding(createRuntime(), createModel({ _esm: "old" }), {
@@ -365,7 +367,7 @@ describe("WidgetBinding live source lifecycle", () => {
 	test("clears an owned stale mount after a failed hot reload finishes cleanup", async () => {
 		const model = createModel({ _esm: "working" });
 		const root = trackedElement();
-		const mount = {} as Node;
+		const mount = document.createTextNode("mount");
 		const cleanup = deferred<void>();
 		const reportError = vi.fn();
 		let cleanupStarted = false;
@@ -405,11 +407,11 @@ describe("WidgetBinding live source lifecycle", () => {
 	test("scopes initialize and render experimental APIs to their generation", async () => {
 		const captured: Experimental[] = [];
 		const runtime: BindingRuntime = {
-			host: () => ({}) as Host,
+			host: createHost,
 			experimental: (_model, signal) => ({
-				async invoke<T>() {
+				async invoke() {
 					signal.throwIfAborted();
-					return [{} as T, []];
+					return [{}, []];
 				},
 			}),
 		};
@@ -527,7 +529,7 @@ describe("WidgetBinding live source lifecycle", () => {
 		await active.initialize();
 		await active.render(element(), new AbortController().signal);
 		const stalledRender = active.render(element(), new AbortController().signal);
-		const stalledRenderError = stalledRender.catch((error: unknown) => error);
+		const stalledRenderError = stalledRender.catch((cause: unknown) => cause);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(renderCount).toBe(2);
 		const disposal = active.dispose();
@@ -605,7 +607,7 @@ describe("WidgetBinding live source lifecycle", () => {
 		});
 		await binding.initialize();
 		const rendering = binding.render(element(), new AbortController().signal);
-		const renderError = rendering.catch((error: unknown) => error);
+		const renderError = rendering.catch((cause: unknown) => cause);
 		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
 
 		const disposal = binding.dispose();

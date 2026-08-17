@@ -39,7 +39,7 @@ function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
 		else signal.addEventListener("abort", abort, { once: true });
 		void task.then(
 			(value) => finish(() => resolve(value)),
-			(error: unknown) => finish(() => reject(error)),
+			(cause: unknown) => finish(() => reject(cause)),
 		);
 	});
 }

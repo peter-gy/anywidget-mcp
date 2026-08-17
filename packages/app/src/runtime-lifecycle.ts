@@ -1,19 +1,19 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import { ToolCallQueue } from "./tool-calls";
+import type { ToolArguments, ToolCalls } from "./tool-calls";
 import { retryTransport } from "./transport";
 
 export const RUNTIME_LIFECYCLE_TIMEOUT_MS = 3000;
 
 export function disposeServerSession(
-	calls: ToolCallQueue,
+	calls: ToolCalls,
 	sessionId: string,
 	message: string,
 	timeout = RUNTIME_LIFECYCLE_TIMEOUT_MS,
 	operationId?: string,
 ): Promise<CallToolResult> {
 	const signal = AbortSignal.timeout(timeout);
-	const args: Record<string, unknown> = { session_id: sessionId };
+	const args: ToolArguments = { session_id: sessionId };
 	if (operationId !== undefined) args.operation_id = operationId;
 	// callNow bypasses stalled protocol work. Reuse this argument object across
 	// transport retries so disposal keeps one replay identity.
@@ -36,10 +36,6 @@ export function randomId(): string {
 	return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
-export function abortReason(signal: AbortSignal): unknown {
-	return signal.reason ?? new DOMException("Widget runtime is closed", "AbortError");
-}
-
 export function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		let settled = false;
@@ -49,7 +45,10 @@ export function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> 
 			signal.removeEventListener("abort", abort);
 			callback();
 		};
-		const abort = (): void => finish(() => reject(abortReason(signal)));
+		const abort = (): void =>
+			finish(() =>
+				reject(signal.reason ?? new DOMException("Widget runtime is closed", "AbortError")),
+			);
 
 		if (signal.aborted) {
 			abort();
@@ -58,7 +57,7 @@ export function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> 
 		}
 		void task.then(
 			(value) => finish(() => resolve(value)),
-			(error: unknown) => finish(() => reject(error)),
+			(cause: unknown) => finish(() => reject(cause)),
 		);
 	});
 }

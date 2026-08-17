@@ -2,18 +2,26 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 type ServerToolCaller = Pick<App, "callServerTool">;
+export type ToolRequest = Parameters<App["callServerTool"]>[0];
+export type ToolArguments = NonNullable<Parameters<App["callServerTool"]>[0]["arguments"]>;
 export type QueuedToolCall = (
 	name: string,
-	args: Record<string, unknown>,
+	args: ToolArguments,
 	signal?: AbortSignal,
 ) => Promise<CallToolResult>;
 
-export class ToolCallQueue {
+export interface ToolCalls {
+	call(name: string, args: ToolArguments, signal?: AbortSignal): Promise<CallToolResult>;
+	transaction<T>(task: (call: QueuedToolCall) => Promise<T>, signal?: AbortSignal): Promise<T>;
+	callNow(name: string, args: ToolArguments, signal?: AbortSignal): Promise<CallToolResult>;
+}
+
+export class ToolCallQueue implements ToolCalls {
 	private tail = Promise.resolve();
 
 	constructor(private readonly app: ServerToolCaller) {}
 
-	call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
+	call(name: string, args: ToolArguments, signal?: AbortSignal): Promise<CallToolResult> {
 		return this.transaction((call) => call(name, args), signal);
 	}
 
@@ -36,20 +44,12 @@ export class ToolCallQueue {
 		return result;
 	}
 
-	callNow(
-		name: string,
-		args: Record<string, unknown>,
-		signal?: AbortSignal,
-	): Promise<CallToolResult> {
+	callNow(name: string, args: ToolArguments, signal?: AbortSignal): Promise<CallToolResult> {
 		signal?.throwIfAborted();
 		return this.invoke(name, args, signal);
 	}
 
-	private invoke(
-		name: string,
-		args: Record<string, unknown>,
-		signal?: AbortSignal,
-	): Promise<CallToolResult> {
+	private invoke(name: string, args: ToolArguments, signal?: AbortSignal): Promise<CallToolResult> {
 		signal?.throwIfAborted();
 		return this.app.callServerTool({ name, arguments: args }, signal ? { signal } : undefined);
 	}
@@ -77,7 +77,7 @@ function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
 		signal.addEventListener("abort", abort, { once: true });
 		void task.then(
 			(value) => settle(() => resolve(value)),
-			(error: unknown) => settle(() => reject(error)),
+			(cause: unknown) => settle(() => reject(cause)),
 		);
 		if (signal.aborted) abort();
 	});

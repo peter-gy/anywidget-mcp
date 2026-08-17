@@ -1,5 +1,13 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import type { State } from "./model";
+import {
+	isNumber,
+	isRecord,
+	isString,
+	type RuntimeRecord,
+	type RuntimeValue,
+} from "./runtime-value";
 import type { QueuedToolCall } from "./tool-calls";
 import { retryTransport } from "./transport";
 
@@ -7,7 +15,10 @@ export const PROTOCOL_VERSION = 1;
 
 export type AssetKind = "esm" | "css";
 export type SourceTrait = "_esm" | "_css";
-export type SourceRefs = Partial<Record<SourceTrait, string>>;
+export interface SourceRefs {
+	_esm?: string;
+	_css?: string;
+}
 
 interface AssetDescriptor {
 	kind: AssetKind;
@@ -80,8 +91,8 @@ export class AssetStore {
 	constructor(private readonly instanceId: string) {}
 
 	async resolve(
-		manifestValue: unknown,
-		refValues: unknown[],
+		manifestValue: RuntimeValue,
+		refValues: RuntimeValue[],
 		call: QueuedToolCall,
 		signal?: AbortSignal,
 	): Promise<Map<string, string>> {
@@ -89,10 +100,13 @@ export class AssetStore {
 		const manifest = normalizeManifest(manifestValue);
 		const references = new Set<string>();
 		for (const value of refValues) {
-			for (const [trait, assetId] of Object.entries(normalizeSourceRefs(value))) {
+			const refs = normalizeSourceRefs(value);
+			for (const trait of ["_esm", "_css"] as const) {
+				const assetId = refs[trait];
+				if (assetId === undefined) continue;
 				const descriptor = manifest.get(assetId);
 				if (!descriptor) throw new Error(`Missing manifest entry for widget asset ${assetId}`);
-				if (descriptor.kind !== SOURCE_KIND[trait as SourceTrait]) {
+				if (descriptor.kind !== SOURCE_KIND[trait]) {
 					throw new Error(`Widget asset ${assetId} has the wrong source kind for ${trait}`);
 				}
 				references.add(assetId);
@@ -215,7 +229,7 @@ export class AssetStore {
 	}
 }
 
-export function requireProtocolVersion(value: unknown): void {
+export function requireProtocolVersion<Value>(value: Value): void {
 	if (value !== PROTOCOL_VERSION) {
 		throw new Error(
 			`Widget payload protocol version ${String(value)} is incompatible with version ${PROTOCOL_VERSION}`,
@@ -223,7 +237,7 @@ export function requireProtocolVersion(value: unknown): void {
 	}
 }
 
-export function normalizeSourceRefs(value: unknown): SourceRefs {
+export function normalizeSourceRefs<Value>(value: Value): SourceRefs {
 	if (value === undefined) return {};
 	if (!isRecord(value)) throw new Error("Widget source references must be an object");
 	const refs: SourceRefs = {};
@@ -231,7 +245,7 @@ export function normalizeSourceRefs(value: unknown): SourceRefs {
 		if (trait !== "_esm" && trait !== "_css") {
 			throw new Error(`Unknown widget source reference ${trait}`);
 		}
-		if (typeof assetId !== "string" || !ASSET_ID.test(assetId)) {
+		if (!isString(assetId) || !ASSET_ID.test(assetId)) {
 			throw new Error(`Invalid widget source reference for ${trait}`);
 		}
 		refs[trait] = assetId;
@@ -240,10 +254,10 @@ export function normalizeSourceRefs(value: unknown): SourceRefs {
 }
 
 export function hydrateSources(
-	state: Record<string, unknown>,
-	refValue: unknown,
+	state: State,
+	refValue: RuntimeValue,
 	assets: Map<string, string>,
-): Record<string, unknown> {
+): State {
 	for (const trait of ["_esm", "_css"] as const) {
 		if (Object.hasOwn(state, trait)) {
 			throw new Error(`Widget source ${trait} must use a content-addressed reference`);
@@ -271,7 +285,7 @@ export function clearAssetMemoryCache(): void {
 	memoryCache.clear();
 }
 
-function normalizeManifest(value: unknown): Map<string, AssetDescriptor> {
+function normalizeManifest<Value>(value: Value): Map<string, AssetDescriptor> {
 	if (!isRecord(value)) throw new Error("Widget payload has no asset manifest");
 	const manifest = new Map<string, AssetDescriptor>();
 	for (const [assetId, raw] of Object.entries(value)) {
@@ -282,7 +296,7 @@ function normalizeManifest(value: unknown): Map<string, AssetDescriptor> {
 		if (
 			(kind !== "esm" && kind !== "css") ||
 			match[1] !== kind ||
-			typeof byteLength !== "number" ||
+			!isNumber(byteLength) ||
 			!Number.isSafeInteger(byteLength) ||
 			byteLength < 0
 		) {
@@ -293,16 +307,16 @@ function normalizeManifest(value: unknown): Map<string, AssetDescriptor> {
 	return manifest;
 }
 
-function normalizeContent(assetId: string, value: Record<string, unknown>): AssetContent {
+function normalizeContent(assetId: string, value: RuntimeRecord): AssetContent {
 	const kind = value.kind;
 	const byteLength = value.byteLength;
 	const text = value.text;
 	if (
 		(kind !== "esm" && kind !== "css") ||
-		typeof byteLength !== "number" ||
+		!isNumber(byteLength) ||
 		!Number.isSafeInteger(byteLength) ||
 		byteLength < 0 ||
-		typeof text !== "string"
+		!isString(text)
 	) {
 		throw new Error(`Invalid widget asset content ${assetId}`);
 	}
@@ -377,7 +391,7 @@ function withDeadline<T>(task: Promise<T>, milliseconds: number, signal?: AbortS
 		signal?.addEventListener("abort", abort, { once: true });
 		void task.then(
 			(value) => finish(() => resolve(value)),
-			(error: unknown) => finish(() => reject(error)),
+			(cause: unknown) => finish(() => reject(cause)),
 		);
 		if (signal?.aborted) abort();
 	});
@@ -390,8 +404,4 @@ function cacheKey(assetId: string): string {
 function toolErrorText(result: CallToolResult): string {
 	const text = result.content.find((item) => item.type === "text");
 	return text?.text ?? "Widget asset request failed";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

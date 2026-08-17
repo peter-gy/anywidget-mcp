@@ -4,8 +4,8 @@ import { dirname, join, parse } from "node:path";
 import type { Plugin } from "vite";
 
 interface PackageJson {
-	name?: unknown;
-	version?: unknown;
+	name: string;
+	version: string;
 }
 
 interface PackageNotice {
@@ -26,8 +26,8 @@ function findPackageNotice(moduleId: string): PackageNotice | undefined {
 	while (directory !== root) {
 		const packageJsonPath = join(directory, "package.json");
 		if (existsSync(packageJsonPath)) {
-			const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as PackageJson;
-			if (typeof packageJson.name === "string" && typeof packageJson.version === "string") {
+			const packageJson = parsePackageJson(readFileSync(packageJsonPath, "utf8"));
+			if (packageJson) {
 				const licenseFiles = readdirSync(directory)
 					.filter((entry) => LICENSE_FILENAME.test(entry))
 					.sort();
@@ -49,6 +49,23 @@ function findPackageNotice(moduleId: string): PackageNotice | undefined {
 		directory = dirname(directory);
 	}
 	return undefined;
+}
+
+function parsePackageJson(text: string): PackageJson | undefined {
+	const value: unknown = JSON.parse(text);
+	if (!isPlainObject(value)) return undefined;
+	const name: unknown = Object.getOwnPropertyDescriptor(value, "name")?.value;
+	const version: unknown = Object.getOwnPropertyDescriptor(value, "version")?.value;
+	if (!isString(name) || !isString(version)) return undefined;
+	return { name, version };
+}
+
+function isPlainObject<Value>(value: Value): value is Value & object {
+	return Object(value) === value && !Array.isArray(value);
+}
+
+function isString<Value>(value: Value): value is Value & string {
+	return Object(value) !== value && Object.getPrototypeOf(Object(value)) === String.prototype;
 }
 
 function renderNotices(moduleIds: Iterable<string>): string {

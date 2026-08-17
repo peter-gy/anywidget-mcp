@@ -49,10 +49,10 @@ jobs:
       - name: Check Python formatting, linting, and types
         run: |
           uv lock --check
-          uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp scripts
-          uv run --package anywidget-mcp ruff check packages/anywidget-mcp scripts
-          uv run --package anywidget-mcp ty check packages/anywidget-mcp scripts
-          uv run --package anywidget-mcp pyrefly check --min-severity warn
+          uv run ruff format --check packages/anywidget-mcp scripts
+          uv run ruff check packages/anywidget-mcp scripts
+          uv run ty check packages/anywidget-mcp scripts
+          uv run pyrefly check --min-severity warn
 
       - name: Check shell scripts
         run: shellcheck scripts/*.sh
@@ -101,7 +101,7 @@ jobs:
       - name: Run Python tests
         env:
           UV_PYTHON: ${{ matrix.python-version }}
-        run: uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
+        run: uv run pytest -q packages/anywidget-mcp/tests
 
   test-js:
     runs-on: ubuntu-latest

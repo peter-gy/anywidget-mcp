@@ -3,12 +3,16 @@
 	"private": true,
 	"scripts": {
 		"build": "vp run -r build",
-		"check": "vp check --no-error-on-unmatched-pattern .github apps development_docs docs packages scripts AGENTS.md CLAUDE.md README.md package.json pnpm-lock.yaml pnpm-workspace.yaml pyproject.toml tsconfig.json vite.config.ts && vp run -r typecheck",
+		"check": "vp check --no-error-on-unmatched-pattern .github apps development_docs docs packages scripts AGENTS.md CLAUDE.md README.md package.json pnpm-lock.yaml pnpm-workspace.yaml pyproject.toml tsconfig.json vite.config.ts && pnpm check:anti-slop && vp run -r typecheck",
+		"check:anti-slop": "node --test --test-concurrency=1 tools/oxlint/anti-slop/test/*.test.ts tools/oxlint/anti-slop/test/compatibility/*.test.ts && tsc -p tools/oxlint/anti-slop/tsconfig.json --noEmit",
 		"dev": "vp run @anywidget-mcp/python#dev",
 		"test": "vp run -r test"
 	},
 	"devDependencies": {
+		"@oxlint/plugins": "catalog:",
 		"@types/node": "catalog:",
+		"oxlint": "catalog:",
+		"oxlint-tsgolint": "catalog:",
 		"typescript": "catalog:",
 		"vite": "catalog:",
 		"vite-plus": "catalog:",

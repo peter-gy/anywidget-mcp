@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { ModelContextSync, type ModelContextSnapshot } from "../src/context";
+import { ModelContextSync, type ContextApp, type ModelContextSnapshot } from "../src/context";
+import { isNumber, isRecord } from "../src/runtime-value";
+
+type UpdateParams = Parameters<ContextApp["updateModelContext"]>[0];
 
 function snapshot(version: number): ModelContextSnapshot {
 	return {
@@ -10,12 +13,23 @@ function snapshot(version: number): ModelContextSnapshot {
 	};
 }
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
+interface VoidDeferred {
+	promise: Promise<void>;
+	resolve(): void;
+}
+
+function deferred(): VoidDeferred {
 	let resolve!: () => void;
 	const promise = new Promise<void>((done) => {
 		resolve = done;
 	});
 	return { promise, resolve };
+}
+
+function contextValue(params: UpdateParams): number | undefined {
+	const structured = params.structuredContent;
+	if (!isRecord(structured) || !isRecord(structured.state)) return undefined;
+	return isNumber(structured.state.value) ? structured.state.value : undefined;
 }
 
 describe("ModelContextSync", () => {
@@ -102,10 +116,10 @@ describe("ModelContextSync", () => {
 
 	test("retains one latest snapshot behind an in-flight update", async () => {
 		const first = deferred();
-		const calls: unknown[] = [];
+		const calls: UpdateParams[] = [];
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
-			async updateModelContext(params: unknown) {
+			async updateModelContext(params: UpdateParams) {
 				calls.push(params);
 				if (calls.length === 1) await first.promise;
 				return {};
@@ -170,11 +184,11 @@ describe("ModelContextSync", () => {
 	});
 
 	test("times out a wedged host update and sends the latest snapshot", async () => {
-		const calls: unknown[] = [];
+		const calls: UpdateParams[] = [];
 		const reportError = vi.fn();
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
-			updateModelContext(params: unknown) {
+			updateModelContext(params: UpdateParams) {
 				calls.push(params);
 				if (calls.length === 1) return new Promise<never>(() => undefined);
 				return Promise.resolve({});
@@ -205,9 +219,8 @@ describe("ModelContextSync", () => {
 		let visible = 0;
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
-			updateModelContext(params: unknown) {
-				const context = params as { structuredContent?: { state?: { value?: number } } };
-				const value = context.structuredContent?.state?.value ?? 0;
+			updateModelContext(params: UpdateParams) {
+				const value = contextValue(params) ?? 0;
 				calls.push(value);
 				if (calls.length === 1) {
 					return first.promise.then(() => {
@@ -287,9 +300,8 @@ describe("ModelContextSync", () => {
 		const events: string[] = [];
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
-			updateModelContext(params: unknown) {
-				const context = params as { structuredContent?: { state?: { value?: number } } };
-				const value = context.structuredContent?.state?.value;
+			updateModelContext(params: UpdateParams) {
+				const value = contextValue(params);
 				events.push(`start:${value}`);
 				if (value !== 1) return Promise.resolve({});
 				return oldRequest.promise.then(() => {
@@ -327,9 +339,8 @@ describe("ModelContextSync", () => {
 		let visible = 0;
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
-			updateModelContext(params: unknown) {
-				const context = params as { structuredContent?: { state?: { value?: number } } };
-				const value = context.structuredContent?.state?.value ?? 0;
+			updateModelContext(params: UpdateParams) {
+				const value = contextValue(params) ?? 0;
 				events.push(`start:${value}`);
 				if (value === 1) {
 					return oldRequest.promise.then(() => {

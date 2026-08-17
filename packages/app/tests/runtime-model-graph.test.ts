@@ -1,11 +1,21 @@
-import type { App } from "@modelcontextprotocol/ext-apps";
+// @vitest-environment jsdom
+
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test, vi } from "vite-plus/test";
 
-import { WidgetRuntime } from "../src/app";
 import { WidgetBinding, type RuntimeBinding, type WidgetDefinition } from "../src/binding";
-import { ToolCallQueue } from "../src/tool-calls";
-import { deferred, fakeQueue, FakeBinding } from "./runtime-test-support";
+import { WidgetRuntime } from "../src/runtime";
+import type { RuntimeValue } from "../src/runtime-value";
+import { ToolCallQueue, type ToolArguments, type ToolRequest } from "../src/tool-calls";
+import {
+	deferred,
+	fakeQueue,
+	FakeBinding,
+	fixtureRecord,
+	fixtureString,
+	fixtureStrings,
+	fixtureTextValue,
+} from "./runtime-test-support";
 
 describe("WidgetRuntime launch and model graph", () => {
 	test("aborts a stalled mount before render and disposes its server session once", async () => {
@@ -27,7 +37,7 @@ describe("WidgetRuntime launch and model graph", () => {
 			{
 				getHostCapabilities: () => ({}),
 				updateModelContext: vi.fn().mockResolvedValue({}),
-			} as unknown as App,
+			},
 			Promise.resolve(),
 			(): RuntimeBinding => ({
 				async initialize() {
@@ -44,7 +54,7 @@ describe("WidgetRuntime launch and model graph", () => {
 			}),
 		);
 		const controller = new AbortController();
-		const mounting = runtime.mount({} as HTMLElement, controller.signal);
+		const mounting = runtime.mount(document.createElement("div"), controller.signal);
 		await initializing.promise;
 
 		controller.abort(new DOMException("superseded", "AbortError"));
@@ -78,13 +88,15 @@ describe("WidgetRuntime launch and model graph", () => {
 				getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
 				updateModelContext,
 				callServerTool,
-			} as unknown as App;
+			};
 			const loadWidget = vi.fn(async (source: string): Promise<WidgetDefinition> => {
 				events.push(`load:${source}`);
 				return {
 					initialize({ model }) {
 						phase = "initialize";
-						events.push(`initialize:${String(model.get("_esm"))}:${String(model.get("value"))}`);
+						events.push(
+							`initialize:${fixtureString(model.get("_esm"))}:${fixtureTextValue(model.get("value"))}`,
+						);
 						model.on("msg:custom", (content) => {
 							custom.push({ content, phase });
 							events.push(`custom:${phase}`);
@@ -93,7 +105,9 @@ describe("WidgetRuntime launch and model graph", () => {
 					},
 					render({ model }) {
 						phase = "render";
-						events.push(`render:${String(model.get("_esm"))}:${String(model.get("value"))}`);
+						events.push(
+							`render:${fixtureString(model.get("_esm"))}:${fixtureTextValue(model.get("value"))}`,
+						);
 					},
 				};
 			});
@@ -139,7 +153,7 @@ describe("WidgetRuntime launch and model graph", () => {
 						replaceCss,
 					}),
 			);
-			const element = { replaceChildren: vi.fn() } as unknown as HTMLElement;
+			const element = document.createElement("div");
 
 			await runtime.mount(element);
 
@@ -172,7 +186,7 @@ describe("WidgetRuntime launch and model graph", () => {
 			getHostCapabilities: () => ({}),
 			updateModelContext: vi.fn().mockResolvedValue({}),
 			callServerTool: vi.fn().mockResolvedValue({ content: [] }),
-		} as unknown as App;
+		};
 
 		expect(
 			() =>
@@ -234,18 +248,15 @@ describe("WidgetRuntime launch and model graph", () => {
 			},
 		};
 		const call = vi.fn(
-			async (
-				name: string,
-				_args: Record<string, unknown>,
-				_signal?: AbortSignal,
-			): Promise<CallToolResult> => (name === "anywidget_comm" ? update : { content: [] }),
+			async (name: string, _args: ToolArguments, _signal?: AbortSignal): Promise<CallToolResult> =>
+				name === "anywidget_comm" ? update : { content: [] },
 		);
 		const callNow = vi.fn().mockResolvedValue({ content: [] });
 		const calls = fakeQueue(call, callNow);
 		const app = {
 			getHostCapabilities: () => ({}),
 			updateModelContext: vi.fn().mockResolvedValue({}),
-		} as unknown as App;
+		};
 		const runtime = new WidgetRuntime(
 			{
 				instanceId: "instance-1",
@@ -271,7 +282,7 @@ describe("WidgetRuntime launch and model graph", () => {
 		root.on("change:child", () => {
 			events.push("message:parent");
 			expect(runtime.model(oldId).modelId).toBe(oldId);
-			const ref = String(root.get("child"));
+			const ref = fixtureString(root.get("child"));
 			resolvedWidget = runtime
 				.host(new AbortController().signal)
 				.getWidget(ref)
@@ -315,49 +326,43 @@ describe("WidgetRuntime launch and model graph", () => {
 			const transientId = "transient-child";
 			const outerResult = deferred<CallToolResult>();
 			const cleanup = vi.fn();
-			const pollAcknowledgments: unknown[] = [];
-			const callServerTool = vi.fn(
-				async (request: {
-					name: string;
-					arguments?: Record<string, unknown>;
-				}): Promise<CallToolResult> => {
-					if (request.name === "anywidget_dispose") return { content: [] };
-					if (request.name === "anywidget_poll") {
-						pollAcknowledgments.push(request.arguments?.acknowledged_model_ids);
-						return { content: [] };
-					}
-					if (request.arguments?.operation_id === "outer-operation") {
-						return outerResult.promise;
-					}
-					const data = request.arguments?.data as
-						| { method?: string; content?: Record<string, unknown> }
-						| undefined;
-					if (data?.method === "custom") {
-						return {
-							content: [],
-							_meta: {
-								anywidget: {
-									messages: [
-										{
-											modelId: transientId,
-											data: {
-												method: "custom",
-												content: {
-													id: data.content?.id,
-													kind: "anywidget-command-response",
-													response: { ready: true },
-												},
-											},
-											buffers: [],
-										},
-									],
-								},
-							},
-						};
-					}
+			const pollAcknowledgments: RuntimeValue[] = [];
+			const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
+				if (request.name === "anywidget_dispose") return { content: [] };
+				if (request.name === "anywidget_poll") {
+					pollAcknowledgments.push(fixtureStrings(request.arguments?.acknowledged_model_ids));
 					return { content: [] };
-				},
-			);
+				}
+				if (request.arguments?.operation_id === "outer-operation") {
+					return outerResult.promise;
+				}
+				const data = fixtureRecord(request.arguments?.data);
+				if (data.method === "custom") {
+					const content = fixtureRecord(data.content);
+					return {
+						content: [],
+						_meta: {
+							anywidget: {
+								messages: [
+									{
+										modelId: transientId,
+										data: {
+											method: "custom",
+											content: {
+												id: content.id,
+												kind: "anywidget-command-response",
+												response: { ready: true },
+											},
+										},
+										buffers: [],
+									},
+								],
+							},
+						},
+					};
+				}
+				return { content: [] };
+			});
 			const runtime = new WidgetRuntime(
 				{
 					instanceId: "instance-1",
@@ -366,11 +371,11 @@ describe("WidgetRuntime launch and model graph", () => {
 						[rootId]: { modelId: rootId, state: { _esm: "root" } },
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(bindingRuntime, model) => {
 					if (model.modelId === rootId) return new FakeBinding(model, []);
@@ -386,7 +391,7 @@ describe("WidgetRuntime launch and model graph", () => {
 					});
 				},
 			);
-			await runtime.mount({} as HTMLElement);
+			await runtime.mount(document.createElement("div"));
 			const outer = runtime.send(rootId, { method: "update", state: {} }, [], "outer-operation");
 
 			await vi.advanceTimersByTimeAsync(500);
@@ -430,7 +435,7 @@ describe("WidgetRuntime launch and model graph", () => {
 			const call = vi.fn(
 				async (
 					name: string,
-					_args: Record<string, unknown>,
+					_args: ToolArguments,
 					_signal?: AbortSignal,
 				): Promise<CallToolResult> =>
 					name === "anywidget_comm"
@@ -454,7 +459,7 @@ describe("WidgetRuntime launch and model graph", () => {
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_bindingRuntime, model): RuntimeBinding => ({
 					async initialize() {},
@@ -539,7 +544,7 @@ describe("WidgetRuntime launch and model graph", () => {
 			{
 				getHostCapabilities: () => ({}),
 				updateModelContext: vi.fn().mockResolvedValue({}),
-			} as unknown as App,
+			},
 			Promise.resolve(),
 			(_runtime, model): RuntimeBinding => ({
 				async initialize() {

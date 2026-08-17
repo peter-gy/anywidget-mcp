@@ -1,4 +1,3 @@
-import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test, vi } from "vite-plus/test";
 
@@ -15,7 +14,7 @@ describe("widget session disposal", () => {
 				.mockRejectedValueOnce(new Error("second response lost"))
 				.mockResolvedValue({ content: [] });
 			const disposal = disposeServerSession(
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				"bootstrap-capability",
 				"disposal timed out",
 				1000,
@@ -57,7 +56,7 @@ describe("widget session disposal", () => {
 
 		await expect(
 			disposeServerSession(
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				"instance-1",
 				"disposal timed out",
 			),
@@ -70,7 +69,7 @@ describe("widget session disposal", () => {
 
 		await expect(
 			disposeServerSession(
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				"instance-1",
 				"disposal timed out",
 				20,

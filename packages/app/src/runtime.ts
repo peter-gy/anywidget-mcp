@@ -1,15 +1,15 @@
-import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { AssetStore, requireProtocolVersion } from "./assets";
 import {
 	WidgetBinding,
 	type Experimental,
+	type ExperimentalInvokeOptions,
 	type Host,
 	type InitializeProtocolScope,
 	type RuntimeBinding,
 } from "./binding";
-import { ModelContextSync, type ModelContextSnapshot } from "./context";
+import { ModelContextSync, type ContextApp, type ModelContextSnapshot } from "./context";
 import {
 	BridgeModel,
 	scopedModel,
@@ -17,10 +17,10 @@ import {
 	serializeUpdate,
 	type CommData,
 	type ModelPayload,
+	type State,
 } from "./model";
 import {
 	abortable,
-	abortReason,
 	disposeServerSession,
 	randomId,
 	RUNTIME_LIFECYCLE_TIMEOUT_MS,
@@ -32,14 +32,12 @@ import {
 	hydrateRawMessages,
 	hydrateRawModels,
 	hydrateRuntimePayload,
-	isRecord,
 	normalizeContext,
 	normalizeMessages,
 	normalizeModelChanges,
 	normalizeModels,
 	parseWidgetRef,
 	pollDelayLimit,
-	type RawCommMessage,
 	type RawRuntimePayload,
 	requiredString,
 	resultAnywidget,
@@ -50,11 +48,12 @@ import {
 	resultRemovedModelIds,
 	sourceRefValues,
 } from "./runtime-payload";
-import { ToolCallQueue, type QueuedToolCall } from "./tool-calls";
+import type { RuntimeValue, WidgetValue } from "./runtime-value";
+import type { QueuedToolCall, ToolArguments, ToolCalls } from "./tool-calls";
 import { retryTransport } from "./transport";
 
 type BindingFactory = (runtime: WidgetRuntime, model: BridgeModel) => RuntimeBinding;
-type ErrorReporter = (error: unknown) => void;
+type ErrorReporter = (cause: unknown) => void;
 const POLL_ACTIVE_DELAY_MS = 500;
 const POLL_IDLE_DELAYS_MS = [POLL_ACTIVE_DELAY_MS, 1000, 2000, 5000, 10_000, 15_000] as const;
 
@@ -62,7 +61,7 @@ interface UpdateProtocolOperation {
 	kind: "update";
 	sequence: number;
 	model: BridgeModel;
-	state: Map<string, unknown>;
+	state: Map<string, WidgetValue>;
 	operationId: string;
 }
 
@@ -78,7 +77,7 @@ interface CustomProtocolOperation {
 	completed: boolean;
 	abortDeadline?: ReturnType<typeof globalThis.setTimeout>;
 	resolve?: () => void;
-	reject?: (error: unknown) => void;
+	reject?: (cause: unknown) => void;
 }
 
 interface PollProtocolOperation {
@@ -86,7 +85,7 @@ interface PollProtocolOperation {
 	sequence: number;
 	operationId: string;
 	resolve(messageCount: number): void;
-	reject(error: unknown): void;
+	reject(cause: unknown): void;
 }
 
 type ProtocolOperation = UpdateProtocolOperation | CustomProtocolOperation | PollProtocolOperation;
@@ -116,8 +115,8 @@ export class WidgetRuntime {
 
 	static async create(
 		payload: RawRuntimePayload,
-		calls: ToolCallQueue,
-		app: App,
+		calls: ToolCalls,
+		app: ContextApp,
 		connected: Promise<void>,
 		createBinding?: BindingFactory,
 		signal?: AbortSignal,
@@ -157,8 +156,8 @@ export class WidgetRuntime {
 
 	constructor(
 		payload: RawRuntimePayload,
-		private readonly calls: ToolCallQueue,
-		app: App,
+		private readonly calls: ToolCalls,
+		app: ContextApp,
 		connected: Promise<void>,
 		createBinding?: BindingFactory,
 		assetStore?: AssetStore,
@@ -227,7 +226,7 @@ export class WidgetRuntime {
 		this.noteProtocolActivity();
 	}
 
-	enqueueUpdate(model: BridgeModel, state: Map<string, unknown>): void {
+	enqueueUpdate(model: BridgeModel, state: Map<string, WidgetValue>): void {
 		if (this.disposed || this.models.get(model.modelId) !== model) return;
 		const tail = this.protocolOperations.at(-1);
 		if (tail?.kind === "update" && tail.model === model) {
@@ -249,11 +248,13 @@ export class WidgetRuntime {
 		this.appendCustom(model, data, buffers);
 	}
 
-	dispose(reason?: unknown): Promise<void> {
+	dispose(cause?: unknown): Promise<void> {
 		if (this.disposeTask) return this.disposeTask;
 		this.disposed = true;
-		this.controller.abort(reason);
-		this.cancelQueuedProtocolOperations(abortReason(this.controller.signal));
+		this.controller.abort(cause);
+		this.cancelQueuedProtocolOperations(
+			this.controller.signal.reason ?? new DOMException("Widget runtime is closed", "AbortError"),
+		);
 		const task = this.finishDispose();
 		this.disposeTask = task;
 		return task;
@@ -266,7 +267,7 @@ export class WidgetRuntime {
 			"Timed out while disposing widget session",
 		).then(
 			() => ({ error: undefined }),
-			(error: unknown) => ({ error }),
+			(cause: unknown) => ({ error: cause }),
 		);
 		await this.contextSync.dispose();
 		await withTimeout(
@@ -329,17 +330,17 @@ export class WidgetRuntime {
 		protocolScope?: InitializeProtocolScope,
 	): Experimental {
 		return {
-			invoke: <T>(
+			invoke: (
 				name: string,
-				message?: unknown,
-				options: { buffers?: DataView[]; signal?: AbortSignal } = {},
-			): Promise<[T, DataView[]]> => {
+				message?: WidgetValue,
+				options: ExperimentalInvokeOptions = {},
+			): Promise<[RuntimeValue, DataView[]]> => {
 				const id = randomId();
 				const requestSignal = options.signal ?? AbortSignal.timeout(3000);
 				const signal = AbortSignal.any([scopeSignal, requestSignal]);
-				const result = new Promise<[T, DataView[]]>((resolve, reject) => {
+				const result = new Promise<[RuntimeValue, DataView[]]>((resolve, reject) => {
 					let settled = false;
-					let response: [T, DataView[]] | undefined;
+					let response: [RuntimeValue, DataView[]] | undefined;
 					let operation: CustomProtocolOperation | undefined;
 					let removeResponseHandler: () => void = () => undefined;
 					const finish = (callback: () => void): void => {
@@ -349,11 +350,12 @@ export class WidgetRuntime {
 						signal.removeEventListener("abort", abort);
 						callback();
 					};
-					const handler = (content: Record<string, unknown>, buffers: DataView[]) => {
-						response = [content.response as T, buffers];
+					const handler = (content: State, buffers: DataView[]) => {
+						response = [content.response, buffers];
 					};
 					const abort = () => {
-						const error = abortReason(signal);
+						const error =
+							signal.reason ?? new DOMException("Widget command is closed", "AbortError");
 						// Remove commands that have not reached the server. Once dispatched, keep the
 						// transaction alive to apply authoritative state, then fail if it stalls.
 						if (operation) {
@@ -378,7 +380,7 @@ export class WidgetRuntime {
 					try {
 						const serialized = serializeCustom(content, options.buffers);
 						let complete!: () => void;
-						let fail!: (error: unknown) => void;
+						let fail!: (cause: unknown) => void;
 						const completion = new Promise<void>((resolveCompletion, rejectCompletion) => {
 							complete = resolveCompletion;
 							fail = rejectCompletion;
@@ -391,14 +393,19 @@ export class WidgetRuntime {
 							fail,
 							signal,
 						);
-						if (!operation) throw abortReason(this.controller.signal);
+						if (!operation) {
+							throw (
+								this.controller.signal.reason ??
+								new DOMException("Widget runtime is closed", "AbortError")
+							);
+						}
 						void completion.then(
 							() => {
 								const captured = response;
 								if (captured) finish(() => resolve(captured));
 								else finish(() => reject(new Error(`Command ${name} returned no response`)));
 							},
-							(error: unknown) => finish(() => reject(error)),
+							(cause: unknown) => finish(() => reject(cause)),
 						);
 						if (protocolScope?.active) {
 							void this.runInitializeOperations(protocolScope, operation, signal).catch(
@@ -475,7 +482,11 @@ export class WidgetRuntime {
 	}
 
 	private enqueuePoll(): Promise<number> {
-		if (this.disposed) return Promise.reject(abortReason(this.controller.signal));
+		if (this.disposed) {
+			return Promise.reject(
+				this.controller.signal.reason ?? new DOMException("Widget runtime is closed", "AbortError"),
+			);
+		}
 		return new Promise<number>((resolve, reject) => {
 			this.protocolOperations.push({
 				kind: "poll",
@@ -503,8 +514,8 @@ export class WidgetRuntime {
 			this.protocolTask = undefined;
 			this.startProtocolOperations();
 		};
-		void task.then(finish, (error: unknown) => {
-			if (!this.controller.signal.aborted) this.fail(error);
+		void task.then(finish, (cause: unknown) => {
+			if (!this.controller.signal.aborted) this.fail(cause);
 			finish();
 		});
 	}
@@ -545,7 +556,7 @@ export class WidgetRuntime {
 			operation.kind === "custom"
 				? () => operation.signal.aborted && !operation.dispatched
 				: undefined;
-		const process = (name: string, args: Record<string, unknown>): Promise<number> =>
+		const process = (name: string, args: ToolArguments): Promise<number> =>
 			call
 				? this.processProtocolCall(call, name, args, signal, beforeDispatch, suppressFailure)
 				: this.callAndProcess(name, args, signal, beforeDispatch, suppressFailure);
@@ -601,7 +612,7 @@ export class WidgetRuntime {
 		data: CommData,
 		buffers: string[],
 		resolve?: () => void,
-		reject?: (error: unknown) => void,
+		reject?: (cause: unknown) => void,
 		signal = this.controller.signal,
 	): CustomProtocolOperation | undefined {
 		if (this.disposed || this.models.get(model.modelId) !== model) return undefined;
@@ -668,16 +679,16 @@ export class WidgetRuntime {
 		}
 	}
 
-	private cancelQueuedProtocolOperations(error: unknown): void {
+	private cancelQueuedProtocolOperations(cause: unknown): void {
 		for (const operation of this.protocolOperations) {
-			this.rejectProtocolOperation(operation, error);
+			this.rejectProtocolOperation(operation, cause);
 		}
 		this.protocolOperations.length = 0;
 	}
 
-	private rejectProtocolOperation(operation: ProtocolOperation, error: unknown): void {
+	private rejectProtocolOperation(operation: ProtocolOperation, cause: unknown): void {
 		if (operation.kind === "custom") this.completeCustomOperation(operation);
-		if (operation.kind === "poll" || operation.kind === "custom") operation.reject?.(error);
+		if (operation.kind === "poll" || operation.kind === "custom") operation.reject?.(cause);
 	}
 
 	private completeCustomOperation(operation: CustomProtocolOperation): void {
@@ -698,7 +709,7 @@ export class WidgetRuntime {
 
 	private callAndProcess(
 		name: string,
-		args: Record<string, unknown>,
+		args: ToolArguments,
 		signal = this.controller.signal,
 		beforeDispatch?: () => void,
 		suppressFailure?: () => boolean,
@@ -712,7 +723,7 @@ export class WidgetRuntime {
 	private async processProtocolCall(
 		call: QueuedToolCall,
 		name: string,
-		args: Record<string, unknown>,
+		args: ToolArguments,
 		signal = this.controller.signal,
 		beforeDispatch?: () => void,
 		suppressFailure?: () => boolean,
@@ -738,7 +749,7 @@ export class WidgetRuntime {
 	private async callWithRetry(
 		call: QueuedToolCall,
 		name: string,
-		args: Record<string, unknown>,
+		args: ToolArguments,
 		signal = this.controller.signal,
 		beforeDispatch?: () => void,
 	): Promise<CallToolResult> {
@@ -751,9 +762,9 @@ export class WidgetRuntime {
 		}, signal);
 	}
 
-	private fail(error: unknown): void {
-		this.reportError(error);
-		void this.dispose(error).catch(this.reportError);
+	private fail(cause: unknown): void {
+		this.reportError(cause);
+		void this.dispose(cause).catch(this.reportError);
 	}
 
 	private processResult(
@@ -771,7 +782,7 @@ export class WidgetRuntime {
 	): Promise<number> {
 		if (this.disposed) return 0;
 		let rawModels = resultModels(result);
-		let rawMessages: unknown = resultMessages(result);
+		let rawMessages = resultMessages(result);
 		if (this.assetStore) {
 			const payload = resultAnywidget(result);
 			requireProtocolVersion(payload?.protocolVersion);
@@ -839,22 +850,15 @@ export class WidgetRuntime {
 		this.bindings.set(payload.modelId, this.createBinding(this, model));
 	}
 
-	private applyLaunchMessages(value: unknown): void {
-		if (value === undefined) return;
-		if (!Array.isArray(value)) throw new Error("Widget launch messages must be an array");
-		const messages = value.map((item, index) => {
-			if (!isRecord(item)) throw new Error(`Invalid widget launch message ${index}`);
-			const raw = item as RawCommMessage;
+	private applyLaunchMessages(value: RuntimeValue): void {
+		const messages = normalizeMessages(value).map((raw, index) => {
 			const modelId = requiredString(raw.modelId, `model ID for launch message ${index}`);
 			const model = this.models.get(modelId);
 			if (!model) {
 				throw new Error(`Widget launch message references unknown model ${modelId}`);
 			}
-			if (!isRecord(raw.data)) {
+			if (raw.data === undefined) {
 				throw new Error(`Widget launch message ${index} has no comm data`);
-			}
-			if (raw.buffers !== undefined && !Array.isArray(raw.buffers)) {
-				throw new Error(`Widget launch message ${index} buffers must be an array`);
 			}
 			return { model, data: raw.data, buffers: decodeBuffers(raw.buffers) };
 		});

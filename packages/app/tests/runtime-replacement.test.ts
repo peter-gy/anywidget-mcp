@@ -2,7 +2,12 @@ import { describe, expect, test, vi } from "vite-plus/test";
 
 import { beginRuntimeReplacement } from "../src/runtime-replacement";
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
+interface VoidDeferred {
+	promise: Promise<void>;
+	resolve(): void;
+}
+
+function deferred(): VoidDeferred {
 	let resolve!: () => void;
 	const promise = new Promise<void>((done) => {
 		resolve = done;

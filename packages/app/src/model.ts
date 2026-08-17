@@ -1,6 +1,17 @@
+import {
+	isBoolean,
+	isNumber,
+	isPlainObject,
+	isRecord,
+	isString,
+	type RuntimeRecord,
+	type RuntimeValue,
+	type WidgetValue,
+} from "./runtime-value";
+
 export type JsonPath = Array<string | number>;
-export type EventHandler = (...args: unknown[]) => void;
-export type State = Record<string, unknown>;
+export type EventHandler = (...args: WidgetValue[]) => void;
+export type State = RuntimeRecord;
 
 export interface ModelPayload {
 	modelId: string;
@@ -11,17 +22,21 @@ export interface CommData {
 	method: string;
 	state?: State;
 	buffer_paths?: JsonPath[];
-	content?: unknown;
-	[key: string]: unknown;
+	content?: RuntimeValue;
+	[key: string]: RuntimeValue;
 }
 
 export interface AnyModel {
-	get(key: string): unknown;
-	set(key: string, value: unknown): void;
+	get(key: string): WidgetValue;
+	set(key: string, value: WidgetValue): void;
 	on(name: string, callback: EventHandler): void;
 	off(name?: string | null, callback?: EventHandler | null): void;
 	save_changes(): void;
-	send(content: unknown, callbacks?: unknown, buffers?: Array<ArrayBuffer | ArrayBufferView>): void;
+	send(
+		content: WidgetValue,
+		callbacks?: WidgetValue,
+		buffers?: Array<ArrayBuffer | ArrayBufferView>,
+	): void;
 	widget_manager: {
 		get_model(modelId: string): Promise<AnyModel>;
 	};
@@ -29,7 +44,7 @@ export interface AnyModel {
 
 export interface ModelRuntime {
 	model(modelId: string): BridgeModel;
-	enqueueUpdate(model: BridgeModel, state: Map<string, unknown>): void;
+	enqueueUpdate(model: BridgeModel, state: Map<string, WidgetValue>): void;
 	enqueueCustom(model: BridgeModel, data: CommData, buffers: string[]): void;
 }
 
@@ -40,7 +55,7 @@ interface ExtractedBuffers {
 }
 
 interface PendingCustomMessage {
-	content: unknown;
+	content: RuntimeValue;
 	buffers: DataView[];
 }
 
@@ -54,13 +69,13 @@ export class BridgeModel implements AnyModel {
 	readonly payload: ModelPayload;
 
 	private readonly runtime: ModelRuntime;
-	private readonly reportError: (error: unknown) => void;
-	private readonly state: State;
-	private readonly dirty = new Map<string, unknown>();
+	private readonly reportError: (cause: unknown) => void;
+	private readonly state: Map<string, WidgetValue>;
+	private readonly dirty = new Map<string, WidgetValue>();
 	private readonly handlers = new Map<string, Set<EventHandler>>();
 	private readonly commandResponseHandlers = new Map<
 		string,
-		(content: Record<string, unknown>, buffers: DataView[]) => void
+		(content: State, buffers: DataView[]) => void
 	>();
 	private readonly pendingCustomMessages: PendingCustomMessage[] = [];
 	private disposed = false;
@@ -70,13 +85,13 @@ export class BridgeModel implements AnyModel {
 	constructor(
 		runtime: ModelRuntime,
 		payload: ModelPayload,
-		reportError: (error: unknown) => void,
+		reportError: (cause: unknown) => void,
 		signal?: AbortSignal,
 	) {
 		this.runtime = runtime;
 		this.payload = payload;
 		this.reportError = reportError;
-		this.state = payload.state;
+		this.state = new Map(Object.entries(payload.state));
 		this.signal = signal;
 		if (signal?.aborted) {
 			this.disposed = true;
@@ -89,14 +104,14 @@ export class BridgeModel implements AnyModel {
 		return this.payload.modelId;
 	}
 
-	get(key: string): unknown {
-		return this.state[key];
+	get(key: string): WidgetValue {
+		return this.state.get(key);
 	}
 
-	set(key: string, value: unknown): void {
+	set(key: string, value: WidgetValue): void {
 		if (this.disposed) return;
-		const changed = !Object.is(this.state[key], value);
-		this.state[key] = value;
+		const changed = !Object.is(this.state.get(key), value);
+		this.state.set(key, value);
 		this.dirty.set(key, value);
 		if (changed) {
 			this.emit(`change:${key}`);
@@ -134,7 +149,7 @@ export class BridgeModel implements AnyModel {
 
 	onCommandResponse(
 		id: string,
-		callback: (content: Record<string, unknown>, buffers: DataView[]) => void,
+		callback: (content: State, buffers: DataView[]) => void,
 	): () => void {
 		if (this.disposed) return () => undefined;
 		this.commandResponseHandlers.set(id, callback);
@@ -148,9 +163,9 @@ export class BridgeModel implements AnyModel {
 	save_changes(): void {
 		if (this.disposed || this.dirty.size === 0) return;
 
-		let state: Map<string, unknown>;
+		let state: Map<string, WidgetValue>;
 		try {
-			state = new Map<string, unknown>();
+			state = new Map<string, WidgetValue>();
 			for (const [key, value] of this.dirty) state.set(key, structuredClone(value));
 		} catch (error) {
 			this.reportError(error);
@@ -161,8 +176,8 @@ export class BridgeModel implements AnyModel {
 	}
 
 	send(
-		content: unknown,
-		_callbacks?: unknown,
+		content: WidgetValue,
+		_callbacks?: WidgetValue,
 		buffers: Array<ArrayBuffer | ArrayBufferView> = [],
 	): void {
 		if (this.disposed) return;
@@ -191,7 +206,7 @@ export class BridgeModel implements AnyModel {
 			// widget-visible msg:custom queue.
 			if (isRecord(data.content) && data.content.kind === "anywidget-command-response") {
 				const id = data.content.id;
-				if (typeof id === "string") {
+				if (isString(id)) {
 					const handler = this.commandResponseHandlers.get(id);
 					if (handler) handler(data.content, buffers);
 				}
@@ -216,15 +231,15 @@ export class BridgeModel implements AnyModel {
 		const next = insertBuffers(data.state, data.buffer_paths, buffers);
 		let changed = false;
 		for (const [key, value] of Object.entries(next)) {
-			if (Object.is(this.state[key], value)) continue;
-			this.state[key] = value;
+			if (Object.is(this.state.get(key), value)) continue;
+			this.state.set(key, value);
 			changed = true;
 			this.emit(`change:${key}`);
 		}
 		if (changed) this.emit("change");
 	}
 
-	private emit(name: string, ...args: unknown[]): void {
+	private emit(name: string, ...args: WidgetValue[]): void {
 		for (const handler of Array.from(this.handlers.get(name) ?? [])) handler(...args);
 	}
 
@@ -311,23 +326,25 @@ export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
 		},
 		widget_manager: {
 			async get_model(modelId) {
-				if (!active) throw abortReason(signal);
+				if (!active) {
+					throw signal.reason ?? new DOMException("Model scope is closed", "AbortError");
+				}
 				const child = await model.widget_manager.get_model(modelId);
-				if (!active) throw abortReason(signal);
+				if (!active) {
+					throw signal.reason ?? new DOMException("Model scope is closed", "AbortError");
+				}
 				return child instanceof BridgeModel ? scopedModel(child, signal) : child;
 			},
 		},
 	};
 }
 
-function abortReason(signal: AbortSignal): unknown {
-	return signal.reason ?? new DOMException("Model scope is closed", "AbortError");
-}
-
-export function serializeUpdate(state: ReadonlyMap<string, unknown>): {
+export interface SerializedComm {
 	data: CommData;
 	buffers: string[];
-} {
+}
+
+export function serializeUpdate(state: ReadonlyMap<string, WidgetValue>): SerializedComm {
 	const extracted = extractBuffers(Object.fromEntries(state));
 	return {
 		data: {
@@ -340,46 +357,87 @@ export function serializeUpdate(state: ReadonlyMap<string, unknown>): {
 }
 
 export function serializeCustom(
-	content: unknown,
+	content: WidgetValue,
 	buffers: Array<ArrayBuffer | ArrayBufferView> = [],
-): { data: CommData; buffers: string[] } {
+): SerializedComm {
 	return {
-		data: { method: "custom", content: structuredClone(content) },
+		data: { method: "custom", content: normalizeRuntimeValue(structuredClone(content)) },
 		buffers: buffers.map((buffer) => encodeBuffer(buffer)),
 	};
 }
 
-function extractBuffers(state: State): ExtractedBuffers {
+function extractBuffers(state: WidgetValue): ExtractedBuffers {
 	const buffers: string[] = [];
 	const paths: JsonPath[] = [];
 	const removed = Symbol("buffer");
+	const active = new Set<object>();
 
-	const visit = (value: unknown, path: JsonPath): unknown => {
+	const visit = (value: WidgetValue, path: JsonPath): RuntimeValue | typeof removed => {
 		if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
 			buffers.push(encodeBuffer(value));
 			paths.push(path);
 			return removed;
 		}
 		if (Array.isArray(value)) {
-			return value.map((item, index) => {
-				const next = visit(item, [...path, index]);
-				return next === removed ? null : next;
+			return withAcyclicContainer(value, active, () =>
+				value.map((item, index) => {
+					const next = visit(item, [...path, index]);
+					return next === removed ? null : next;
+				}),
+			);
+		}
+		if (isPlainObject(value)) {
+			return withAcyclicContainer(value, active, () => {
+				const entries: Array<[string, RuntimeValue]> = [];
+				for (const [key, item] of Object.entries(value)) {
+					const next = visit(item, [...path, key]);
+					if (next !== removed) entries.push([key, next]);
+				}
+				return Object.fromEntries(entries);
 			});
 		}
-		if (isRecord(value)) {
-			const entries: Array<[string, unknown]> = [];
-			for (const [key, item] of Object.entries(value)) {
-				const next = visit(item, [...path, key]);
-				if (next !== removed) entries.push([key, next]);
-			}
-			return Object.fromEntries(entries);
-		}
-		return value;
+		return normalizeRuntimeValue(value);
 	};
 
 	const value = visit(state, []);
-	if (value === removed) throw new Error("Widget state must be an object");
-	return { value: value as State, buffers, paths };
+	if (!isRecord(value)) throw new Error("Widget state must be an object");
+	return { value, buffers, paths };
+}
+
+function normalizeRuntimeValue<Value>(value: Value, active = new Set<object>()): RuntimeValue {
+	if (value === null) return null;
+	if (value === undefined) return undefined;
+	if (isString(value)) return value;
+	if (isNumber(value)) return value;
+	if (isBoolean(value)) return value;
+	if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value;
+	if (Array.isArray(value)) {
+		return withAcyclicContainer(value, active, () =>
+			value.map((item) => normalizeRuntimeValue(item, active)),
+		);
+	}
+	if (isPlainObject(value)) {
+		return withAcyclicContainer(value, active, () =>
+			Object.fromEntries(
+				Object.entries(value).map(([key, item]) => [key, normalizeRuntimeValue(item, active)]),
+			),
+		);
+	}
+	throw new Error("Widget value cannot cross the runtime boundary");
+}
+
+function withAcyclicContainer<Container extends object, Result>(
+	value: Container,
+	active: Set<object>,
+	visit: () => Result,
+): Result {
+	if (active.has(value)) throw new Error("Widget value cannot contain cycles");
+	active.add(value);
+	try {
+		return visit();
+	} finally {
+		active.delete(value);
+	}
 }
 
 export function insertBuffers(
@@ -396,21 +454,30 @@ export function insertBuffers(
 	return value;
 }
 
-function setAtPath(root: State, path: JsonPath, value: unknown): void {
+function setAtPath(root: State, path: JsonPath, value: RuntimeValue): void {
 	if (path.length === 0) throw new Error("Buffer path cannot be empty");
-	let target: unknown = root;
+	let target: RuntimeValue = root;
 	for (const part of path.slice(0, -1)) {
 		if (!isRecord(target) && !Array.isArray(target)) {
 			throw new Error(`Invalid buffer path ${JSON.stringify(path)}`);
 		}
-		target = target[part as keyof typeof target];
+		if (Array.isArray(target)) {
+			if (!isNumber(part)) throw new Error(`Invalid buffer path ${JSON.stringify(path)}`);
+			target = target[part];
+		} else {
+			target = target[String(part)];
+		}
 	}
 	const key = path[path.length - 1];
 	if (key === undefined || (!isRecord(target) && !Array.isArray(target))) {
 		throw new Error(`Invalid buffer path ${JSON.stringify(path)}`);
 	}
-	const mutable = target as Record<string | number, unknown>;
-	mutable[key] = value;
+	if (Array.isArray(target)) {
+		if (!isNumber(key)) throw new Error(`Invalid buffer path ${JSON.stringify(path)}`);
+		target[key] = value;
+	} else {
+		target[String(key)] = value;
+	}
 }
 
 function encodeBuffer(buffer: ArrayBuffer | ArrayBufferView): string {
@@ -424,8 +491,4 @@ function encodeBuffer(buffer: ArrayBuffer | ArrayBufferView): string {
 		binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
 	}
 	return btoa(binary);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -10,8 +10,9 @@ export interface ModelContextSnapshot {
 
 const MAX_UPDATE_RETRIES = 2;
 
-type ContextApp = Pick<App, "getHostCapabilities" | "updateModelContext"> &
+export type ContextApp = Pick<App, "getHostCapabilities" | "updateModelContext"> &
 	Partial<Pick<App, "getHostVersion">>;
+type ContextRequest = ReturnType<ContextApp["updateModelContext"]>;
 
 interface ContextCoordinator {
 	nextEpoch: number;
@@ -29,7 +30,7 @@ export class ModelContextSync {
 	private pending?: ModelContextSnapshot;
 	private timer?: ReturnType<typeof setTimeout>;
 	private inFlight?: Promise<void>;
-	private readonly requestTasks = new Set<Promise<unknown>>();
+	private readonly requestTasks = new Set<ContextRequest>();
 	private latestVersion = 0;
 	private retryCount = 0;
 	private retryDelay?: number;
@@ -41,7 +42,7 @@ export class ModelContextSync {
 	constructor(
 		private readonly app: ContextApp,
 		ready: Promise<void>,
-		private readonly reportError: (error: unknown) => void,
+		private readonly reportError: (cause: unknown) => void,
 		private readonly debounceMilliseconds = 250,
 		private readonly updateTimeoutMilliseconds = 3000,
 	) {
@@ -72,9 +73,9 @@ export class ModelContextSync {
 		this.timer = undefined;
 		// Some hosts ignore abort signals. Bound teardown while keeping request
 		// callbacks live so a late settlement can trigger the republish path.
-		const tasks = [this.inFlight, ...this.requestTasks].filter(
-			(task): task is Promise<unknown> => task !== undefined,
-		);
+		const tasks = this.inFlight
+			? [this.inFlight, ...this.requestTasks]
+			: Array.from(this.requestTasks);
 		const task =
 			tasks.length > 0
 				? settleWithin(Promise.allSettled(tasks), this.updateTimeoutMilliseconds)
@@ -195,7 +196,7 @@ export class ModelContextSync {
 		if (!this.inFlight) this.schedule();
 	}
 
-	private requestSettled(task: Promise<unknown>): void {
+	private requestSettled(task: ContextRequest): void {
 		this.requestTasks.delete(task);
 		const owner = this.coordinator.owner;
 		if (!owner || owner.epoch <= this.epoch) return;
@@ -218,7 +219,7 @@ function contextCoordinator(app: ContextApp): ContextCoordinator {
 	return coordinator;
 }
 
-function settleWithin(task: Promise<unknown>, milliseconds: number): Promise<void> {
+function settleWithin<Result>(task: Promise<Result>, milliseconds: number): Promise<void> {
 	return new Promise<void>((resolve) => {
 		let settled = false;
 		const finish = (): void => {
@@ -242,9 +243,9 @@ function waitUntilReady(ready: Promise<void>, signal: AbortSignal): Promise<void
 			signal.removeEventListener("abort", abort);
 			resolve();
 		};
-		const fail = (error: unknown): void => {
+		const fail = (cause: unknown): void => {
 			signal.removeEventListener("abort", abort);
-			reject(error);
+			reject(cause);
 		};
 		const abort = (): void => finish();
 		if (signal.aborted) {

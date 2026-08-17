@@ -9,44 +9,51 @@ import {
 	type ModelPayload,
 	type State,
 } from "./model";
+import {
+	isNumber,
+	isRecord,
+	isString,
+	type RuntimeRecord,
+	type RuntimeValue,
+} from "./runtime-value";
 
 export interface RawModelPayload {
 	modelId?: string;
 	state?: State;
-	sourceRefs?: unknown;
-	buffers?: unknown[];
+	sourceRefs?: RuntimeValue;
+	buffers?: RuntimeValue[];
 	bufferPaths?: JsonPath[];
 }
 
 export interface RawRuntimePayload {
-	protocolVersion?: unknown;
+	protocolVersion?: RuntimeValue;
 	instanceId?: string;
 	rootModelId?: string;
-	loadingMessage?: unknown;
-	sessionIdleTimeoutMs?: unknown;
-	assetManifest?: unknown;
-	models?: Record<string, RawModelPayload>;
-	messages?: unknown;
-	context?: ModelContextSnapshot;
+	loadingMessage?: RuntimeValue;
+	sessionIdleTimeoutMs?: RuntimeValue;
+	assetManifest?: RuntimeValue;
+	models?: RuntimeValue;
+	messages?: RuntimeValue;
+	context?: RuntimeValue;
 }
 
 export interface RawCommMessage {
 	modelId?: string;
 	data?: CommData;
-	sourceRefs?: unknown;
-	buffers?: unknown[];
+	sourceRefs?: RuntimeValue;
+	buffers?: RuntimeValue[];
 }
 
-export function resultAnywidget(result: CallToolResult): Record<string, unknown> | undefined {
+export function resultAnywidget(result: CallToolResult): RuntimeRecord | undefined {
 	const meta = isRecord(result._meta) ? result._meta.anywidget : undefined;
 	return isRecord(meta) ? meta : undefined;
 }
 
-export function resultMessages(result: CallToolResult): unknown {
+export function resultMessages(result: CallToolResult): RuntimeValue {
 	return resultAnywidget(result)?.messages;
 }
 
-export function resultModels(result: CallToolResult): unknown {
+export function resultModels(result: CallToolResult): RuntimeValue {
 	return resultAnywidget(result)?.models;
 }
 
@@ -67,13 +74,12 @@ export function resultContext(result: CallToolResult): ModelContextSnapshot | un
 
 export function resultContextError(result: CallToolResult): string | undefined {
 	const meta = isRecord(result._meta) ? result._meta.anywidget : undefined;
-	return isRecord(meta) && typeof meta.contextError === "string" ? meta.contextError : undefined;
+	return isRecord(meta) && isString(meta.contextError) ? meta.contextError : undefined;
 }
 
-export function normalizeContext(value: unknown): ModelContextSnapshot | undefined {
+export function normalizeContext<Value>(value: Value): ModelContextSnapshot | undefined {
 	if (!isRecord(value)) return undefined;
-	if (typeof value.version !== "number" || typeof value.tool !== "string" || !isRecord(value.state))
-		return undefined;
+	if (!isNumber(value.version) || !isString(value.tool) || !isRecord(value.state)) return undefined;
 	return {
 		version: value.version,
 		tool: value.tool,
@@ -81,9 +87,9 @@ export function normalizeContext(value: unknown): ModelContextSnapshot | undefin
 	};
 }
 
-export function pollDelayLimit(value: unknown, fallback: number): number {
+export function pollDelayLimit<Value>(value: Value, fallback: number): number {
 	if (value === undefined) return fallback;
-	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+	if (!isNumber(value) || !Number.isFinite(value) || value <= 0) {
 		throw new Error("Widget session idle timeout must be a positive number");
 	}
 	// Cap the client wait at half the server idle timeout so the next poll is
@@ -97,13 +103,13 @@ export function hydrateRuntimePayload(
 ): RawRuntimePayload {
 	return {
 		...payload,
-		models: hydrateRawModels(payload.models, assets) as Record<string, RawModelPayload>,
+		models: hydrateRawModels(payload.models, assets),
 		messages: hydrateRawMessages(payload.messages, assets),
 	};
 }
 
-export function sourceRefValues(models: unknown, messages: unknown): unknown[] {
-	const values: unknown[] = [];
+export function sourceRefValues(models: RuntimeValue, messages: RuntimeValue): RuntimeValue[] {
+	const values: RuntimeValue[] = [];
 	if (isRecord(models)) {
 		for (const model of Object.values(models)) {
 			if (isRecord(model)) values.push(model.sourceRefs);
@@ -117,70 +123,81 @@ export function sourceRefValues(models: unknown, messages: unknown): unknown[] {
 	return values;
 }
 
-export function hydrateRawModels(models: unknown, assets: Map<string, string>): unknown {
+export function hydrateRawModels(models: RuntimeValue, assets: Map<string, string>): RuntimeValue {
 	if (!isRecord(models)) return models;
 	return Object.fromEntries(
 		Object.entries(models).map(([modelId, value]) => {
 			if (!isRecord(value) || !isRecord(value.state)) return [modelId, value];
+			const model: RuntimeRecord = value;
+			const state: RuntimeRecord = value.state;
 			return [
 				modelId,
 				{
-					...value,
-					state: hydrateSources(value.state, value.sourceRefs, assets),
+					...model,
+					state: hydrateSources(state, model.sourceRefs, assets),
 				},
 			];
 		}),
 	);
 }
 
-export function hydrateRawMessages(messages: unknown, assets: Map<string, string>): unknown {
+export function hydrateRawMessages(
+	messages: RuntimeValue,
+	assets: Map<string, string>,
+): RuntimeValue {
 	if (!Array.isArray(messages)) return messages;
 	return messages.map((value) => {
 		if (!isRecord(value) || !isRecord(value.data) || !isRecord(value.data.state)) return value;
+		const message: RuntimeRecord = value;
+		const data: RuntimeRecord = value.data;
+		const state: RuntimeRecord = value.data.state;
 		return {
-			...value,
+			...message,
 			data: {
-				...value.data,
-				state: hydrateSources(value.data.state, value.sourceRefs, assets),
+				...data,
+				state: hydrateSources(state, message.sourceRefs, assets),
 			},
 		};
 	});
 }
 
-export function normalizeMessages(value: unknown): RawCommMessage[] {
+export function normalizeMessages<Value>(value: Value): RawCommMessage[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value)) throw new Error("Widget messages must be an array");
-	return value as RawCommMessage[];
+	return value.map((message, index) => normalizeMessage(message, index));
 }
 
-export function normalizeModels(models: Record<string, unknown> | undefined): ModelPayload[] {
+export function normalizeModels<Value>(models: Value): ModelPayload[] {
 	if (!isRecord(models)) throw new Error("Widget payload has no models");
 
 	return Object.entries(models).map(([entryId, value]) => {
 		if (!isRecord(value)) throw new Error(`Invalid widget model ${entryId}`);
-		const raw = value as RawModelPayload;
-		const modelId = requiredString(raw.modelId ?? entryId, "model ID");
-		if (!isRecord(raw.state)) throw new Error(`Model ${modelId} has no state`);
-		const bufferPaths = Array.isArray(raw.bufferPaths) ? raw.bufferPaths : [];
-		const state = insertBuffers({ ...raw.state }, bufferPaths, decodeBuffers(raw.buffers));
+		const model: RuntimeRecord = value;
+		const modelId = requiredString(model.modelId ?? entryId, "model ID");
+		if (!isRecord(model.state)) throw new Error(`Model ${modelId} has no state`);
+		const sourceState: RuntimeRecord = model.state;
+		const bufferPaths = normalizeBufferPaths(model.bufferPaths);
+		const state = insertBuffers({ ...sourceState }, bufferPaths, decodeBuffers(model.buffers));
 		requiredString(state._esm, `ESM for model ${modelId}`);
 		const cssValue = state._css;
-		if (cssValue !== undefined && typeof cssValue !== "string") {
+		if (cssValue !== undefined && !isString(cssValue)) {
 			throw new Error(`Invalid CSS for model ${modelId}`);
 		}
 		return { modelId, state };
 	});
 }
 
-export function normalizeModelChanges(models: unknown): ModelPayload[] {
+export function normalizeModelChanges<Value>(models: Value): ModelPayload[] {
 	if (models === undefined) return [];
 	if (!isRecord(models)) throw new Error("Widget model changes must be an object");
 	return normalizeModels(models);
 }
 
-export function decodeBuffers(raw: unknown[] | undefined): DataView[] {
-	return (raw ?? []).map((value) => {
-		if (typeof value !== "string") throw new Error("Widget buffer must be base64 text");
+export function decodeBuffers<Value>(raw: Value): DataView[] {
+	if (raw === undefined) return [];
+	if (!Array.isArray(raw)) throw new Error("Widget buffers must be an array");
+	return raw.map((value) => {
+		if (!isString(value)) throw new Error("Widget buffer must be base64 text");
 		const binary = atob(value);
 		const bytes = new Uint8Array(binary.length);
 		for (let index = 0; index < binary.length; index += 1) {
@@ -198,11 +215,44 @@ export function parseWidgetRef(ref: string): string {
 	return ref.slice(prefix.length);
 }
 
-export function requiredString(value: unknown, label: string): string {
-	if (typeof value !== "string" || value.length === 0) throw new Error(`Missing ${label}`);
+export function requiredString<Value>(value: Value, label: string): string {
+	if (!isString(value) || value.length === 0) throw new Error(`Missing ${label}`);
 	return value;
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+function normalizeMessage<Value>(value: Value, index: number): RawCommMessage {
+	if (!isRecord(value)) throw new Error(`Invalid widget message ${index}`);
+	const modelId =
+		value.modelId === undefined ? undefined : requiredString(value.modelId, "model ID");
+	const data = value.data === undefined ? undefined : normalizeCommData(value.data, index);
+	const buffers = normalizeRuntimeArray(value.buffers, `buffers for widget message ${index}`);
+	return { modelId, data, sourceRefs: value.sourceRefs, buffers };
+}
+
+function normalizeCommData<Value>(value: Value, index: number): CommData {
+	if (!isRecord(value) || !isString(value.method)) {
+		throw new Error(`Invalid widget message data ${index}`);
+	}
+	return {
+		...value,
+		method: value.method,
+		buffer_paths: normalizeBufferPaths(value.buffer_paths),
+	};
+}
+
+function normalizeBufferPaths<Value>(value: Value): JsonPath[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new Error("Widget buffer paths must be an array");
+	return value.map((path) => {
+		if (!Array.isArray(path) || !path.every((part) => isString(part) || isNumber(part))) {
+			throw new Error("Widget buffer path must contain strings and numbers");
+		}
+		return path;
+	});
+}
+
+function normalizeRuntimeArray<Value>(value: Value, label: string): RuntimeValue[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+	return value;
 }
