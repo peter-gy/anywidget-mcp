@@ -1,13 +1,28 @@
 import { scopedModel, type AnyModel, type BridgeModel } from "./model";
 import { loadModule } from "./module-loader";
+import {
+	isCallable,
+	isPlainObject,
+	isString,
+	type RuntimeValue,
+	type WidgetValue,
+} from "./runtime-value";
 import type { QueuedToolCall } from "./tool-calls";
 
+type LifecycleValue = WidgetValue | void;
+type Cleanup = () => LifecycleValue;
+
 export interface Experimental {
-	invoke<T>(
+	invoke(
 		name: string,
-		message?: unknown,
-		options?: { buffers?: DataView[]; signal?: AbortSignal },
-	): Promise<[T, DataView[]]>;
+		message?: WidgetValue,
+		options?: ExperimentalInvokeOptions,
+	): Promise<[RuntimeValue, DataView[]]>;
+}
+
+export interface ExperimentalInvokeOptions {
+	buffers?: DataView[];
+	signal?: AbortSignal;
 }
 
 export interface InitializeProtocolScope {
@@ -23,7 +38,7 @@ export interface Host {
 }
 
 export interface ResolvedWidget {
-	exports: unknown;
+	exports: object | undefined;
 	render(options: { el: HTMLElement; signal?: AbortSignal }): Promise<void>;
 }
 
@@ -32,14 +47,14 @@ export interface WidgetDefinition {
 		model: AnyModel;
 		signal: AbortSignal;
 		experimental: Experimental;
-	}): unknown;
+	}): LifecycleValue;
 	render?(options: {
 		model: AnyModel;
 		el: HTMLElement;
 		signal: AbortSignal;
 		host: Host;
 		experimental: Experimental;
-	}): unknown;
+	}): LifecycleValue;
 }
 
 export interface BindingRuntime {
@@ -54,12 +69,12 @@ export interface BindingRuntime {
 export interface RuntimeBinding {
 	initialize(call?: QueuedToolCall): Promise<void>;
 	render(element: HTMLElement, parentSignal: AbortSignal): Promise<void>;
-	getExports(): Promise<unknown>;
+	getExports(): Promise<object | undefined>;
 	dispose(): Promise<void>;
 }
 
 interface WidgetBindingOptions {
-	reportError(error: unknown): void;
+	reportError(cause: unknown): void;
 	loadWidget?: (source: string, signal?: AbortSignal) => Promise<WidgetDefinition>;
 	replaceCss?: (css: string | undefined, modelId: string, signal?: AbortSignal) => Promise<void>;
 	timeoutMilliseconds?: number;
@@ -78,8 +93,8 @@ interface BindingGeneration {
 	controller: AbortController;
 	signal: AbortSignal;
 	definition: WidgetDefinition;
-	exports: unknown;
-	initializeCleanup?: () => unknown;
+	exports: object | undefined;
+	initializeCleanup?: Cleanup;
 	renderTasks: Set<Promise<void>>;
 	cleanupTasks: Set<Promise<void>>;
 }
@@ -103,7 +118,7 @@ function clearOwnedView(view: ActiveView, release: boolean): void {
 export class WidgetBinding implements RuntimeBinding {
 	private readonly controller = new AbortController();
 	private readonly views = new Set<ActiveView>();
-	private readonly reportError: (error: unknown) => void;
+	private readonly reportError: (cause: unknown) => void;
 	private readonly loadWidget: (source: string, signal?: AbortSignal) => Promise<WidgetDefinition>;
 	private readonly replaceCss: (
 		css: string | undefined,
@@ -113,7 +128,7 @@ export class WidgetBinding implements RuntimeBinding {
 	private readonly timeoutMilliseconds: number;
 	private readonly ready: Promise<void>;
 	private resolveReady!: () => void;
-	private rejectReady!: (error: unknown) => void;
+	private rejectReady!: (cause: unknown) => void;
 	private generation?: BindingGeneration;
 	private lifecycleTask: Promise<void> = Promise.resolve();
 	private cssTask: Promise<void> = Promise.resolve();
@@ -203,7 +218,7 @@ export class WidgetBinding implements RuntimeBinding {
 		if (generation) await this.renderView(view, generation);
 	}
 
-	async getExports(): Promise<unknown> {
+	async getExports(): Promise<object | undefined> {
 		await this.ready;
 		await this.lifecycleTask.catch(() => undefined);
 		return this.generation?.exports;
@@ -278,12 +293,12 @@ export class WidgetBinding implements RuntimeBinding {
 
 	private currentCss(): string | undefined {
 		const value = this.model.get("_css");
-		return typeof value === "string" && value.length > 0 ? value : undefined;
+		return isString(value) && value.length > 0 ? value : undefined;
 	}
 
 	private currentEsm(): string {
 		const value = this.model.get("_esm");
-		if (typeof value !== "string" || value.length === 0) {
+		if (!isString(value) || value.length === 0) {
 			throw new Error(`Missing ESM for model ${this.model.modelId}`);
 		}
 		return value;
@@ -428,8 +443,8 @@ export class WidgetBinding implements RuntimeBinding {
 			const protocolScope: InitializeProtocolScope | undefined = call
 				? { call, active: true, tail: Promise.resolve() }
 				: undefined;
-			let initialize: Promise<unknown> | undefined;
-			let result: unknown;
+			let initialize: Promise<LifecycleValue> | undefined;
+			let result: LifecycleValue;
 			let initializeFailed = false;
 			let initializeError: unknown;
 			try {
@@ -490,7 +505,7 @@ export class WidgetBinding implements RuntimeBinding {
 				controller,
 				signal,
 				definition,
-				exports: isRecord(result) ? result : undefined,
+				exports: isPlainObject(result) ? result : undefined,
 				initializeCleanup: isCleanup(result) ? result : undefined,
 				renderTasks: new Set(),
 				cleanupTasks: new Set(),
@@ -501,7 +516,7 @@ export class WidgetBinding implements RuntimeBinding {
 		}
 	}
 
-	private trackLateInitialize(initialize: Promise<unknown>): void {
+	private trackLateInitialize(initialize: Promise<LifecycleValue>): void {
 		this.trackTeardown(
 			initialize.then(
 				(lateResult) => {
@@ -559,7 +574,7 @@ export class WidgetBinding implements RuntimeBinding {
 				experimental: this.runtime.experimental(this.model, signal),
 			}),
 		);
-		let cleanup: unknown;
+		let cleanup: LifecycleValue;
 		try {
 			cleanup = await waitForTask(render, signal, undefined, "anywidget render");
 		} catch (error) {
@@ -637,14 +652,13 @@ export async function loadWidget(esm: string, signal?: AbortSignal): Promise<Wid
 	signal?.throwIfAborted();
 	const module = await loadModule(esm, signal);
 	signal?.throwIfAborted();
-	if (typeof module.render === "function") {
-		return { render: module.render as WidgetDefinition["render"] };
+	if (isCallable(module.render)) {
+		return { render: module.render };
 	}
 	const exported = module.default;
 	if (!exported) throw new Error("anywidget module must export a default definition or render");
-	const definition = typeof exported === "function" ? await exported() : exported;
-	if (!isRecord(definition)) throw new Error("anywidget default export must return a definition");
-	return definition as WidgetDefinition;
+	const definition = isCallable(exported) ? await Promise.resolve(exported()) : exported;
+	return normalizeWidgetDefinition(definition);
 }
 
 export async function replaceCss(
@@ -678,14 +692,14 @@ export async function replaceCss(
 	link.href = css;
 	await new Promise<void>((resolve, reject) => {
 		let settled = false;
-		const finish = (error?: unknown): void => {
+		const finish = (cause?: unknown): void => {
 			if (settled) return;
 			settled = true;
 			signal?.removeEventListener("abort", abort);
 			link.onload = null;
 			link.onerror = null;
-			if (error === undefined) resolve();
-			else reject(error);
+			if (cause === undefined) resolve();
+			else reject(cause);
 		};
 		const abort = (): void => {
 			link.remove();
@@ -716,16 +730,25 @@ function styleId(modelId: string): string {
 	return `anywidget-style-${modelId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+function normalizeWidgetDefinition<Value>(value: Value): WidgetDefinition {
+	if (!isPlainObject(value)) throw new Error("anywidget default export must return a definition");
+	const initialize: unknown = Object.getOwnPropertyDescriptor(value, "initialize")?.value;
+	const render: unknown = Object.getOwnPropertyDescriptor(value, "render")?.value;
+	if (initialize !== undefined && !isCallable(initialize)) {
+		throw new Error("anywidget initialize export must be a function");
+	}
+	if (render !== undefined && !isCallable(render)) {
+		throw new Error("anywidget render export must be a function");
+	}
+	return { initialize, render };
 }
 
-function isCleanup(value: unknown): value is () => unknown {
-	return typeof value === "function";
+function isCleanup(value: LifecycleValue): value is Cleanup {
+	return isCallable(value);
 }
 
 async function runCleanup(
-	cleanup: () => unknown,
+	cleanup: Cleanup,
 	label: string,
 	timeoutMilliseconds: number,
 ): Promise<void> {
@@ -779,7 +802,10 @@ function waitForTask<T>(
 	});
 }
 
-async function settleWithin(task: Promise<unknown>, timeoutMilliseconds: number): Promise<boolean> {
+async function settleWithin<Result>(
+	task: Promise<Result>,
+	timeoutMilliseconds: number,
+): Promise<boolean> {
 	return new Promise<boolean>((resolve) => {
 		let settled = false;
 		const finish = (completed: boolean): void => {

@@ -1,5 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { requireProtocolVersion } from "./assets";
+import { isNumber, isRecord, isString, type RuntimeRecord } from "./runtime-value";
+import type { ToolArguments } from "./tool-calls";
 
 export type ToolLaunch =
 	| { kind: "bootstrap"; bootstrapId: string }
@@ -8,10 +10,10 @@ export type ToolLaunch =
 
 export interface MaterializedLaunch {
 	result: CallToolResult;
-	payload: Record<string, unknown>;
+	payload: RuntimeRecord;
 }
 
-type CallTool = (name: string, args: Record<string, unknown>) => Promise<CallToolResult>;
+type CallTool = (name: string, args: ToolArguments) => Promise<CallToolResult>;
 
 const BOOTSTRAP_MARKER_PREFIX = "urn:anywidget-mcp:bootstrap:";
 const BOOTSTRAP_MARKER = /^urn:anywidget-mcp:bootstrap:([0-9a-f]{32})$/u;
@@ -58,7 +60,7 @@ export async function loadWidgetRuntime(
 		throw new Error("Widget bootstrap returned no root model ID");
 	}
 	if (
-		typeof payload.sessionIdleTimeoutMs !== "number" ||
+		!isNumber(payload.sessionIdleTimeoutMs) ||
 		!Number.isFinite(payload.sessionIdleTimeoutMs) ||
 		payload.sessionIdleTimeoutMs <= 0
 	) {
@@ -69,7 +71,7 @@ export async function loadWidgetRuntime(
 
 async function callBootstrapWithRetry(
 	call: CallTool,
-	args: Record<string, unknown>,
+	args: ToolArguments,
 	signal?: AbortSignal,
 	attempt = 0,
 ): Promise<CallToolResult> {
@@ -108,12 +110,12 @@ export class ToolResultGate {
 		return true;
 	}
 
-	abort(reason: unknown): void {
-		this.current?.abort(reason);
+	abort(cause: unknown): void {
+		this.current?.abort(cause);
 	}
 }
 
-function anywidgetMeta(value: unknown): Record<string, unknown> | undefined {
+function anywidgetMeta<Value>(value: Value): RuntimeRecord | undefined {
 	if (!isRecord(value)) return undefined;
 	return isRecord(value.anywidget) ? value.anywidget : undefined;
 }
@@ -122,8 +124,8 @@ function malformed(message: string): ToolLaunch {
 	return { kind: "malformed", error: new Error(message) };
 }
 
-function nonemptyString(value: unknown): string | undefined {
-	return typeof value === "string" && value.length > 0 ? value : undefined;
+function nonemptyString<Value>(value: Value): string | undefined {
+	return isString(value) && value.length > 0 ? value : undefined;
 }
 
 function toolErrorText(result: CallToolResult): string {
@@ -149,7 +151,7 @@ function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
 		signal.addEventListener("abort", abort, { once: true });
 		void task.then(
 			(value) => settle(() => resolve(value)),
-			(error: unknown) => settle(() => reject(error)),
+			(cause: unknown) => settle(() => reject(cause)),
 		);
 		if (signal.aborted) abort();
 	});
@@ -171,8 +173,4 @@ function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
 		signal.addEventListener("abort", abort, { once: true });
 		if (signal.aborted) abort();
 	});
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

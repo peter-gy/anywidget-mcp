@@ -8,7 +8,9 @@ import {
 	widgetAssetId,
 	type AssetKind,
 } from "../src/assets";
+import { isString, type RuntimeRecord } from "../src/runtime-value";
 import type { QueuedToolCall } from "../src/tool-calls";
+import { fixtureStrings } from "./runtime-test-support";
 
 interface FixtureAsset {
 	id: string;
@@ -26,7 +28,7 @@ async function fixtureAsset(kind: AssetKind, text: string): Promise<FixtureAsset
 	};
 }
 
-function manifest(...assets: FixtureAsset[]): Record<string, unknown> {
+function manifest(...assets: FixtureAsset[]): RuntimeRecord {
 	return Object.fromEntries(
 		assets.map((asset) => [asset.id, { kind: asset.kind, byteLength: asset.byteLength }]),
 	);
@@ -57,15 +59,17 @@ function cacheKey(assetId: string): string {
 	return `https://anywidget-mcp.invalid/assets/${encodeURIComponent(assetId)}`;
 }
 
-function installCache(initial: Map<string, string> = new Map()): {
+interface InstalledCache {
 	cache: Pick<Cache, "match" | "put" | "delete">;
 	stored: Map<string, Response>;
-} {
+}
+
+function installCache(initial: Map<string, string> = new Map()): InstalledCache {
 	const stored = new Map<string, Response>(
 		Array.from(initial, ([key, value]) => [key, new Response(value)]),
 	);
 	const key = (request: RequestInfo | URL): string => {
-		if (typeof request === "string") return request;
+		if (isString(request)) return request;
 		if (request instanceof URL) return request.href;
 		return request.url;
 	};
@@ -237,7 +241,7 @@ describe("content-addressed widget assets", () => {
 			call,
 		);
 
-		const batches = call.mock.calls.map(([_name, args]) => args.asset_ids as string[]);
+		const batches = call.mock.calls.map(([_name, args]) => fixtureStrings(args.asset_ids));
 		expect(batches.map((batch) => batch.length)).toEqual([128, 1]);
 		expect(maxActiveCalls).toBe(1);
 		expect(new Set(batches.flat())).toEqual(new Set(assets.map((asset) => asset.id)));

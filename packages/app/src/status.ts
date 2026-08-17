@@ -1,12 +1,13 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import { isRecord, isString } from "./runtime-value";
+import type { ToolArguments } from "./tool-calls";
+
 export const DEFAULT_LOADING_MESSAGE = "Initializing widget…";
 
 const MAX_LOADING_MESSAGE_LENGTH = 120;
 
-export function loadingMessageFromArguments(
-	args: Record<string, unknown> | undefined,
-): string | undefined {
+export function loadingMessageFromArguments(args: ToolArguments | undefined): string | undefined {
 	return normalizeLoadingMessage(args?.loading_message);
 }
 
@@ -17,7 +18,7 @@ export function loadingMessageFromResult(result: CallToolResult): string | undef
 	return normalizeLoadingMessage(payload.loadingMessage);
 }
 
-export function loadingMessageForTool(title: unknown): string {
+export function loadingMessageForTool<Value>(title: Value): string {
 	const normalizedTitle = normalizeLoadingMessage(title);
 	if (!normalizedTitle) return DEFAULT_LOADING_MESSAGE;
 	return normalizeLoadingMessage(`Initializing ${normalizedTitle}…`) ?? DEFAULT_LOADING_MESSAGE;
@@ -29,8 +30,8 @@ export function toolResultError(result: CallToolResult): string | undefined {
 	return text?.text || "Widget tool failed";
 }
 
-function normalizeLoadingMessage(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
+function normalizeLoadingMessage<Value>(value: Value): string | undefined {
+	if (!isString(value)) return undefined;
 	const normalized = value.trim().replace(/\s+/gu, " ");
 	if (
 		!normalized ||
@@ -52,8 +53,4 @@ function isUnsafeStatusCharacter(character: string): boolean {
 		(codePoint >= 0x202a && codePoint <= 0x202e) ||
 		(codePoint >= 0x2066 && codePoint <= 0x2069)
 	);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

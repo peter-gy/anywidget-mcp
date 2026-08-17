@@ -4,7 +4,12 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 
 import { mountDetachedWidget } from "../src/widget-mount";
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
+interface VoidDeferred {
+	promise: Promise<void>;
+	resolve(): void;
+}
+
+function deferred(): VoidDeferred {
 	let resolve!: () => void;
 	const promise = new Promise<void>((done) => {
 		resolve = done;

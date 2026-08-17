@@ -1,7 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test, vi } from "vite-plus/test";
 
-import { ToolCallQueue } from "../src/tool-calls";
+import { ToolCallQueue, type ToolRequest } from "../src/tool-calls";
 
 const emptyResult: CallToolResult = { content: [] };
 
@@ -25,10 +25,7 @@ describe("ToolCallQueue cancellation", () => {
 	test("lets a nested call narrow the active transaction signal", async () => {
 		let activeSignal: AbortSignal | undefined;
 		const callServerTool = vi.fn(
-			(
-				_request: { name: string; arguments?: Record<string, unknown> },
-				options?: { signal?: AbortSignal },
-			): Promise<CallToolResult> => {
+			(_request: ToolRequest, options?: { signal?: AbortSignal }): Promise<CallToolResult> => {
 				activeSignal = options?.signal;
 				return new Promise((_resolve, reject) => {
 					activeSignal?.addEventListener("abort", () => reject(activeSignal?.reason), {

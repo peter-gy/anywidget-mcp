@@ -1,10 +1,11 @@
-import type { App } from "@modelcontextprotocol/ext-apps";
+// @vitest-environment jsdom
+
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test, vi } from "vite-plus/test";
 
-import { WidgetRuntime } from "../src/app";
 import type { RuntimeBinding } from "../src/binding";
-import { ToolCallQueue } from "../src/tool-calls";
+import { WidgetRuntime } from "../src/runtime";
+import { ToolCallQueue, type ToolRequest } from "../src/tool-calls";
 import { deferred, FakeBinding } from "./runtime-test-support";
 
 describe("WidgetRuntime transport and polling", () => {
@@ -25,11 +26,11 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(): RuntimeBinding => ({
 					async initialize() {
@@ -43,7 +44,7 @@ describe("WidgetRuntime transport and polling", () => {
 				}),
 			);
 
-			const mounting = runtime.mount({} as HTMLElement);
+			const mounting = runtime.mount(document.createElement("div"));
 			await vi.advanceTimersByTimeAsync(500);
 
 			expect(render).not.toHaveBeenCalled();
@@ -90,22 +91,17 @@ describe("WidgetRuntime transport and polling", () => {
 					},
 				},
 			};
-			const callServerTool = vi.fn(
-				async (request: {
-					name: string;
-					arguments?: Record<string, unknown>;
-				}): Promise<CallToolResult> => {
-					if (request.name === "anywidget_dispose") return { content: [] };
-					const operationId = request.arguments?.operation_id;
-					if (operationId === "operation-1") {
-						firstAttempts += 1;
-						if (firstAttempts === 1) throw new Error("response lost");
-						return update;
-					}
-					return { content: [] };
-				},
-			);
-			const calls = new ToolCallQueue({ callServerTool } as unknown as App);
+			const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
+				if (request.name === "anywidget_dispose") return { content: [] };
+				const operationId = request.arguments?.operation_id;
+				if (operationId === "operation-1") {
+					firstAttempts += 1;
+					if (firstAttempts === 1) throw new Error("response lost");
+					return update;
+				}
+				return { content: [] };
+			});
+			const calls = new ToolCallQueue({ callServerTool });
 			const runtime = new WidgetRuntime(
 				{
 					instanceId: "instance-1",
@@ -121,7 +117,7 @@ describe("WidgetRuntime transport and polling", () => {
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_runtime, model): RuntimeBinding => ({
 					async initialize() {
@@ -171,15 +167,10 @@ describe("WidgetRuntime transport and polling", () => {
 		vi.useFakeTimers();
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		try {
-			const callServerTool = vi.fn(
-				async (request: {
-					name: string;
-					arguments?: Record<string, unknown>;
-				}): Promise<CallToolResult> => {
-					if (request.name === "anywidget_dispose") return { content: [] };
-					throw new Error("offline");
-				},
-			);
+			const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
+				if (request.name === "anywidget_dispose") return { content: [] };
+				throw new Error("offline");
+			});
 			const runtime = new WidgetRuntime(
 				{
 					instanceId: "instance-1",
@@ -191,11 +182,11 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_runtime, model) => new FakeBinding(model, []),
 			);
@@ -249,7 +240,7 @@ describe("WidgetRuntime transport and polling", () => {
 			const app = {
 				getHostCapabilities: () => ({}),
 				updateModelContext: vi.fn().mockResolvedValue({}),
-			} as unknown as App;
+			};
 			const runtime = new WidgetRuntime(
 				{
 					instanceId: "instance-1",
@@ -261,13 +252,13 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				app,
 				Promise.resolve(),
 				(_runtime, model) => new FakeBinding(model, []),
 			);
 
-			await runtime.mount({} as HTMLElement);
+			await runtime.mount(document.createElement("div"));
 			await vi.advanceTimersByTimeAsync(500);
 			expect(callServerTool).toHaveBeenCalledWith(
 				{
@@ -309,11 +300,11 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_runtime, model) => new FakeBinding(model, []),
 			);
@@ -326,7 +317,7 @@ describe("WidgetRuntime transport and polling", () => {
 				expect(pollCount()).toBe(expectedCount);
 			};
 
-			await runtime.mount({} as HTMLElement);
+			await runtime.mount(document.createElement("div"));
 			await advanceToPoll(500, 1);
 			await advanceToPoll(1000, 2);
 			await advanceToPoll(2000, 3);
@@ -357,18 +348,18 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_runtime, model) => new FakeBinding(model, []),
 			);
 			const pollCount = (): number =>
 				callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_poll").length;
 
-			await runtime.mount({} as HTMLElement);
+			await runtime.mount(document.createElement("div"));
 			await vi.advanceTimersByTimeAsync(500);
 			expect(pollCount()).toBe(1);
 			await vi.advanceTimersByTimeAsync(599);
@@ -418,16 +409,16 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_runtime, model) => new FakeBinding(model, []),
 			);
 
-			await runtime.mount({} as HTMLElement);
+			await runtime.mount(document.createElement("div"));
 			await vi.advanceTimersByTimeAsync(500);
 			expect(pollCount).toBe(1);
 			await vi.advanceTimersByTimeAsync(999);
@@ -460,18 +451,18 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_runtime, model) => new FakeBinding(model, []),
 			);
 			const pollCount = (): number =>
 				callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_poll").length;
 
-			await runtime.mount({} as HTMLElement);
+			await runtime.mount(document.createElement("div"));
 			await vi.advanceTimersByTimeAsync(500);
 			await vi.advanceTimersByTimeAsync(1000);
 			await vi.advanceTimersByTimeAsync(2000);
@@ -500,18 +491,13 @@ describe("WidgetRuntime transport and polling", () => {
 		vi.useFakeTimers();
 		try {
 			let pollAttempts = 0;
-			const callServerTool = vi.fn(
-				async (request: {
-					name: string;
-					arguments?: Record<string, unknown>;
-				}): Promise<CallToolResult> => {
-					if (request.name === "anywidget_poll") {
-						pollAttempts += 1;
-						if (pollAttempts === 1) throw new Error("poll response lost");
-					}
-					return { content: [] };
-				},
-			);
+			const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
+				if (request.name === "anywidget_poll") {
+					pollAttempts += 1;
+					if (pollAttempts === 1) throw new Error("poll response lost");
+				}
+				return { content: [] };
+			});
 			const runtime = new WidgetRuntime(
 				{
 					instanceId: "instance-1",
@@ -523,15 +509,15 @@ describe("WidgetRuntime transport and polling", () => {
 						},
 					},
 				},
-				new ToolCallQueue({ callServerTool } as unknown as App),
+				new ToolCallQueue({ callServerTool }),
 				{
 					getHostCapabilities: () => ({}),
 					updateModelContext: vi.fn().mockResolvedValue({}),
-				} as unknown as App,
+				},
 				Promise.resolve(),
 				(_runtime, model) => new FakeBinding(model, []),
 			);
-			await runtime.mount({} as HTMLElement);
+			await runtime.mount(document.createElement("div"));
 			await vi.advanceTimersByTimeAsync(500);
 
 			const comm = runtime.send(

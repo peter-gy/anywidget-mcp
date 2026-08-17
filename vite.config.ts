@@ -1,5 +1,7 @@
 import { defineConfig } from "vite-plus";
 
+import { antiSlopIgnorePatterns, antiSlopRules } from "./tools/oxlint/anti-slop/preset.ts";
+
 const generated = [
 	"**/*.har",
 	"**/.vitepress/cache/**",
@@ -9,9 +11,11 @@ const generated = [
 	"packages/anywidget-mcp/src/anywidget_mcp/static/**",
 ];
 
+const ignored = [...generated, ...antiSlopIgnorePatterns];
+
 export default defineConfig({
 	fmt: {
-		ignorePatterns: generated,
+		ignorePatterns: ignored,
 		printWidth: 100,
 		semi: true,
 		useTabs: true,
@@ -21,14 +25,20 @@ export default defineConfig({
 			correctness: "error",
 			perf: "error",
 		},
-		ignorePatterns: generated,
-		jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+		ignorePatterns: ignored,
+		jsPlugins: [
+			{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
+			{ name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
+		],
 		options: {
+			denyWarnings: true,
+			reportUnusedDisableDirectives: "error",
 			typeAware: true,
 			typeCheck: true,
 		},
 		plugins: ["typescript", "unicorn", "import"],
 		rules: {
+			...antiSlopRules,
 			"vite-plus/prefer-vite-plus-imports": "error",
 		},
 		overrides: [
