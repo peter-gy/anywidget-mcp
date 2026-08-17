@@ -1,0 +1,152 @@
+packages/app/src/context.ts
+  s_45e6fac1651d3a::t_4c9d9c7dd7c8f3 13
+  s_45e6fac1651d3a::t_031124feeb0c4e 246,248
+  s_45e6fac1651d3a::t_4a6624dbef5c34 15,33,45,76-78,199,222
+packages/app/tests/assets.test.ts
+  s_45e6fac1651d3a::t_c29a10d8db0d42 11,13,31,62,65-67,72,244
+packages/app/tests/asset-runtime.test.ts
+  s_45e6fac1651d3a::t_da29c0ebb06e43 8
+  s_45e6fac1651d3a::t_e62e0851cdca9f 9-10,28,66,80,241,257,336,338,389
+  s_45e6fac1651d3a::t_93fa6f1bd126b7 34,36
+  s_45e6fac1651d3a::t_466ae6aa58de54 38,45,70,73-74,190-195,259-275,278-285,287-291,492-504,508-512,551-568,570-574
+  s_45e6fac1651d3a::t_9200e81db902c0 200,296,352,377,418,460,517,579
+packages/app/tests/runtime-replacement.test.ts
+  s_45e6fac1651d3a::t_7b1ed75a47e43d 5-10
+packages/app/src/runtime-lifecycle.ts
+  s_45e6fac1651d3a::t_575ee841462504 48-51
+  s_45e6fac1651d3a::t_4c9d9c7dd7c8f3 3,9,16
+  s_45e6fac1651d3a::t_031124feeb0c4e 60
+packages/app/tests/widget-mount.test.ts
+  s_45e6fac1651d3a::t_7b1ed75a47e43d 7-12
+packages/app/src/runtime-payload.ts
+  s_45e6fac1651d3a::t_b33bd826861e90 12-18,23-24,29,32-37,43-44,47,52,56,77,92,106,111-112,126,167,183,197-200,219,224,227-231,233-235,241-242,244-253,255-257
+  s_45e6fac1651d3a::t_3363121fcf03c1 80,90,164,170,190,196,218,223,232,236-240,243,254
+  s_45e6fac1651d3a::t_5abc3490626773 131-132,136-137,151-153,155,157-158,175-180
+  s_45e6fac1651d3a::t_8baf4651811cbd 82,144-147,225-226
+packages/app/tests/model.test.ts
+  s_45e6fac1651d3a::t_4dd9c8a6e52b0b 9,12,19,52-53
+  s_45e6fac1651d3a::t_441378c680540d 29
+  s_45e6fac1651d3a::t_e1984906a36497 6,82-95
+  s_45e6fac1651d3a::t_afc1a0891c5dce 98-109
+packages/app/tests/runtime-disposal.test.ts
+  s_45e6fac1651d3a::t_9200e81db902c0 17,59,72
+packages/app/src/runtime-value.ts
+  s_45e6fac1651d3a::t_e1984906a36497 16,23-25,29,33,37
+  s_45e6fac1651d3a::t_c2477afe8ff294 17,19-22,42
+  s_45e6fac1651d3a::t_6d8c5f65bc9eb0 36,38-39
+  s_45e6fac1651d3a::t_de72b1640bdc6f 1-10,12-14,18,28,32,40-41
+  s_45e6fac1651d3a::t_19ad44953a2e31 11,15,26-27,30-31,34-35,43-44
+packages/app/tests/runtime-polling.test.ts
+  s_45e6fac1651d3a::t_01373bae7b2a75 7,47,94-103,170-173,261,320,362,421,465,494-500,520
+  s_45e6fac1651d3a::t_65c75605ddf979 1-2,8
+  s_45e6fac1651d3a::t_9200e81db902c0 29,33,104,120,185,189,243,255,303,307,351,355,412,416,454,458,512,516
+packages/app/tests/module-loader.test.ts
+  s_45e6fac1651d3a::t_f89dd7c481629b 59-63,157-158,178,193,196,203,211,221,230,243
+  s_45e6fac1651d3a::t_072bd4049a00e5 13,19,30,38-40,46-58,64-66
+packages/app/src/model.ts
+  s_45e6fac1651d3a::t_e72c9926db2bd2 410-413
+  s_45e6fac1651d3a::t_471c753e7d49f5 1,3,5-8,10,464-469,475-479
+  s_45e6fac1651d3a::t_13411af5e4775a 2,4,9,13,30-31,36-37,47,72-74,88,94,107-108,111,113-114,166,168,179-180,234-235,242,329-331,333-335,347,360,364,369,375,389,399,405-406,419,424-426
+  s_45e6fac1651d3a::t_2b3a1f5c0688b4 11,14,25-26,35,38-39,58,78,152,209,342,345-346,362,403-404,457,459
+  s_45e6fac1651d3a::t_e1984906a36497 373,382-387,390-397,407,414-418,420-423,427-428,431-440
+  s_45e6fac1651d3a::t_da29c0ebb06e43 408-409
+  s_45e6fac1651d3a::t_93e69f05cc7a3c 429-430
+packages/app/src/module-loader.ts
+  s_45e6fac1651d3a::t_dc8d24c9f0399f 2,133-138
+  s_45e6fac1651d3a::t_f2022d8df1ce84 19,65,88,113
+packages/anywidget-mcp/license-notices.ts
+  s_45e6fac1651d3a::t_5d5a1d956dc227 7-8,29-30,54,60
+  s_45e6fac1651d3a::t_3efbc787b4d07c 55-59,61-68
+packages/app/tests/tool-calls.test.ts
+  s_45e6fac1651d3a::t_643545f140531e 4
+packages/app/tests/context.test.ts
+  s_45e6fac1651d3a::t_7b1ed75a47e43d 16-21
+  s_45e6fac1651d3a::t_4588feca265bba 4-6,29-34,119,122,187,191,222-223,303-304,342-343
+packages/app/tests/runtime-payload.test.ts
+  s_45e6fac1651d3a::t_04a3980f97909b 1-19
+packages/app/src/runtime-results.ts
+  s_45e6fac1651d3a::t_a3bedbbb7dc5ab 118,127
+  s_45e6fac1651d3a::t_050f5ef601104f 4,13,16,63,74,128,154
+  s_45e6fac1651d3a::t_3b51966c94a783 113-114
+pnpm-workspace.yaml
+  s_45e6fac1651d3a::t_a887ef4a882837 10,12-13,21
+packages/app/src/assets.ts
+  s_45e6fac1651d3a::t_2d32b8b093cd0b 232,240,288
+  s_45e6fac1651d3a::t_95c2dce26ce196 3-10,18-21,94-95,103-106,109,248,257-258,260,299,310,316,319,394
+packages/app/tests/runtime-model-graph.test.ts
+  s_45e6fac1651d3a::t_9c901078f422d6 1-2,8-9,57,156,329,394,438
+  s_45e6fac1651d3a::t_34a6d202a4ab77 15,97,99,108,110
+  s_45e6fac1651d3a::t_9200e81db902c0 40,91,189,259,374,378,462,547
+  s_45e6fac1651d3a::t_01373bae7b2a75 7,251-252,330-332,334-354,357-359,361-365
+  s_45e6fac1651d3a::t_40d14e5969f677 10-14,16,18
+  s_45e6fac1651d3a::t_64a9c7f5fca5ff 17,98,109,285,333
+vite.config.ts
+  s_45e6fac1651d3a::t_a887ef4a882837 3-4,14-15,18,28-32,34-35,41
+packages/app/src/transport.ts
+  s_45e6fac1651d3a::t_031124feeb0c4e 42
+packages/app/tests/runtime-test-support.ts
+  s_45e6fac1651d3a::t_3344ecfda8a02b 25-30,82
+  s_45e6fac1651d3a::t_64a9c7f5fca5ff 5,45-51
+  s_45e6fac1651d3a::t_4c9d9c7dd7c8f3 6,10,14,22
+  s_45e6fac1651d3a::t_b549905338bad7 39-42,56-59
+  s_45e6fac1651d3a::t_99b00c7320141f 38,55
+  s_45e6fac1651d3a::t_3b51966c94a783 43-44,52-54
+packages/app/src/status.ts
+  s_45e6fac1651d3a::t_c7b83cb44d5211 4-5,34
+  s_45e6fac1651d3a::t_1c9591f9dcbf81 3,10,21,33
+packages/app/tests/runtime-command-lifecycle.test.ts
+  s_45e6fac1651d3a::t_01373bae7b2a75 7,29-32,37-40,44-45,47-61,63-73,115-119,124-127,131-147,149-159,210-225,228-231,233-235,281-293,295-296,299-302,304-306,338-353,356,358-360,470-471,473-475,477-478,551-554
+  s_45e6fac1651d3a::t_34a6d202a4ab77 10-16,46,476
+  s_45e6fac1651d3a::t_9200e81db902c0 80,84,166,170,245,249,313,317,361,372,422,426,479,495,519,530,566,570,620,624,664
+  s_45e6fac1651d3a::t_60ee26478d5b4e 192-196
+  s_45e6fac1651d3a::t_e66d592737423c 1-2,8-9,17-20,62,148,191,197,209,294,453
+package.json
+  s_45e6fac1651d3a::t_a887ef4a882837 6-7,12,14-15
+packages/app/tests/binding.test.ts
+  s_45e6fac1651d3a::t_dbcc0a97eaa286 1-2,13-14,16,18,34-35,43,47-50,52-53,55-58,61-66,102,104,107,147,151,163,254,292,325-326,370,410,412,414,532,610
+pyproject.toml
+  s_45e6fac1651d3a::t_5f44c8a49a9017 4-6
+packages/app/src/binding.ts
+  s_45e6fac1651d3a::t_e1ca35ec1df366 733-736,805-806
+  s_45e6fac1651d3a::t_b138f7a9fc2308 5,8,18,41,72,77,96,121,131
+  s_45e6fac1651d3a::t_153106e68c8e1c 12-13,50,57,446-447,519,577,746
+  s_45e6fac1651d3a::t_278ba46f6b227b 3-4,6-7,9,14,97,296,301,655-656,661,701-702,737-743,747,751,807-808
+  s_45e6fac1651d3a::t_d3e7ea626057b3 16,19-25
+  s_45e6fac1651d3a::t_c6f56ecc115bde 221,508,695
+  s_45e6fac1651d3a::t_3b51966c94a783 660
+packages/app/src/runtime.ts
+  s_45e6fac1651d3a::t_d3e7ea626057b3 7,20,52,270,333,336-337,341,343,353-354,408,517-518,559,684,691,712,726,752,766-767
+  s_45e6fac1651d3a::t_8baf4651811cbd 853-854,860
+  s_45e6fac1651d3a::t_7bacc6e3937efd 51,56,64,80,88,229,255-257
+  s_45e6fac1651d3a::t_73d984c734c825 335,357-358,383,396-401,485-489,615,682,689,765
+  s_45e6fac1651d3a::t_f22a959a32a80f 785
+  s_45e6fac1651d3a::t_3b51966c94a783 251,254
+  s_45e6fac1651d3a::t_4c9d9c7dd7c8f3 12,118-119,159-160
+packages/app/src/tool-calls.ts
+  s_45e6fac1651d3a::t_19ad44953a2e31 15,52,80
+  s_45e6fac1651d3a::t_b549905338bad7 5,47
+  s_45e6fac1651d3a::t_4c9d9c7dd7c8f3 6,9,13-14,16-19,24
+packages/app/tests/runtime-scheduling.test.ts
+  s_45e6fac1651d3a::t_703e0ac0099c2a 1-2,8-10,73,79,128,212-213,303
+  s_45e6fac1651d3a::t_9200e81db902c0 34,38,103,107,174,178,285,289
+  s_45e6fac1651d3a::t_01373bae7b2a75 7,111,142-145,147-158,161,163-165,214-218,223-228,232,237,244-276
+packages/app/src/app.ts
+  s_45e6fac1651d3a::t_8708acedf19606 62,274,297
+  s_45e6fac1651d3a::t_aff5272b8d1045 12,52-54,138,165,275,281,298-299,302,305
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "98fa733fbd1034ce8af1629bbbd503603342db49",
+  "prompts": {},
+  "sessions": {
+    "s_45e6fac1651d3a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00a1a-d2bc-70f1-a84a-ab21c0e21e43",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
