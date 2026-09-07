@@ -195,9 +195,9 @@ before creating a distribution.
   Python widget fixture. `pnpm e2e` builds the packaged app and runs Chromium,
   Firefox, and WebKit. Playwright starts and stops both fixture servers.
   Use `pnpm --filter @anywidget-mcp/e2e e2e --project=chromium` after a browser
-  build to run one browser while iterating. The separate `e2e:atlas` suite uses
-  the isolated Python project in `apps/e2e`, real Embedding Atlas, and Chromium
-  WebGPU with shader-f16. `make check` includes both suites.
+  build to run one browser while iterating. The suite covers binary and JSON
+  transfers, dropped responses, state synchronization, composition, and lifecycle.
+  `make check` includes this browser matrix.
 - Packaging checks build the wheel from the sdist and import it in a fresh
   environment.
 - Runtime changes finish with mcp-use Inspector Chat and `$agent-browser`.

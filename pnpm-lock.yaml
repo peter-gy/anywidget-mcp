@@ -18,21 +18,12 @@ catalogs:
     '@types/node':
       specifier: ^22.20.1
       version: 22.20.1
-    '@types/pngjs':
-      specifier: 6.0.5
-      version: 6.0.5
-    '@webgpu/types':
-      specifier: 0.1.72
-      version: 0.1.72
     oxlint:
       specifier: 1.76.0
       version: 1.76.0
     oxlint-tsgolint:
       specifier: 7.0.2001
       version: 7.0.2001
-    pngjs:
-      specifier: 7.0.0
-      version: 7.0.0
     typescript:
       specifier: ^6.0.3
       version: 6.0.3
@@ -115,15 +106,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.1
-      '@types/pngjs':
-        specifier: 'catalog:'
-        version: 6.0.5
-      '@webgpu/types':
-        specifier: 'catalog:'
-        version: 0.1.72
-      pngjs:
-        specifier: 'catalog:'
-        version: 7.0.0
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -1233,9 +1215,6 @@ packages:
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
-  '@types/pngjs@6.0.5':
-    resolution: {integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==}
-
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
 
@@ -1485,9 +1464,6 @@ packages:
 
   '@vueuse/shared@12.8.2':
     resolution: {integrity: sha512-dznP38YzxZoNloI0qpEfpkms8knDtaoQ6Y/sfS0L7Yki4zh40LFHEhur0odJC6xTHG5dxWVPiUWBXn+wCG2s5w==}
-
-  '@webgpu/types@0.1.72':
-    resolution: {integrity: sha512-0cF7RFM2edNoiIS1ODJp0/Gzv4/xSXhwoR0YCza+OWpJWtn4wmo9DvK91aLlH9+uUnwIriP7ZiC3WitmyhuzBw==}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -3289,10 +3265,6 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
-  '@types/pngjs@6.0.5':
-    dependencies:
-      '@types/node': 22.20.1
-
   '@types/unist@3.0.3': {}
 
   '@types/web-bluetooth@0.0.21': {}
@@ -3507,8 +3479,6 @@ snapshots:
       vue: 3.5.42(typescript@6.0.3)
     transitivePeerDependencies:
       - typescript
-
-  '@webgpu/types@0.1.72': {}
 
   accepts@2.0.0:
     dependencies:

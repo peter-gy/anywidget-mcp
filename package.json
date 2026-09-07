@@ -7,8 +7,7 @@
 		"check:anti-slop": "node --test --test-concurrency=1 tools/oxlint/anti-slop/test/*.test.ts tools/oxlint/anti-slop/test/compatibility/*.test.ts && tsc -p tools/oxlint/anti-slop/tsconfig.json --noEmit",
 		"dev": "vp run @anywidget-mcp/python#dev",
 		"test": "vp run -r test",
-		"e2e": "make browser && pnpm --filter @anywidget-mcp/e2e e2e",
-		"e2e:atlas": "make browser && pnpm --filter @anywidget-mcp/e2e e2e:atlas"
+		"e2e": "make browser && pnpm --filter @anywidget-mcp/e2e e2e"
 	},
 	"devDependencies": {
 		"@oxlint/plugins": "catalog:",

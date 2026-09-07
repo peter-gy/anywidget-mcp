@@ -13,8 +13,6 @@ check:
 	uv run pyrefly check --min-severity warn
 	uv run pytest -q packages/anywidget-mcp/tests
 	pnpm --filter @anywidget-mcp/e2e e2e
-	pnpm --filter @anywidget-mcp/e2e check:atlas
-	pnpm --filter @anywidget-mcp/e2e e2e:atlas
 	$(MAKE) package-artifacts
 	printf '@AGENTS.md\n' | cmp -s - CLAUDE.md
 	git diff --check

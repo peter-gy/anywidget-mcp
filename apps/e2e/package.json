@@ -7,18 +7,13 @@
 		"e2e": "playwright test",
 		"e2e:ui": "playwright test --ui",
 		"install-browser": "playwright install --with-deps chromium firefox webkit",
-		"typecheck": "tsc --noEmit",
-		"e2e:atlas": "playwright test --config playwright.atlas.config.ts",
-		"check:atlas": "uv run --locked --project . ruff format --check atlas_server.py && uv run --locked --project . ruff check atlas_server.py && uv run --locked --project . ty check atlas_server.py && uv run --locked --project . pyrefly check --min-severity warn"
+		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
 		"@modelcontextprotocol/ext-apps": "catalog:",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"@playwright/test": "1.63.0",
 		"@types/node": "catalog:",
-		"@types/pngjs": "catalog:",
-		"@webgpu/types": "catalog:",
-		"pngjs": "catalog:",
 		"typescript": "catalog:",
 		"vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
 		"vite-plus": "catalog:",

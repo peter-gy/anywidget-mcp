@@ -1,6 +1,5 @@
 [tool.uv.workspace]
 members = ["packages/anywidget-mcp"]
-exclude = ["apps/e2e"]
 
 [tool.uv]
 exclude-newer = "2 days"

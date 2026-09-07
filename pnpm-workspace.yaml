@@ -9,11 +9,8 @@ catalog:
   "@modelcontextprotocol/sdk": 1.30.0
   "@oxlint/plugins": 1.76.0
   "@types/node": ^22.20.1
-  "@types/pngjs": 6.0.5
-  "@webgpu/types": 0.1.72
   oxlint: 1.76.0
   oxlint-tsgolint: 7.0.2001
-  pngjs: 7.0.0
   typescript: ^6.0.3
   vite: npm:@voidzero-dev/vite-plus-core@0.2.4
   vite-plugin-singlefile: 2.3.3

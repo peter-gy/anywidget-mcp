@@ -30,8 +30,11 @@ test("custom commands return text and binary buffers", async ({ page }) => {
 	await expect(widget.getByTestId("command-result")).toHaveText("retpada | 3,2,1");
 });
 
-test("large binary state round-trips through Python observers", async ({ page }) => {
+test("large binary state recovers a lost response and commits Python observer results", async ({
+	page,
+}) => {
 	test.slow();
+	await page.goto("/?drop-read");
 	await openWidget(page, "large_state_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.getByTestId("large-binary")).toHaveText("8388608 | 0 | 255", {
@@ -46,6 +49,7 @@ test("large binary state round-trips through Python observers", async ({ page })
 	await expect
 		.poll(() => projectedState(page, "Python state"))
 		.toMatchObject({ payload_size: 8388608, payload_checksum: 58720266 });
+	await expect(page.getByLabel("Lost read responses")).toHaveText("1");
 });
 
 test("large JSON updates preserve every record and Unicode text", async ({ page }) => {

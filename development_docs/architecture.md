@@ -19,7 +19,6 @@ packages/app
 
 apps/e2e
     real MCP host and Python/browser integration tests
-    isolated Embedding Atlas Python project
 ```
 
 The private app package cannot import the Python composition package. Relative
@@ -28,7 +27,7 @@ and tests. Root commands coordinate the workspace.
 
 Vite composes the browser runtime into one HTML resource in the Python package.
 Hatch includes that resource in the wheel and sdist. CI builds it once and
-shares it with Python, browser integration, Atlas, and distribution checks.
+shares it with Python, browser integration, and distribution checks.
 
 ## From a tool call to a view
 
@@ -177,4 +176,4 @@ a model-visible pull path with the same Python-authoritative state.
 - App disposal, idle expiry, explicit `aclose()`, and server shutdown use the same
   graph and factory cleanup path.
 
-[Development](development.md) lists the unit, package, browser, and Atlas gates.
+[Development](development.md) lists the unit, package, and browser gates.

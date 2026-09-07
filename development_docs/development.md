@@ -103,31 +103,11 @@ pnpm --filter @anywidget-mcp/e2e e2e:ui
 suite after its build step. CI runs a separate job for each browser and uploads
 `apps/e2e/playwright-report/` and `apps/e2e/test-results/` after the test run.
 
-## Embedding Atlas integration
-
-Run the released Embedding Atlas widget against the packaged app:
-
-```sh
-pnpm e2e:atlas
-```
-
-The suite renders 1,000,000 precomputed points, checks colored pixels,
-filters to exactly 1,000 rows, verifies Python/model-context agreement, and
-resets the filter. A dropped attachment response exercises retry during the
-same session. The host rejects tool messages above 128 KiB and applies resource CSP.
-
-`apps/e2e/pyproject.toml` and its lockfile own an isolated Python environment for
-Atlas and its dependencies. This includes Atlas's declared machine-learning
-packages, although the tests use precomputed coordinates. Linux uses the official
-CPU PyTorch index. The main Python workspace excludes this project.
-
-Atlas 0.24 needs WebGPU with `shader-f16`. The local macOS configuration selects
-Metal. CI installs Mesa's software Vulkan driver and the browser checks its
-capabilities before running. A missing GPU capability fails with adapter
-information attached to the report.
-
-`make check` runs both the core browser matrix and Atlas. Atlas reports live in
-`apps/e2e/playwright-report/atlas/` and `apps/e2e/test-results/atlas/`.
+The browser suite transfers an 8 MiB binary value and 40,000 JSON records,
+recovers a dropped attachment response, and checks the resulting Python state.
+The host enforces a 128 KiB tool-message budget and applies resource content
+security policy. Startup coverage includes repeated source revisions and
+custom messages emitted before rendering.
 
 ## Package boundary
 

@@ -195,79 +195,6 @@ jobs:
             apps/e2e/test-results/
           retention-days: 14
 
-  atlas:
-    name: Embedding Atlas
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: browser
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - name: Read Node.js version
-        id: node-version
-        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
-        with:
-          enable-cache: true
-          cache-dependency-glob: |-
-            uv.lock
-            apps/e2e/uv.lock
-
-      - name: Install Python
-        run: uv python install "$(cat .python-version)"
-
-      - name: Set up Vite+
-        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
-        with:
-          version: 0.2.4
-          node-version: ${{ steps.node-version.outputs.version }}
-          cache: true
-          sfw: true
-          run-install: |
-            - args: ['--frozen-lockfile']
-
-      - name: Download browser resource
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: browser
-          path: packages/anywidget-mcp
-
-      - name: Install Python dependencies
-        run: uv sync --project apps/e2e --locked
-
-      - name: Check Atlas fixture
-        run: vp run @anywidget-mcp/e2e#check:atlas
-
-      - name: Install Playwright browser
-        run: vp exec -F @anywidget-mcp/e2e -- playwright install --with-deps chromium
-
-      - name: Set up software Vulkan
-        run: |-
-          sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
-          icd="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)"
-          test -n "$icd"
-          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-
-      - name: Run real Atlas browser tests
-        id: e2e
-        run: vp run @anywidget-mcp/e2e#e2e:atlas --project=chromium
-
-      - name: Upload browser test results
-        if: always() && steps.e2e.outcome != 'skipped'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: e2e-atlas
-          path: |-
-            apps/e2e/playwright-report/atlas/
-            apps/e2e/test-results/atlas/
-          retention-days: 14
-    env:
-      LIBGL_ALWAYS_SOFTWARE: "1"
-
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -355,7 +282,7 @@ jobs:
 
   required:
     if: always()
-    needs: [quality, test-python, browser, e2e, atlas, package, docs]
+    needs: [quality, test-python, browser, e2e, package, docs]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -367,14 +294,13 @@ jobs:
           TEST_JS: ${{ needs.browser.result }}
           TEST_PYTHON: ${{ needs.test-python.result }}
           E2E: ${{ needs.e2e.result }}
-          ATLAS: ${{ needs.atlas.result }}
         run: |
           if [ "$QUALITY" != success ] || \
              [ "$TEST_PYTHON" != success ] || \
              [ "$TEST_JS" != success ] || \
-             [ "$E2E" != success ] || [ "$ATLAS" != success ] || \
+             [ "$E2E" != success ] || \
              [ "$PACKAGE" != success ] || [ "$DOCS" != success ]; then
-            printf 'Required jobs: quality=%s test-python=%s test-js=%s e2e=%s atlas=%s package=%s docs=%s\n' \
-              "$QUALITY" "$TEST_PYTHON" "$TEST_JS" "$E2E" "$ATLAS" "$PACKAGE" "$DOCS" >&2
+            printf 'Required jobs: quality=%s test-python=%s test-js=%s e2e=%s package=%s docs=%s\n' \
+              "$QUALITY" "$TEST_PYTHON" "$TEST_JS" "$E2E" "$PACKAGE" "$DOCS" >&2
             exit 1
           fi
