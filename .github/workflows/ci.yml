@@ -179,11 +179,11 @@ jobs:
         run: uv sync --all-packages --group dev --locked
 
       - name: Install Playwright browser
-        run: pnpm --filter @anywidget-mcp/e2e exec playwright install --with-deps "${{ matrix.browser }}"
+        run: vp exec -F @anywidget-mcp/e2e -- playwright install --with-deps "${{ matrix.browser }}"
 
       - name: Run browser integration tests
         id: e2e
-        run: pnpm --filter @anywidget-mcp/e2e e2e --project="${{ matrix.browser }}"
+        run: vp run @anywidget-mcp/e2e#e2e --project="${{ matrix.browser }}"
 
       - name: Upload browser test results
         if: always() && steps.e2e.outcome != 'skipped'
@@ -239,10 +239,10 @@ jobs:
         run: uv sync --project apps/e2e --locked
 
       - name: Check Atlas fixture
-        run: pnpm --filter @anywidget-mcp/e2e check:atlas
+        run: vp run @anywidget-mcp/e2e#check:atlas
 
       - name: Install Playwright browser
-        run: pnpm --filter @anywidget-mcp/e2e exec playwright install --with-deps chromium
+        run: vp exec -F @anywidget-mcp/e2e -- playwright install --with-deps chromium
 
       - name: Set up software Vulkan
         run: |-
@@ -254,7 +254,7 @@ jobs:
 
       - name: Run real Atlas browser tests
         id: e2e
-        run: pnpm --filter @anywidget-mcp/e2e e2e:atlas --project=chromium
+        run: vp run @anywidget-mcp/e2e#e2e:atlas --project=chromium
 
       - name: Upload browser test results
         if: always() && steps.e2e.outcome != 'skipped'

@@ -44,7 +44,7 @@ export default defineConfig({
 			gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
 		},
 		{
-			command: "pnpm exec vp dev --config vite.config.ts",
+			command: "vp dev --config vite.config.ts",
 			url: "http://127.0.0.1:4173",
 			timeout: 30_000,
 			reuseExistingServer: false,
