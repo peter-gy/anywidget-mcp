@@ -1,0 +1,35 @@
+apps/e2e/package.json
+  s_714d3a9b445793::t_41e1b933b1b757 10
+apps/e2e/tsconfig.json
+  s_714d3a9b445793::t_28beb3e0e3bbbe 4
+  s_714d3a9b445793::t_41e1b933b1b757 3,5
+development_docs/development.md
+  s_714d3a9b445793::t_41e1b933b1b757 106-110
+package.json
+  s_714d3a9b445793::t_41e1b933b1b757 10
+development_docs/architecture.md
+  s_714d3a9b445793::t_41e1b933b1b757 30,179
+.github/workflows/ci.yml
+  s_714d3a9b445793::t_41e1b933b1b757 285,301,303-304
+AGENTS.md
+  s_714d3a9b445793::t_41e1b933b1b757 198-200
+apps/e2e/tests/runtime.spec.ts
+  s_714d3a9b445793::t_41e1b933b1b757 37,52
+  s_714d3a9b445793::t_28beb3e0e3bbbe 33-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c62891bf6c54c937375504c766351e64eb1a882c",
+  "prompts": {},
+  "sessions": {
+    "s_714d3a9b445793": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07d8e-4aa5-7061-91e4-a891c8865299",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
