@@ -10,7 +10,7 @@ import type { RuntimeBinding } from "../src/binding";
 import type { BridgeModel } from "../src/model";
 import type { RuntimeRecord } from "../src/runtime-value";
 import { ToolCallQueue, type ToolRequest } from "../src/tool-calls";
-import { fixtureStrings } from "./runtime-test-support";
+import { deferred, fixtureStrings } from "./runtime-test-support";
 
 interface FixtureAsset {
 	id: string;
@@ -387,7 +387,12 @@ describe("WidgetRuntime asset hydration", () => {
 
 	test("aborts stalled persistent cache reads and disposes the server session", async () => {
 		const esm = await fixtureAsset("export default { render() {} }");
-		const open = vi.fn(async (): Promise<Cache> => await new Promise<Cache>(() => undefined));
+		const opened = deferred<void>();
+		const open = vi.fn(async (): Promise<Cache> => {
+			opened.resolve();
+			return await new Promise<Cache>(() => undefined);
+		});
+		vi.stubGlobal("navigator", { locks: { request: vi.fn() } });
 		vi.stubGlobal("caches", { open });
 		const names: string[] = [];
 		const callServerTool = vi.fn(async (request: { name: string }): Promise<CallToolResult> => {
@@ -420,10 +425,11 @@ describe("WidgetRuntime asset hydration", () => {
 			controller.signal,
 		);
 
-		await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+		const rejected = expect(creation).rejects.toMatchObject({ name: "AbortError" });
+		await opened.promise;
 		controller.abort(new DOMException("superseded", "AbortError"));
 
-		await expect(creation).rejects.toMatchObject({ name: "AbortError" });
+		await rejected;
 		expect(names).toEqual(["anywidget_dispose"]);
 	});
 

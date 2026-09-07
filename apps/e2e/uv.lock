@@ -12,17 +12,6 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P2D"
 
-[options.exclude-newer-package]
-gistwidget = false
-jupyter-book-marimo = false
-marimo = false
-marimo-export = false
-marimo-jupyter-extension = false
-marimo-lens = false
-marimo-studio = false
-mkdocs-marimo = false
-moutils = false
-
 [[package]]
 name = "accelerate"
 version = "1.14.0"
