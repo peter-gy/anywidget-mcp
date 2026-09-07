@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import threading
+import base64
 
 import anywidget
 import pytest
+from anywidget._descriptor import MimeBundleDescriptor
 
 from anywidget_mcp._bridge import SessionSnapshot, WidgetSession
 
@@ -28,11 +30,13 @@ def test_initial_state_separates_binary_buffers() -> None:
     model_id = session.root_model_id
 
     try:
-        model = session.models[model_id]
+        model = session.launch_snapshot().models[model_id]
 
         assert "payload" not in model["state"]
         assert model["bufferPaths"] == [["payload"]]
-        assert model["buffers"] == ["AP8="]
+        assert [session.resolve_attachment(ref) for ref in model["buffers"]] == [
+            bytes([0, 255])
+        ]
     finally:
         session.close()
 
@@ -45,42 +49,44 @@ def test_asset_registry_retains_live_sources_and_the_latest_snapshot() -> None:
 
     try:
         launch = session.launch_snapshot()
-        initial_id = launch.models[widget.model_id]["sourceRefs"]["_esm"]
+        initial_id = launch.models[widget.model_id]["sourceRefs"]["_esm"]["id"]
 
         widget._esm = middle_source
         widget._esm = current_source
         update = session.snapshot()
         update_ids = [
-            message["sourceRefs"]["_esm"]
+            message["sourceRefs"]["_esm"]["id"]
             for message in update.messages
             if "sourceRefs" in message
         ]
 
         assert len(update_ids) == 2
-        assert set(update.asset_manifest) == set(update_ids)
+        assert set(update.attachment_ids) == set(update_ids)
         assert (
-            session.asset_contents(update_ids)[update_ids[0]]["text"] == middle_source
+            base64.b64decode(session.read_attachment(update_ids[0], 0)["data"]).decode()
+            == middle_source
         )
         assert (
-            session.asset_contents(update_ids)[update_ids[1]]["text"] == current_source
+            base64.b64decode(session.read_attachment(update_ids[1], 0)["data"]).decode()
+            == current_source
         )
-        with pytest.raises(KeyError, match="Unknown widget asset"):
-            session.asset_contents([initial_id])
+        with pytest.raises(KeyError, match="Unknown widget attachment"):
+            session.read_attachment(initial_id, 0)
 
         following = session.snapshot()
-        assert following.asset_manifest == {}
-        with pytest.raises(KeyError, match="Unknown widget asset"):
-            session.asset_contents([update_ids[0]])
+        assert following.attachment_ids == ()
+        with pytest.raises(KeyError, match="Unknown widget attachment"):
+            session.read_attachment(update_ids[0], 0)
         assert (
-            session.asset_contents([update_ids[1]])[update_ids[1]]["text"]
+            base64.b64decode(session.read_attachment(update_ids[1], 0)["data"]).decode()
             == current_source
         )
 
         widget._esm = middle_source
         repeated = session.snapshot()
-        assert set(repeated.asset_manifest) == {update_ids[0]}
+        assert set(repeated.attachment_ids) == {update_ids[0]}
         assert (
-            session.asset_contents([update_ids[0]])[update_ids[0]]["text"]
+            base64.b64decode(session.read_attachment(update_ids[0], 0)["data"]).decode()
             == middle_source
         )
     finally:
@@ -96,18 +102,21 @@ def test_asset_registry_releases_sources_after_the_last_live_model_detaches() ->
 
     try:
         launch = session.launch_snapshot()
-        first_id = launch.models[first.model_id]["sourceRefs"]["_esm"]
-        second_id = launch.models[second.model_id]["sourceRefs"]["_esm"]
+        first_id = launch.models[first.model_id]["sourceRefs"]["_esm"]["id"]
+        second_id = launch.models[second.model_id]["sourceRefs"]["_esm"]["id"]
         assert first_id == second_id
 
         root.payload = [second]
         session.snapshot()
-        assert session.asset_contents([first_id])[first_id]["text"] == shared_source
+        assert (
+            base64.b64decode(session.read_attachment(first_id, 0)["data"]).decode()
+            == shared_source
+        )
 
         root.payload = []
         session.snapshot()
-        with pytest.raises(KeyError, match="Unknown widget asset"):
-            session.asset_contents([first_id])
+        with pytest.raises(KeyError, match="Unknown widget attachment"):
+            session.read_attachment(first_id, 0)
     finally:
         session.close()
 
@@ -125,9 +134,17 @@ def test_inbound_binary_update_returns_echo_before_observer_update() -> None:
                 "state": {},
                 "buffer_paths": [["payload"]],
             },
-            ["AQID"],
+            [bytes([1, 2, 3])],
         )
-        messages = snapshot.messages
+        messages = [
+            {
+                **message,
+                "buffers": [
+                    session.resolve_attachment(ref) for ref in message["buffers"]
+                ],
+            }
+            for message in snapshot.messages
+        ]
 
         assert widget.payload == bytes([1, 2, 3])
         assert widget.size == 3
@@ -139,7 +156,7 @@ def test_inbound_binary_update_returns_echo_before_observer_update() -> None:
                     "state": {},
                     "buffer_paths": [["payload"]],
                 },
-                "buffers": ["AQID"],
+                "buffers": [bytes([1, 2, 3])],
             },
             {
                 "modelId": model_id,
@@ -171,9 +188,17 @@ def test_custom_message_preserves_command_response_and_buffers() -> None:
                     "msg": {"value": 1},
                 },
             },
-            ["AP8C"],
+            [bytes([0, 255, 2])],
         )
-        messages = snapshot.messages
+        messages = [
+            {
+                **message,
+                "buffers": [
+                    session.resolve_attachment(ref) for ref in message["buffers"]
+                ],
+            }
+            for message in snapshot.messages
+        ]
 
         assert messages == [
             {
@@ -186,7 +211,7 @@ def test_custom_message_preserves_command_response_and_buffers() -> None:
                         "response": {"seen": {"value": 1}},
                     },
                 },
-                "buffers": ["Av8A"],
+                "buffers": [bytes([2, 255, 0])],
             }
         ]
     finally:
@@ -293,6 +318,40 @@ def test_protocol_child_receives_updates_and_emits_synced_state() -> None:
             and message["data"].get("state") == {"value": 12}
             for message in snapshot.messages
         )
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("py_to_js", [False, True])
+def test_protocol_child_preserves_its_sync_direction(py_to_js: bool) -> None:
+    class DirectedChild(ProtocolChild):
+        _repr_mimebundle_ = MimeBundleDescriptor(
+            _esm="export default { render() {} }",
+            follow_changes=False,
+        )
+
+    child = DirectedChild(value=2)
+    controller = child._repr_mimebundle_
+    controller.sync_object_with_view(py_to_js=py_to_js, js_to_py=not py_to_js)
+    session = WidgetSession("instance", NestedParentWidget(payload=[child]))
+    child_id = controller.model_id
+
+    try:
+        session.launch_snapshot()
+        child.value = 5
+        snapshot = session.snapshot()
+        emitted = [
+            message for message in snapshot.messages if message["modelId"] == child_id
+        ]
+        assert bool(emitted) is py_to_js
+        update = {"method": "update", "state": {"value": 8}}
+        if py_to_js:
+            with pytest.raises(RuntimeError, match="no comm message handler"):
+                session.receive(child_id, update)
+            assert child.value == 5
+        else:
+            session.receive(child_id, update)
+            assert child.value == 8
     finally:
         session.close()
 

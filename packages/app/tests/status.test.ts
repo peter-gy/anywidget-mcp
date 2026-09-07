@@ -2,9 +2,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test } from "vite-plus/test";
 
 import {
-	DEFAULT_LOADING_MESSAGE,
 	loadingMessageFromArguments,
-	loadingMessageFromResult,
+	loadingMessageFromPayload,
 	loadingMessageForTool,
 	toolResultError,
 } from "../src/status";
@@ -30,13 +29,15 @@ describe("widget status", () => {
 			_meta: { anywidget: { loadingMessage: "Building the embedding atlas…" } },
 		};
 
-		expect(loadingMessageFromResult(result)).toBe("Building the embedding atlas…");
+		expect(loadingMessageFromPayload(result._meta?.anywidget)).toBe(
+			"Building the embedding atlas…",
+		);
 	});
 
 	test("derives the fallback from the MCP tool title", () => {
 		expect(loadingMessageForTool("Embedding Atlas")).toBe("Initializing Embedding Atlas…");
-		expect(loadingMessageForTool(undefined)).toBe(DEFAULT_LOADING_MESSAGE);
-		expect(loadingMessageForTool("x".repeat(121))).toBe(DEFAULT_LOADING_MESSAGE);
+		expect(loadingMessageForTool(undefined)).toBe("Initializing widget…");
+		expect(loadingMessageForTool("x".repeat(121))).toBe("Initializing widget…");
 	});
 
 	test("surfaces a failed primary tool result", () => {

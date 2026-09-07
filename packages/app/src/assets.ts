@@ -1,352 +1,82 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-
+import { AttachmentStore, blobRef, normalizeBlobRef, type BlobRef } from "./attachments";
 import type { State } from "./model";
-import {
-	isNumber,
-	isRecord,
-	isString,
-	type RuntimeRecord,
-	type RuntimeValue,
-} from "./runtime-value";
+import { isRecord, type RuntimeValue } from "./runtime-value";
 import type { QueuedToolCall } from "./tool-calls";
-import { retryTransport } from "./transport";
 
-export const PROTOCOL_VERSION = 1;
-
-export type AssetKind = "esm" | "css";
-export type SourceTrait = "_esm" | "_css";
 export interface SourceRefs {
-	_esm?: string;
-	_css?: string;
+	_esm?: BlobRef;
+	_css?: BlobRef;
 }
-
-interface AssetDescriptor {
-	kind: AssetKind;
-	byteLength: number;
-}
-
-interface AssetContent extends AssetDescriptor {
-	text: string;
-}
-
-const ASSET_ID = /^(esm|css):sha256:([0-9a-f]{64})$/;
-const SOURCE_KIND: Record<SourceTrait, AssetKind> = { _esm: "esm", _css: "css" };
-const MAX_ASSETS_PER_REQUEST = 128;
 const CACHE_IO_TIMEOUT_MS = 500;
-const CACHE_NAME = "anywidget-mcp-assets-v1";
-const CACHE_KEY_PREFIX = "https://anywidget-mcp.invalid/assets/";
-const MEMORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
-
-interface MemoryAsset {
-	source: string;
-	byteLength: number;
-}
-
-export class AssetMemoryCache {
-	private readonly entries = new Map<string, MemoryAsset>();
-	private byteLength = 0;
-
-	constructor(private readonly maxByteLength: number) {
-		if (!Number.isSafeInteger(maxByteLength) || maxByteLength < 0) {
-			throw new TypeError("Asset memory cache size must be a non-negative safe integer");
-		}
-	}
-
-	get(assetId: string): string | undefined {
-		const entry = this.entries.get(assetId);
-		if (!entry) return undefined;
-		this.entries.delete(assetId);
-		this.entries.set(assetId, entry);
-		return entry.source;
-	}
-
-	set(assetId: string, source: string, byteLength: number): void {
-		this.delete(assetId);
-		if (byteLength > this.maxByteLength) return;
-		this.entries.set(assetId, { source, byteLength });
-		this.byteLength += byteLength;
-		while (this.byteLength > this.maxByteLength) {
-			const oldest = this.entries.keys().next().value;
-			if (oldest === undefined) break;
-			this.delete(oldest);
-		}
-	}
-
-	delete(assetId: string): void {
-		const entry = this.entries.get(assetId);
-		if (!entry) return;
-		this.entries.delete(assetId);
-		this.byteLength -= entry.byteLength;
-	}
-
-	clear(): void {
-		this.entries.clear();
-		this.byteLength = 0;
-	}
-}
-
-const memoryCache = new AssetMemoryCache(MEMORY_CACHE_MAX_BYTES);
-
-export class AssetStore {
-	constructor(private readonly instanceId: string) {}
-
-	async resolve(
-		manifestValue: RuntimeValue,
-		refValues: RuntimeValue[],
-		call: QueuedToolCall,
-		signal?: AbortSignal,
-	): Promise<Map<string, string>> {
-		signal?.throwIfAborted();
-		const manifest = normalizeManifest(manifestValue);
-		const references = new Set<string>();
-		for (const value of refValues) {
-			const refs = normalizeSourceRefs(value);
-			for (const trait of ["_esm", "_css"] as const) {
-				const assetId = refs[trait];
-				if (assetId === undefined) continue;
-				const descriptor = manifest.get(assetId);
-				if (!descriptor) throw new Error(`Missing manifest entry for widget asset ${assetId}`);
-				if (descriptor.kind !== SOURCE_KIND[trait]) {
-					throw new Error(`Widget asset ${assetId} has the wrong source kind for ${trait}`);
-				}
-				references.add(assetId);
-			}
-		}
-		for (const assetId of manifest.keys()) {
-			if (!references.has(assetId)) {
-				throw new Error(`Widget asset manifest contains unreferenced asset ${assetId}`);
-			}
-		}
-
-		const resolved = new Map<string, string>();
-		const missing: string[] = [];
-		const cached = await Promise.all(
-			Array.from(references, async (assetId): Promise<[string, string | undefined]> => {
-				const descriptor = manifest.get(assetId);
-				if (!descriptor) throw new Error(`Missing manifest entry for widget asset ${assetId}`);
-				// Cache entries outlive a widget session, so verify byte length and digest
-				// before reuse.
-				const memory = memoryCache.get(assetId);
-				if (memory !== undefined && (await verifyAsset(assetId, descriptor, memory))) {
-					return [assetId, memory];
-				}
-				memoryCache.delete(assetId);
-
-				const persistent = await readPersistent(assetId, descriptor, signal);
-				if (persistent !== undefined) {
-					memoryCache.set(assetId, persistent, descriptor.byteLength);
-					return [assetId, persistent];
-				}
-				return [assetId, undefined];
-			}),
-		);
-		for (const [assetId, source] of cached) {
-			if (source === undefined) missing.push(assetId);
-			else resolved.set(assetId, source);
-		}
-		signal?.throwIfAborted();
-
-		if (missing.length > 0) {
-			const batches = Array.from(
-				{ length: Math.ceil(missing.length / MAX_ASSETS_PER_REQUEST) },
-				(_, index) =>
-					missing.slice(index * MAX_ASSETS_PER_REQUEST, (index + 1) * MAX_ASSETS_PER_REQUEST),
-			);
-			const fetchedEntries = await batches.reduce<Promise<Array<[string, string]>>>(
-				async (previous, batch) => [
-					...(await previous),
-					...Array.from(await this.fetch(batch, manifest, call, signal)),
-				],
-				Promise.resolve([]),
-			);
-			const fetched = new Map(fetchedEntries);
-			for (const [assetId, source] of fetched) {
-				const descriptor = manifest.get(assetId);
-				if (!descriptor) throw new Error(`Missing manifest entry for widget asset ${assetId}`);
-				memoryCache.set(assetId, source, descriptor.byteLength);
-				resolved.set(assetId, source);
-			}
-			void Promise.all(
-				Array.from(fetched, ([assetId, source]) => writePersistent(assetId, source)),
-			);
-		}
-		signal?.throwIfAborted();
-		return resolved;
-	}
-
-	private async fetch(
-		assetIds: string[],
-		manifest: Map<string, AssetDescriptor>,
-		call: QueuedToolCall,
-		signal?: AbortSignal,
-	): Promise<Map<string, string>> {
-		signal?.throwIfAborted();
-		const args = {
-			instance_id: this.instanceId,
-			asset_ids: assetIds,
-		};
-		const result = await retryTransport(
-			() => (signal ? call("anywidget_assets", args, signal) : call("anywidget_assets", args)),
-			signal,
-		);
-		signal?.throwIfAborted();
-		if (result.isError) throw new Error(toolErrorText(result));
-		const meta = isRecord(result._meta) ? result._meta.anywidget : undefined;
-		if (!isRecord(meta) || meta.protocolVersion !== PROTOCOL_VERSION) {
-			throw new Error("Widget asset response uses an incompatible protocol version");
-		}
-		const assetContents = meta.assetContents;
-		if (!isRecord(assetContents)) {
-			throw new Error("Widget asset response has no asset contents");
-		}
-
-		const expected = new Set(assetIds);
-		const returned = Object.keys(assetContents);
-		for (const assetId of returned) {
-			if (!expected.has(assetId)) {
-				throw new Error(`Widget asset response contains unexpected asset ${assetId}`);
-			}
-		}
-		const entries = await Promise.all(
-			assetIds.map(async (assetId): Promise<[string, string]> => {
-				const value = assetContents[assetId];
-				const descriptor = manifest.get(assetId);
-				if (!descriptor || !isRecord(value)) {
-					throw new Error(`Widget asset response is missing ${assetId}`);
-				}
-				const content = normalizeContent(assetId, value);
-				if (
-					content.kind !== descriptor.kind ||
-					content.byteLength !== descriptor.byteLength ||
-					!(await verifyAsset(assetId, descriptor, content.text))
-				) {
-					throw new Error(`Widget asset response failed verification for ${assetId}`);
-				}
-				return [assetId, content.text];
-			}),
-		);
-		return new Map(entries);
-	}
-}
-
-export function requireProtocolVersion<Value>(value: Value): void {
-	if (value !== PROTOCOL_VERSION) {
-		throw new Error(
-			`Widget payload protocol version ${String(value)} is incompatible with version ${PROTOCOL_VERSION}`,
-		);
-	}
-}
+const CACHE_NAME = "anywidget-mcp-sources-v3";
+const CACHE_KEY_PREFIX = "https://anywidget-mcp.invalid/sources/";
 
 export function normalizeSourceRefs<Value>(value: Value): SourceRefs {
 	if (value === undefined) return {};
 	if (!isRecord(value)) throw new Error("Widget source references must be an object");
 	const refs: SourceRefs = {};
-	for (const [trait, assetId] of Object.entries(value)) {
-		if (trait !== "_esm" && trait !== "_css") {
+	for (const [trait, ref] of Object.entries(value)) {
+		if (trait !== "_esm" && trait !== "_css")
 			throw new Error(`Unknown widget source reference ${trait}`);
-		}
-		if (!isString(assetId) || !ASSET_ID.test(assetId)) {
-			throw new Error(`Invalid widget source reference for ${trait}`);
-		}
-		refs[trait] = assetId;
+		refs[trait] = normalizeBlobRef(ref);
 	}
 	return refs;
+}
+
+export async function resolveSources(
+	refValues: RuntimeValue[],
+	store: AttachmentStore,
+	call: QueuedToolCall,
+	signal?: AbortSignal,
+): Promise<Map<string, string>> {
+	const resolved = new Map<string, string>();
+	const references = refValues.flatMap((value) => Object.values(normalizeSourceRefs(value)));
+	await references.reduce<Promise<void>>(async (pending, ref) => {
+		await pending;
+		if (resolved.has(ref.id)) return;
+		signal?.throwIfAborted();
+		let source = await readPersistent(ref, signal);
+		if (source === undefined) {
+			const bytes = await store.read(ref, call, signal);
+			source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+			void writePersistent(ref, source);
+		}
+		signal?.throwIfAborted();
+		resolved.set(ref.id, source);
+	}, Promise.resolve());
+	return resolved;
 }
 
 export function hydrateSources(
 	state: State,
 	refValue: RuntimeValue,
-	assets: Map<string, string>,
+	sources: Map<string, string>,
 ): State {
 	for (const trait of ["_esm", "_css"] as const) {
-		if (Object.hasOwn(state, trait)) {
+		if (Object.hasOwn(state, trait))
 			throw new Error(`Widget source ${trait} must use a content-addressed reference`);
-		}
 	}
 	const hydrated = { ...state };
-	for (const [trait, assetId] of Object.entries(normalizeSourceRefs(refValue))) {
-		const source = assets.get(assetId);
-		if (source === undefined) throw new Error(`Widget asset ${assetId} was not resolved`);
+	for (const [trait, ref] of Object.entries(normalizeSourceRefs(refValue))) {
+		const source = sources.get(ref.id);
+		if (source === undefined) throw new Error(`Widget source ${ref.id} was not resolved`);
 		hydrated[trait] = source;
 	}
 	return hydrated;
 }
 
-export async function widgetAssetId(kind: AssetKind, source: string): Promise<string> {
-	const bytes = new TextEncoder().encode(`anywidget-mcp-asset-v1\0${kind}\0${source}`);
-	const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-	const hex = Array.from(new Uint8Array(digest), (value) =>
-		value.toString(16).padStart(2, "0"),
-	).join("");
-	return `${kind}:sha256:${hex}`;
-}
-
-export function clearAssetMemoryCache(): void {
-	memoryCache.clear();
-}
-
-function normalizeManifest<Value>(value: Value): Map<string, AssetDescriptor> {
-	if (!isRecord(value)) throw new Error("Widget payload has no asset manifest");
-	const manifest = new Map<string, AssetDescriptor>();
-	for (const [assetId, raw] of Object.entries(value)) {
-		const match = ASSET_ID.exec(assetId);
-		if (!match || !isRecord(raw)) throw new Error(`Invalid widget asset manifest entry ${assetId}`);
-		const kind = raw.kind;
-		const byteLength = raw.byteLength;
-		if (
-			(kind !== "esm" && kind !== "css") ||
-			match[1] !== kind ||
-			!isNumber(byteLength) ||
-			!Number.isSafeInteger(byteLength) ||
-			byteLength < 0
-		) {
-			throw new Error(`Invalid widget asset manifest entry ${assetId}`);
-		}
-		manifest.set(assetId, { kind, byteLength });
-	}
-	return manifest;
-}
-
-function normalizeContent(assetId: string, value: RuntimeRecord): AssetContent {
-	const kind = value.kind;
-	const byteLength = value.byteLength;
-	const text = value.text;
-	if (
-		(kind !== "esm" && kind !== "css") ||
-		!isNumber(byteLength) ||
-		!Number.isSafeInteger(byteLength) ||
-		byteLength < 0 ||
-		!isString(text)
-	) {
-		throw new Error(`Invalid widget asset content ${assetId}`);
-	}
-	return { kind, byteLength, text };
-}
-
-async function verifyAsset(
-	assetId: string,
-	descriptor: AssetDescriptor,
-	source: string,
-): Promise<boolean> {
-	if (new TextEncoder().encode(source).byteLength !== descriptor.byteLength) return false;
-	return (await widgetAssetId(descriptor.kind, source)) === assetId;
-}
-
-async function readPersistent(
-	assetId: string,
-	descriptor: AssetDescriptor,
-	signal?: AbortSignal,
-): Promise<string | undefined> {
+async function readPersistent(ref: BlobRef, signal?: AbortSignal): Promise<string | undefined> {
 	try {
-		if (!("caches" in globalThis)) return undefined;
+		if (!persistentStorageAvailable()) return undefined;
 		return await withDeadline(
 			(async () => {
 				const cache = await globalThis.caches.open(CACHE_NAME);
-				const response = await cache.match(cacheKey(assetId));
+				const response = await cache.match(cacheKey(ref.id));
 				if (!response) return undefined;
-				const source = await response.text();
-				if (await verifyAsset(assetId, descriptor, source)) return source;
-				await cache.delete(cacheKey(assetId));
+				const bytes = new Uint8Array(await response.arrayBuffer());
+				if (bytes.byteLength === ref.byteLength && (await blobRef(bytes)).id === ref.id)
+					return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+				await cache.delete(cacheKey(ref.id));
 				return undefined;
 			})(),
 			CACHE_IO_TIMEOUT_MS,
@@ -358,14 +88,36 @@ async function readPersistent(
 	}
 }
 
-async function writePersistent(assetId: string, source: string): Promise<void> {
+function persistentStorageAvailable(): boolean {
+	return "caches" in globalThis && "navigator" in globalThis && "locks" in navigator;
+}
+
+async function writePersistent(ref: BlobRef, source: string): Promise<void> {
 	try {
-		if (!("caches" in globalThis)) return;
+		if (!persistentStorageAvailable()) return;
 		await withDeadline(
-			(async () => {
-				const cache = await globalThis.caches.open(CACHE_NAME);
-				await cache.put(cacheKey(assetId), new Response(source));
-			})(),
+			navigator.locks.request(
+				CACHE_NAME,
+				{ signal: AbortSignal.timeout(CACHE_IO_TIMEOUT_MS) },
+				async () => {
+					const cache = await globalThis.caches.open(CACHE_NAME);
+					const key = cacheKey(ref.id);
+					const put = async (): Promise<void> => {
+						try {
+							await cache.put(key, new Response(source));
+						} catch (error) {
+							if (!(error instanceof DOMException) || error.name !== "QuotaExceededError")
+								throw error;
+							const oldest = (await cache.keys()).find((entry) =>
+								entry.url.startsWith(CACHE_KEY_PREFIX),
+							);
+							if (!oldest || !(await cache.delete(oldest))) throw error;
+							await put();
+						}
+					};
+					await put();
+				},
+			),
 			CACHE_IO_TIMEOUT_MS,
 		);
 	} catch {
@@ -399,9 +151,4 @@ function withDeadline<T>(task: Promise<T>, milliseconds: number, signal?: AbortS
 
 function cacheKey(assetId: string): string {
 	return `${CACHE_KEY_PREFIX}${encodeURIComponent(assetId)}`;
-}
-
-function toolErrorText(result: CallToolResult): string {
-	const text = result.content.find((item) => item.type === "text");
-	return text?.text ?? "Widget asset request failed";
 }

@@ -4,12 +4,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import anyio
-import httpx
+import httpx2 as httpx
 import pytest
 from anyio.lowlevel import checkpoint
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import TextContent
 
 import anywidget_mcp._runtime as runtime_module
@@ -33,7 +33,7 @@ async def http_connected(
     async with streamable_http_client(
         "http://localhost:8000/mcp",
         http_client=http,
-    ) as (read, write, _):
+    ) as (read, write):
         async with ClientSession(read, write) as client:
             await client.initialize()
             yield client
@@ -66,11 +66,11 @@ async def test_runtime_owner_exit_waits_for_an_active_borrower() -> None:
         await owner_connected.wait()
         async with connected(server) as client:
             first = await client.call_tool("counter", {"value": 1})
-            results.append(first.isError is False)
+            results.append(first.is_error is False)
             borrower_connected.set()
             await check_borrower.wait()
             second = await client.call_tool("counter", {"value": 2})
-            results.append(second.isError is False)
+            results.append(second.is_error is False)
             borrower_checked.set()
             await release_borrower.wait()
 
@@ -98,10 +98,10 @@ async def test_http_app_keeps_widget_sessions_across_mcp_connections(
     attached: bool,
 ) -> None:
     if attached:
-        server = FastMCP("test", stateless_http=stateless_http)
+        server = MCPServer("test")
         widgets = attach(server)
     else:
-        anywidget_server = AnyWidgetMCP("test", stateless_http=stateless_http)
+        anywidget_server = AnyWidgetMCP("test")
         server = anywidget_server
         widgets = anywidget_server
 
@@ -109,7 +109,7 @@ async def test_http_app_keeps_widget_sessions_across_mcp_connections(
     def counter() -> CounterWidget:
         return CounterWidget(value=3)
 
-    app = server.streamable_http_app()
+    app = server.streamable_http_app(stateless_http=stateless_http)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -126,11 +126,11 @@ async def test_http_app_keeps_widget_sessions_across_mcp_connections(
                     "anywidget_poll",
                     {
                         "instance_id": instance_id,
-                        "operation_id": "poll-after-connection-rotation",
+                        "operation_id": 1,
                     },
                 )
 
-    assert poll.isError is False
+    assert poll.is_error is False
 
 
 @pytest.mark.anyio
@@ -156,11 +156,11 @@ async def test_bootstrap_claim_replays_for_one_operation() -> None:
             {"bootstrap_id": token, "operation_id": "other-claim"},
         )
 
-    assert invalid.isError is True
-    assert replay.isError is False
+    assert invalid.is_error is True
+    assert replay.is_error is False
     assert replay.meta is not None
     assert replay.meta["anywidget"]["models"]
-    assert conflict.isError is True
+    assert conflict.is_error is True
     assert isinstance(conflict.content[0], TextContent)
     assert "claimed by another operation" in conflict.content[0].text
 
@@ -186,13 +186,13 @@ async def test_rejected_claim_cannot_dispose_the_accepted_session() -> None:
             "anywidget_poll",
             {
                 "instance_id": runtime["instanceId"],
-                "operation_id": "still-live",
+                "operation_id": 1,
             },
         )
 
-    assert rejected.isError is True
-    assert refused_dispose.isError is True
-    assert poll.isError is False
+    assert rejected.is_error is True
+    assert refused_dispose.is_error is True
+    assert poll.is_error is False
 
 
 @pytest.mark.parametrize("token", ["invalid", "A" * 32, "0" * 31, "0" * 32])
@@ -208,7 +208,7 @@ async def test_bootstrap_rejects_unavailable_capabilities_generically(
             {"bootstrap_id": token, "operation_id": "claim"},
         )
 
-    assert result.isError is True
+    assert result.is_error is True
     assert isinstance(result.content[0], TextContent)
     assert "Widget bootstrap is unavailable" in result.content[0].text
     assert token not in result.content[0].text
@@ -227,7 +227,7 @@ async def test_successful_session_call_consumes_bootstrap_claim() -> None:
             "anywidget_poll",
             {
                 "instance_id": runtime["instanceId"],
-                "operation_id": "first-poll",
+                "operation_id": 1,
             },
         )
         replay = await client.call_tool(
@@ -235,34 +235,64 @@ async def test_successful_session_call_consumes_bootstrap_claim() -> None:
             {"bootstrap_id": token, "operation_id": "claim"},
         )
 
-    assert poll.isError is False
-    assert replay.isError is True
+    assert poll.is_error is False
+    assert replay.is_error is True
     assert isinstance(replay.content[0], TextContent)
     assert "Widget bootstrap is unavailable" in replay.content[0].text
 
 
 @pytest.mark.anyio
-async def test_bootstrap_claim_switches_to_the_session_idle_timeout(
+async def test_configured_idle_lifetime_applies_from_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runtime_module, "UNCLAIMED_SESSION_TIMEOUT", 0.05)
-    server = AnyWidgetMCP("test", session_idle_timeout=0.25)
-    server.widget(CounterWidget)
+    import types
 
+    clock = [0.0]
+    monkeypatch.setattr(
+        runtime_module, "time", types.SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    server = AnyWidgetMCP("idle-policy", session_idle_timeout=60)
+    server.widget(CounterWidget)
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {})
+        active = server._widget_tools._require_runtime()
+        lease = active._bootstraps[bootstrap_id(launch)]
+        assert lease.deadline == 60
+        clock[0] = 31.0
         runtime = await bootstrap_runtime(client, launch)
-        await anyio.sleep(0.1)
-        poll = await client.call_tool(
-            "anywidget_poll",
-            {
-                "instance_id": runtime["instanceId"],
-                "operation_id": "after-unclaimed-deadline",
-            },
-        )
+        assert runtime["sessionIdleTimeoutMs"] == 60_000
+        assert lease.deadline == 91
 
-    assert runtime["sessionIdleTimeoutMs"] == 250
-    assert poll.isError is False
+
+@pytest.mark.anyio
+async def test_lifespan_owned_widget_survives_age_and_closes_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    clock = [0.0]
+    monkeypatch.setattr(
+        runtime_module, "time", types.SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    widget = CounterWidget()
+    server = AnyWidgetMCP("durable", session_idle_timeout=None)
+    server.widget(lambda: widget, name="counter")
+    async with connected(server) as client:
+        launch = await client.call_tool("counter", {})
+        active = server._widget_tools._require_runtime()
+        assert active._bootstraps[bootstrap_id(launch)].deadline is None
+        clock[0] = 1_000_000.0
+        runtime = await bootstrap_runtime(client, launch)
+        assert "sessionIdleTimeoutMs" not in runtime
+        assert not (
+            await client.call_tool(
+                "anywidget_poll",
+                {"instance_id": runtime["instanceId"], "operation_id": 1},
+            )
+        ).is_error
+        assert widget.comm is not None
+        await server.aclose()
+        assert widget.comm is None
 
 
 @pytest.mark.anyio
@@ -337,13 +367,13 @@ async def test_dispose_releases_widget_session() -> None:
             "anywidget_poll",
             {
                 "instance_id": instance_id,
-                "operation_id": "poll-after-dispose",
+                "operation_id": 1,
             },
         )
 
-    assert first.structuredContent == {"disposed": True}
-    assert second.structuredContent == {"disposed": False}
-    assert poll.isError is True
+    assert first.structured_content == {"disposed": True}
+    assert second.structured_content == {"disposed": False}
+    assert poll.is_error is True
     assert isinstance(poll.content[0], TextContent)
     assert "Unknown widget session" in poll.content[0].text
 
@@ -376,18 +406,16 @@ async def test_dispose_accepts_an_unclaimed_bootstrap_capability() -> None:
             {"bootstrap_id": token, "operation_id": "after-dispose"},
         )
 
-    assert missing_operation.isError is True
-    assert disposed.structuredContent == {"disposed": True}
+    assert missing_operation.is_error is True
+    assert disposed.structured_content == {"disposed": True}
     assert closed.is_set()
-    assert bootstrap.isError is True
+    assert bootstrap.is_error is True
     assert isinstance(bootstrap.content[0], TextContent)
     assert "Widget bootstrap is unavailable" in bootstrap.content[0].text
 
 
 @pytest.mark.anyio
-async def test_idle_session_expires_when_an_app_never_claims_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_idle_session_expires_when_an_app_never_claims_it() -> None:
     closed = anyio.Event()
 
     class TrackedWidget(CounterWidget):
@@ -395,8 +423,7 @@ async def test_idle_session_expires_when_an_app_never_claims_it(
             super().close()
             closed.set()
 
-    monkeypatch.setattr(runtime_module, "UNCLAIMED_SESSION_TIMEOUT", 0.05)
-    server = AnyWidgetMCP("test", session_idle_timeout=1.0)
+    server = AnyWidgetMCP("test", session_idle_timeout=0.05)
 
     @server.widget
     def counter() -> TrackedWidget:
@@ -415,7 +442,7 @@ async def test_idle_session_expires_when_an_app_never_claims_it(
             },
         )
 
-    assert bootstrap.isError is True
+    assert bootstrap.is_error is True
     assert isinstance(bootstrap.content[0], TextContent)
     assert "Widget bootstrap is unavailable" in bootstrap.content[0].text
 
@@ -435,8 +462,8 @@ async def test_aclose_closes_multiple_live_sessions() -> None:
         first = await client.call_tool("counter", {})
         second = await client.call_tool("counter", {})
 
-        assert first.isError is False
-        assert second.isError is False
+        assert first.is_error is False
+        assert second.is_error is False
         assert all(widget.comm is not None for widget in created)
         await server.aclose()
 
@@ -447,6 +474,12 @@ async def test_aclose_closes_multiple_live_sessions() -> None:
 async def test_active_session_call_is_not_expired() -> None:
     active = anyio.Event()
     release = anyio.Event()
+    idle_closed = anyio.Event()
+
+    class IdleWidget(CounterWidget):
+        def close(self) -> None:
+            super().close()
+            idle_closed.set()
 
     async with anyio.create_task_group() as task_group:
         runtime = SessionRuntime(
@@ -472,7 +505,15 @@ async def test_active_session_call_is_not_expired() -> None:
 
         task_group.start_soon(hold_call)
         await active.wait()
-        await anyio.sleep(0.1)
+        await runtime.open(
+            IdleWidget,
+            {},
+            DEFAULT_STATE,
+            tool_name="idle_counter",
+            tool_title="Idle Counter",
+        )
+        with anyio.fail_after(2):
+            await idle_closed.wait()
 
         with runtime.use(instance_id):
             pass
@@ -512,8 +553,8 @@ async def test_idle_cleanup_continues_when_one_widget_close_fails() -> None:
         first = await client.call_tool("broken", {})
         second = await client.call_tool("tracked", {})
 
-        assert first.isError is False
-        assert second.isError is False
+        assert first.is_error is False
+        assert second.is_error is False
         with anyio.fail_after(1):
             await closed.wait()
 
@@ -531,20 +572,19 @@ async def test_reused_root_is_rejected_without_closing_the_live_session() -> Non
         launch = await client.call_tool("counter", {})
         payload = await bootstrap_runtime(client, launch)
         reused = await client.call_tool("counter", {})
-        comm = await client.call_tool(
-            "anywidget_comm",
+        comm = await client.comm(
             {
                 "instance_id": payload["instanceId"],
                 "model_id": payload["rootModelId"],
-                "operation_id": "reused-root-live-session",
+                "operation_id": 1,
                 "data": {"method": "request_state"},
             },
         )
 
-    assert reused.isError is True
+    assert reused.is_error is True
     assert isinstance(reused.content[0], TextContent)
     assert "Return a fresh root" in reused.content[0].text
-    assert comm.isError is False
+    assert comm.is_error is False
 
 
 @pytest.mark.anyio
@@ -563,18 +603,17 @@ async def test_reused_child_is_rejected_without_closing_the_live_session() -> No
         launch = await client.call_tool("parent", {})
         payload = await bootstrap_runtime(client, launch)
         reused = await client.call_tool("parent", {})
-        comm = await client.call_tool(
-            "anywidget_comm",
+        comm = await client.comm(
             {
                 "instance_id": payload["instanceId"],
                 "model_id": child.model_id,
-                "operation_id": "reused-child-live-session",
+                "operation_id": 1,
                 "data": {"method": "request_state"},
             },
         )
 
         assert roots[1].comm is None
-        assert reused.isError is True
+        assert reused.is_error is True
         assert isinstance(reused.content[0], TextContent)
         assert "fresh nested widgets" in reused.content[0].text
-        assert comm.isError is False
+        assert comm.is_error is False

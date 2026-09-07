@@ -29,7 +29,7 @@ describe("WidgetRuntime command lifecycle", () => {
 		const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
 			if (request.name === "anywidget_dispose") return { content: [] };
 			const data = requestData(request);
-			if (request.arguments?.operation_id === "outer-operation") {
+			if (request.arguments?.operation_id === 1) {
 				return {
 					content: [],
 					_meta: {
@@ -100,10 +100,13 @@ describe("WidgetRuntime command lifecycle", () => {
 			},
 		);
 
-		await runtime.send(rootId, { method: "update", state: {} }, [], "outer-operation");
+		await runtime.send(rootId, { method: "update", state: {} }, []);
 
 		expect(commands).toEqual(["child-a:1", "child-a:2", "child-b:1", "child-b:2"]);
 		expect(maxActiveCalls).toBe(1);
+		expect(callServerTool.mock.calls.map(([request]) => request.arguments?.operation_id)).toEqual([
+			1, 2, 3, 4, 5,
+		]);
 		await runtime.dispose();
 	});
 
@@ -115,7 +118,7 @@ describe("WidgetRuntime command lifecycle", () => {
 		const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
 			if (request.name === "anywidget_dispose") return { content: [] };
 			const data = requestData(request);
-			if (request.arguments?.operation_id === "outer-operation") {
+			if (request.arguments?.operation_id === 1) {
 				order.push("outer");
 				return {
 					content: [],
@@ -182,7 +185,7 @@ describe("WidgetRuntime command lifecycle", () => {
 				});
 			},
 		);
-		await runtime.send(rootId, { method: "update", state: {} }, [], "outer-operation");
+		await runtime.send(rootId, { method: "update", state: {} }, []);
 
 		const rootModel = runtime.model(rootId);
 		rootModel.set("value", 1);
@@ -340,7 +343,7 @@ describe("WidgetRuntime command lifecycle", () => {
 				if (request.name === "anywidget_dispose" || request.name === "after") {
 					return { content: [] };
 				}
-				if (request.arguments?.operation_id !== "outer-operation") {
+				if (request.arguments?.operation_id !== 1) {
 					return new Promise<never>(() => undefined);
 				}
 				return {
@@ -381,22 +384,19 @@ describe("WidgetRuntime command lifecycle", () => {
 								await experimental.invoke("never");
 							},
 						}),
-						timeoutMilliseconds: 25,
+						cleanupTimeoutMilliseconds: 25,
 					});
 				},
 			);
 
-			const outer = runtime.send(
-				"root-model",
-				{ method: "update", state: {} },
-				[],
-				"outer-operation",
-			);
+			const outer = runtime.send("root-model", { method: "update", state: {} }, []);
 			const outerFailure = expect(outer).rejects.toBeDefined();
 			await vi.advanceTimersByTimeAsync(0);
 			const after = calls.call("after", {});
-			await vi.advanceTimersByTimeAsync(25);
+			const disposal = runtime.dispose();
+			await vi.runAllTimersAsync();
 
+			await disposal;
 			await outerFailure;
 			await expect(after).resolves.toEqual({ content: [] });
 			expect(callsByName).toContain("anywidget_dispose");

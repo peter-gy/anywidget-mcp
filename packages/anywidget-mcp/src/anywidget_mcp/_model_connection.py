@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from anywidget import AnyWidget
 from anywidget._descriptor import ReprMimeBundle
+from anywidget._util import put_buffers
 
 from ._comm import BridgeComm, WidgetMessage
 from ._widget_protocol import model_id, protocol_controller
@@ -26,7 +27,6 @@ def connect_models(
     incremental outbound message queue.
     """
 
-    protocol_sync: dict[int, bool] = {}
     for widget in widgets:
         current_model_id = model_id(widget, controllers)
         controller = protocol_controller(widget, controllers)
@@ -35,11 +35,9 @@ def connect_models(
         else:
             assert controller is not None
             old_comm = controller._comm
-            protocol_sync[id(widget)] = bool(
-                getattr(old_comm, "_msg_callback", None) or controller._disconnectors
-            )
-            controller.unsync_object_with_view()
+        incoming = getattr(old_comm, "_msg_callback", None)
         if old_comm is not None:
+            old_comm.on_msg(None)
             old_comm.close()
         comm = BridgeComm(
             current_model_id,
@@ -47,9 +45,11 @@ def connect_models(
         )
         if isinstance(widget, AnyWidget):
             widget.comm = comm
+            comm.on_msg(_widget_message_handler(widget))
         else:
             assert controller is not None
             cast(Any, controller)._comm = comm
+            comm.on_msg(incoming)
         comms[current_model_id] = comm
 
     models: dict[str, dict[str, Any]] = {}
@@ -60,10 +60,7 @@ def connect_models(
             widget.send_state()
         else:
             assert controller is not None
-            if protocol_sync[id(widget)]:
-                controller.sync_object_with_view()
-            else:
-                controller.send_state()
+            controller.send_state()
         emitted = messages[first_message:]
         del messages[first_message:]
         current_model_id = model_id(widget, controllers)
@@ -88,3 +85,22 @@ def connect_models(
             "buffers": list(initial.buffers),
         }
     return models
+
+
+def _widget_message_handler(widget: AnyWidget) -> Callable[[dict[str, Any]], None]:
+    if type(widget)._handle_msg is not AnyWidget._handle_msg:
+        return widget._handle_msg
+
+    def receive(message: dict[str, Any]) -> None:
+        data = message["content"]["data"]
+        if data.get("method") == "update" and "state" in data:
+            state = data["state"]
+            if "buffer_paths" in data:
+                put_buffers(state, data["buffer_paths"], message["buffers"])
+            # The notebook message handler swallows trait validation errors.
+            # MCP must report rejection before the browser accepts its echo.
+            widget.set_state(state)
+        else:
+            widget._handle_msg(message)
+
+    return receive

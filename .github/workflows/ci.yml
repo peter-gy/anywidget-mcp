@@ -49,9 +49,9 @@ jobs:
       - name: Check Python formatting, linting, and types
         run: |
           uv lock --check
-          uv run ruff format --check packages/anywidget-mcp scripts
-          uv run ruff check packages/anywidget-mcp scripts
-          uv run ty check packages/anywidget-mcp scripts
+          uv run ruff format --check packages/anywidget-mcp scripts apps/e2e/server.py
+          uv run ruff check packages/anywidget-mcp scripts apps/e2e/server.py
+          uv run ty check packages/anywidget-mcp scripts apps/e2e/server.py
           uv run pyrefly check --min-severity warn
 
       - name: Check shell scripts
@@ -64,6 +64,7 @@ jobs:
     name: Python ${{ matrix.python-version }} compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: browser
     strategy:
       fail-fast: false
       matrix:
@@ -71,10 +72,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - name: Read Node.js version
-        id: node-version
-        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
@@ -85,25 +82,18 @@ jobs:
       - name: Install Python
         run: uv python install "${{ matrix.python-version }}"
 
-      - name: Set up Vite+
-        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
+      - name: Download browser resource
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          version: 0.2.4
-          node-version: ${{ steps.node-version.outputs.version }}
-          cache: true
-          sfw: true
-          run-install: |
-            - args: ['--frozen-lockfile']
-
-      - name: Build browser resource
-        run: vp run -F @anywidget-mcp/python build
+          name: browser
+          path: packages/anywidget-mcp
 
       - name: Run Python tests
         env:
           UV_PYTHON: ${{ matrix.python-version }}
-        run: uv run pytest -q packages/anywidget-mcp/tests
+        run: uv run --locked pytest -q packages/anywidget-mcp/tests
 
-  test-js:
+  browser:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -127,12 +117,31 @@ jobs:
       - name: Run JavaScript tests
         run: vp run -r test
 
-      - name: Build browser package
-        run: vp run -F @anywidget-mcp/app build
+      - name: Build browser packages
+        run: make browser
 
-  package:
+      - name: Check generated files
+        run: git diff --exit-code
+
+      - name: Upload browser resource
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: browser
+          path: |
+            packages/anywidget-mcp/src/anywidget_mcp/static
+            packages/anywidget-mcp/THIRD_PARTY_NOTICES
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e:
+    name: Browser integration (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: browser
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -160,30 +169,138 @@ jobs:
           run-install: |
             - args: ['--frozen-lockfile']
 
+      - name: Download browser resource
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: browser
+          path: packages/anywidget-mcp
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages --group dev --locked
+
+      - name: Install Playwright browser
+        run: vp exec -F @anywidget-mcp/e2e -- playwright install --with-deps "${{ matrix.browser }}"
+
+      - name: Run browser integration tests
+        id: e2e
+        run: vp run @anywidget-mcp/e2e#e2e --project="${{ matrix.browser }}"
+
+      - name: Upload browser test results
+        if: always() && steps.e2e.outcome != 'skipped'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: e2e-${{ matrix.browser }}
+          path: |
+            apps/e2e/playwright-report/
+            apps/e2e/test-results/
+          retention-days: 14
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: browser
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install "$(cat .python-version)"
+
+      - name: Download browser resource
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: browser
+          path: packages/anywidget-mcp
+
       - name: Build and check package artifacts
-        run: make package
+        run: make package-artifacts
 
       - name: Check generated files
         run: git diff --exit-code
 
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: dist
+          path: |
+            dist/anywidget_mcp-*.whl
+            dist/anywidget_mcp-*.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Read Node.js version
+        id: node-version
+        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
+        with:
+          version: 0.2.4
+          node-version: ${{ steps.node-version.outputs.version }}
+          cache: true
+          sfw: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      - name: Build docs
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}
+        run: vp exec -F @anywidget-mcp/docs -- vitepress build
+
+      - name: Verify docs base path
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}
+        run: |
+          index=apps/docs/.vitepress/dist/index.html
+          test -f apps/docs/.vitepress/dist/getting-started.html
+          grep -q "href=\"${BASE_PATH}/assets/" "$index"
+          grep -q "src=\"${BASE_PATH}/assets/" "$index"
+          grep -q "href=\"${BASE_PATH}/getting-started\"" "$index"
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: docs
+          path: apps/docs/.vitepress/dist
+          retention-days: 1
+          if-no-files-found: error
+
   required:
     if: always()
-    needs: [quality, test-python, test-js, package]
+    needs: [quality, test-python, browser, e2e, package, docs]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Verify required jobs
         env:
           PACKAGE: ${{ needs.package.result }}
+          DOCS: ${{ needs.docs.result }}
           QUALITY: ${{ needs.quality.result }}
-          TEST_JS: ${{ needs.test-js.result }}
+          TEST_JS: ${{ needs.browser.result }}
           TEST_PYTHON: ${{ needs.test-python.result }}
+          E2E: ${{ needs.e2e.result }}
         run: |
           if [ "$QUALITY" != success ] || \
              [ "$TEST_PYTHON" != success ] || \
              [ "$TEST_JS" != success ] || \
-             [ "$PACKAGE" != success ]; then
-            printf 'Required jobs: quality=%s test-python=%s test-js=%s package=%s\n' \
-              "$QUALITY" "$TEST_PYTHON" "$TEST_JS" "$PACKAGE" >&2
+             [ "$E2E" != success ] || \
+             [ "$PACKAGE" != success ] || [ "$DOCS" != success ]; then
+            printf 'Required jobs: quality=%s test-python=%s test-js=%s e2e=%s package=%s docs=%s\n' \
+              "$QUALITY" "$TEST_PYTHON" "$TEST_JS" "$E2E" "$PACKAGE" "$DOCS" >&2
             exit 1
           fi

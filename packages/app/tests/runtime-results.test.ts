@@ -1,6 +1,8 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test, vi } from "vite-plus/test";
 
+import { delivery } from "./attachment-test-support";
+
 import { loadWidgetRuntime, parseToolLaunch, ToolResultGate } from "../src/runtime-results";
 
 const bootstrapId = "a".repeat(32);
@@ -16,18 +18,8 @@ const primaryResult: CallToolResult = {
 	_meta: { ui: { resourceUri: "ui://anywidget-mcp/app.html" } },
 };
 
-const bootstrapResult: CallToolResult = {
-	content: [],
-	_meta: {
-		anywidget: {
-			protocolVersion: 1,
-			instanceId: "session-1",
-			rootModelId: "root-model",
-			sessionIdleTimeoutMs: 900_000,
-			models: {},
-		},
-	},
-};
+const bootstrapPayload = { rootModelId: "root-model", sessionIdleTimeoutMs: 900_000, models: {} };
+const bootstrapResult = delivery(bootstrapPayload);
 
 describe("widget launch metadata", () => {
 	test("reads the bootstrap ID from the marker text", () => {
@@ -75,11 +67,21 @@ describe("widget bootstrap", () => {
 
 		await expect(loadWidgetRuntime(launch, call, "operation-1")).resolves.toEqual({
 			result: bootstrapResult,
-			payload: bootstrapResult._meta?.anywidget,
+			payload: { ...bootstrapPayload, protocolVersion: 3, instanceId: "session-1" },
 		});
 		expect(call).toHaveBeenCalledWith("anywidget_bootstrap", {
 			bootstrap_id: bootstrapId,
 			operation_id: "operation-1",
+		});
+	});
+
+	test("loads a session whose lifetime is controlled by explicit disposal", async () => {
+		const result = delivery({ rootModelId: "root", models: {} });
+		await expect(
+			loadWidgetRuntime(parseToolLaunch(primaryResult), async () => result),
+		).resolves.toEqual({
+			result,
+			payload: { rootModelId: "root", models: {}, protocolVersion: 3, instanceId: "session-1" },
 		});
 	});
 
@@ -145,7 +147,7 @@ describe("widget bootstrap", () => {
 		).rejects.toThrow("Widget session not found");
 	});
 
-	test("requires a complete version-1 runtime", async () => {
+	test("requires a complete version-3 runtime", async () => {
 		const launch = parseToolLaunch(primaryResult);
 		const cases: Array<[CallToolResult, string]> = [
 			[{ content: [] }, "no runtime data"],
@@ -166,7 +168,7 @@ describe("widget bootstrap", () => {
 				{
 					...bootstrapResult,
 					_meta: {
-						anywidget: { protocolVersion: 1, rootModelId: "root-model" },
+						anywidget: { protocolVersion: 3, rootModelId: "root-model" },
 					},
 				},
 				"no instance ID",
@@ -175,7 +177,7 @@ describe("widget bootstrap", () => {
 				{
 					...bootstrapResult,
 					_meta: {
-						anywidget: { protocolVersion: 1, instanceId: "session-1" },
+						anywidget: { protocolVersion: 3, instanceId: "session-1", payload: {} },
 					},
 				},
 				"no root model ID",
@@ -185,10 +187,9 @@ describe("widget bootstrap", () => {
 					...bootstrapResult,
 					_meta: {
 						anywidget: {
-							protocolVersion: 1,
+							protocolVersion: 3,
 							instanceId: "session-1",
-							rootModelId: "root-model",
-							sessionIdleTimeoutMs: 0,
+							payload: { rootModelId: "root-model", sessionIdleTimeoutMs: 0 },
 						},
 					},
 				},

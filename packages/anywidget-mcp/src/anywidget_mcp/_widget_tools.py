@@ -3,31 +3,32 @@
 from __future__ import annotations
 
 import math
+import json
 import threading
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from importlib.resources import files
-from typing import Annotated, Any, TypedDict, cast, overload
+from typing import Annotated, Any, TypedDict, overload
 
 import anyio
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, Icon, TextContent, ToolAnnotations
 from pydantic import AnyUrl, Field
-from starlette.applications import Starlette
-from starlette.types import Lifespan
 
-from ._bridge import PROTOCOL_VERSION
+from ._attachments import BlobRef, CHUNK_BYTES, PROTOCOL_VERSION, validate_ref
 from ._projection_json import canonical_json
 from ._runtime import (
     CommReplay,
+    acknowledge_operations,
     PollReplay,
     SessionRuntime,
     comm_fingerprint,
     remember_comm_replay,
+    protocol_error,
+    model_result,
     session_result,
-    validate_operation_id,
 )
 from ._state import DEFAULT_STATE, validate_state_spec
 from ._targets import (
@@ -37,6 +38,9 @@ from ._targets import (
     compile_widget_target,
     normalize_state,
 )
+
+OperationId = Annotated[int, Field(strict=True, ge=1, le=2**53 - 1)]
+AcknowledgedOperationId = Annotated[int, Field(strict=True, ge=0, le=2**53 - 1)]
 
 APP_MIME_TYPE = "text/html;profile=mcp-app"
 APP_RESOURCE_URI = "ui://anywidget-mcp/app.html"
@@ -77,21 +81,23 @@ class WidgetTools:
 
     def __init__(
         self,
-        mcp: FastMCP,
+        mcp: MCPServer,
         *,
         app_uri: str = APP_RESOURCE_URI,
         csp: AppCSP | None = None,
         permissions: AppPermissions | None = None,
         prefers_border: bool = True,
-        session_idle_timeout: float = 900.0,
+        session_idle_timeout: float | None = 900.0,
     ) -> None:
-        if (
+        if session_idle_timeout is not None and (
             isinstance(session_idle_timeout, bool)
             or not isinstance(session_idle_timeout, (int, float))
             or not math.isfinite(session_idle_timeout)
             or session_idle_timeout <= 0
         ):
-            raise ValueError("session_idle_timeout must be a positive finite number")
+            raise ValueError(
+                "session_idle_timeout must be None or a positive finite number"
+            )
         app_uri = _validated_app_uri(mcp, app_uri)
         conflicts = [
             name for name in SESSION_TOOL_NAMES if mcp._tool_manager.get_tool(name)
@@ -99,21 +105,22 @@ class WidgetTools:
         if conflicts:
             joined = ", ".join(sorted(conflicts))
             raise ValueError(
-                f"FastMCP already defines reserved AnyWidget tools: {joined}"
+                f"MCPServer already defines reserved AnyWidget tools: {joined}"
             )
         self._mcp = mcp
         self._app_uri = app_uri
         self._csp = _app_csp(csp)
         self._permissions = permissions
         self._prefers_border = prefers_border
-        self._session_idle_timeout = float(session_idle_timeout)
+        self._session_idle_timeout = (
+            float(session_idle_timeout) if session_idle_timeout is not None else None
+        )
         self._runtime_lock = threading.RLock()
         self._runtime: SessionRuntime | None = None
         self._runtime_generation: _RuntimeGeneration | None = None
         self._register_app_resource()
         self._register_session_tools()
         self._install_lifespan()
-        self._install_streamable_http_app()
 
     @overload
     def widget(
@@ -185,7 +192,7 @@ class WidgetTools:
         Target parameters define the widget-specific MCP inputs. When the target
         has no ``loading_message`` parameter, registration adds it as an optional
         host status argument and consumes it before target construction. A target
-        parameter with that name keeps its own contract. FastMCP injects a
+        parameter with that name keeps its own contract. MCPServer injects a
         ``Context`` parameter without exposing it in the schema. A factory may
         return one widget or a non-empty widget sequence, directly or through a
         synchronous or asynchronous context manager. A sequence renders in order
@@ -261,7 +268,7 @@ class WidgetTools:
         return runtime
 
     def _install_lifespan(self) -> None:
-        previous = self._mcp._mcp_server.lifespan
+        previous = self._mcp._lowlevel_server.lifespan
 
         @asynccontextmanager
         async def lifespan(server: Any):
@@ -269,31 +276,7 @@ class WidgetTools:
                 async with self._runtime_lifespan():
                     yield context
 
-        self._mcp._mcp_server.lifespan = lifespan
-
-    def _install_streamable_http_app(self) -> None:
-        """Keep sessions alive while Streamable HTTP connections rotate.
-
-        FastMCP enters its low-level lifespan per connection. The outer ASGI
-        lifespan retains the shared runtime across those connections.
-        """
-
-        create_app = self._mcp.streamable_http_app
-
-        def streamable_http_app() -> Starlette:
-            app = create_app()
-            previous_lifespan = app.router.lifespan_context
-
-            @asynccontextmanager
-            async def lifespan(starlette_app: Starlette):
-                async with self._runtime_lifespan():
-                    async with previous_lifespan(starlette_app) as state:
-                        yield state
-
-            app.router.lifespan_context = cast(Lifespan[Starlette], lifespan)
-            return app
-
-        setattr(self._mcp, "streamable_http_app", streamable_http_app)
+        self._mcp._lowlevel_server.lifespan = lifespan
 
     @asynccontextmanager
     async def _runtime_lifespan(self):
@@ -421,23 +404,23 @@ class WidgetTools:
         async def anywidget_comm(
             instance_id: str,
             model_id: str,
-            data: dict[str, Any],
-            operation_id: str,
-            buffers: list[str] | None = None,
+            operation_id: OperationId,
+            payload_ref: BlobRef,
+            acknowledged_operation_id: AcknowledgedOperationId = 0,
         ) -> CallToolResult:
             runtime = self._require_runtime()
             with runtime.use(instance_id) as lease:
                 with lease.protocol_lock:
-                    fingerprint = comm_fingerprint(model_id, data, buffers or ())
-                    validate_operation_id(operation_id)
+                    acknowledge_operations(lease, acknowledged_operation_id)
+                    fingerprint = comm_fingerprint(model_id, payload_ref)
                     replay = lease.comm_replays.get(operation_id)
                     if replay is not None:
+                        lease.session.consume_uploads(operation_id)
                         if replay.fingerprint != fingerprint:
                             raise ToolError(
                                 f"operation_id {operation_id!r} was reused for "
                                 "another comm request"
                             )
-                        lease.comm_replays.move_to_end(operation_id)
                         if replay.error is not None:
                             raise ToolError(replay.error)
                         assert replay.result is not None
@@ -445,11 +428,36 @@ class WidgetTools:
                         runtime.complete_bootstrap(lease)
                         return result
 
+                    if operation_id <= lease.last_operation_sequence:
+                        lease.session.consume_uploads(operation_id)
+                        raise ToolError(
+                            "Widget operation sequence was already completed or cancelled"
+                        )
+                    lease.session.retire_uploads_before(operation_id)
                     try:
-                        snapshot = lease.session.receive(model_id, data, buffers or ())
-                        result = session_result(lease, snapshot)
+                        value = json.loads(
+                            lease.session.resolve_attachment(payload_ref)
+                        )
+                        if not isinstance(value, dict) or set(value) != {
+                            "data",
+                            "buffers",
+                        }:
+                            raise ValueError(
+                                "Widget comm payload must contain data and buffers"
+                            )
+                        data, buffers = value["data"], value["buffers"]
+                        if not isinstance(data, dict) or not isinstance(buffers, list):
+                            raise ValueError(
+                                "Widget comm data must be an object and buffers an array"
+                            )
+                        refs = [validate_ref(ref) for ref in buffers]
+                        raw_buffers = [
+                            lease.session.resolve_attachment(ref) for ref in refs
+                        ]
+                        snapshot = lease.session.receive(model_id, data, raw_buffers)
+                        result, attachment_ids = session_result(lease, snapshot)
                     except Exception as error:
-                        message = str(error)
+                        message = protocol_error(error)
                         remember_comm_replay(
                             lease,
                             operation_id,
@@ -459,6 +467,7 @@ class WidgetTools:
                                 error=message,
                             ),
                         )
+                        lease.session.consume_uploads(operation_id)
                         raise ToolError(message) from error
                     remember_comm_replay(
                         lease,
@@ -467,26 +476,37 @@ class WidgetTools:
                             fingerprint=fingerprint,
                             result=result.model_copy(deep=True),
                             error=None,
-                            asset_ids=tuple(snapshot.asset_manifest),
+                            attachment_ids=attachment_ids,
                         ),
                     )
+                    lease.session.consume_uploads(operation_id)
                     runtime.complete_bootstrap(lease)
                     return result
 
         async def anywidget_poll(
             instance_id: str,
-            operation_id: str,
+            operation_id: OperationId,
             acknowledged_model_ids: list[str] | None = None,
+            acknowledged_operation_id: AcknowledgedOperationId = 0,
         ) -> CallToolResult:
             runtime = self._require_runtime()
             with runtime.use(instance_id) as lease:
                 with lease.protocol_lock:
-                    validate_operation_id(operation_id)
+                    if (
+                        len(
+                            canonical_json(acknowledged_model_ids or []).encode("utf-8")
+                        )
+                        > 96 * 1024
+                    ):
+                        raise ToolError(
+                            "Widget removal acknowledgments exceed the request byte limit"
+                        )
                     acknowledgments = tuple(
                         sorted(dict.fromkeys(acknowledged_model_ids or ()))
                     )
-                    replay = lease.last_poll_replay
-                    if replay is not None and replay.operation_id == operation_id:
+                    acknowledge_operations(lease, acknowledged_operation_id)
+                    replay = lease.poll_replays.get(operation_id)
+                    if replay is not None:
                         if replay.acknowledged_model_ids != acknowledgments:
                             raise ToolError(
                                 f"operation_id {operation_id!r} was reused for "
@@ -496,25 +516,56 @@ class WidgetTools:
                         runtime.complete_bootstrap(lease)
                         return result
 
+                    if operation_id <= lease.last_operation_sequence:
+                        raise ToolError(
+                            "Widget operation sequence was already completed or cancelled"
+                        )
+                    lease.session.retire_uploads_before(operation_id)
                     try:
                         lease.session.acknowledge_model_removals(acknowledgments)
                     except (KeyError, RuntimeError, ValueError) as error:
-                        raise ToolError(str(error)) from error
+                        raise ToolError(protocol_error(error)) from error
                     snapshot = lease.session.snapshot()
-                    result = session_result(lease, snapshot)
+                    result, attachment_ids = session_result(lease, snapshot)
                     replay = PollReplay(
                         operation_id=operation_id,
                         acknowledged_model_ids=acknowledgments,
                         result=result.model_copy(deep=True),
-                        asset_ids=tuple(snapshot.asset_manifest),
+                        attachment_ids=attachment_ids,
                     )
-                    replay.asset_ids = lease.session.pin_assets(replay.asset_ids)
-                    previous = lease.last_poll_replay
-                    lease.last_poll_replay = replay
-                    if previous is not None:
-                        lease.session.release_assets(previous.asset_ids)
+                    replay.attachment_ids = lease.session.pin_attachments(
+                        replay.attachment_ids
+                    )
+                    lease.poll_replays[operation_id] = replay
+                    lease.last_operation_sequence = operation_id
+                    lease.session.finish_delivery()
                     runtime.complete_bootstrap(lease)
                     return result
+
+        async def anywidget_cancel(
+            instance_id: str,
+            operation_id: OperationId,
+            acknowledged_operation_id: AcknowledgedOperationId = 0,
+        ) -> CallToolResult:
+            with self._require_runtime().use(instance_id) as lease:
+                with lease.protocol_lock:
+                    acknowledge_operations(lease, acknowledged_operation_id)
+                    lease.last_operation_sequence = max(
+                        lease.last_operation_sequence, operation_id
+                    )
+                    lease.session.consume_uploads(operation_id)
+                    lease.session.retire_uploads_before(operation_id)
+            return CallToolResult(
+                content=[],
+                _meta={
+                    "anywidget": {
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "instanceId": instance_id,
+                        "operationId": operation_id,
+                        "retired": True,
+                    }
+                },
+            )
 
         async def anywidget_dispose(
             session_id: str,
@@ -527,7 +578,7 @@ class WidgetTools:
             )
             return CallToolResult(
                 content=[],
-                structuredContent={"disposed": disposed},
+                structured_content={"disposed": disposed},
             )
 
         async def anywidget_bootstrap(
@@ -552,51 +603,67 @@ class WidgetTools:
             open widget. Pass the ``state_id`` returned by its widget tool.
             """
             tool_name, projection = self._require_runtime().state(state_id)
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=(
-                            f"Current {tool_name} state: "
-                            f"{canonical_json(projection.state)}."
-                        ),
-                    )
-                ],
-                structuredContent={
-                    "state_id": state_id,
-                    "tool": tool_name,
-                    "version": projection.version,
-                    "state": projection.state,
-                },
+            return model_result(
+                CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=(
+                                f"Current {tool_name} state: "
+                                f"{canonical_json(projection.state)}."
+                            ),
+                        )
+                    ],
+                    structured_content={
+                        "state_id": state_id,
+                        "tool": tool_name,
+                        "version": projection.version,
+                        "state": projection.state,
+                    },
+                )
             )
 
-        async def anywidget_assets(
-            instance_id: str,
-            asset_ids: list[str],
+        async def anywidget_read(
+            instance_id: str, blob_id: str, offset: int = 0
         ) -> CallToolResult:
-            runtime = self._require_runtime()
-            with runtime.use(instance_id) as lease:
+            with self._require_runtime().use(instance_id) as lease:
                 with lease.protocol_lock:
                     try:
-                        contents = lease.session.asset_contents(asset_ids)
+                        payload = lease.session.read_attachment(blob_id, offset)
                     except (KeyError, RuntimeError, ValueError) as error:
-                        raise ToolError(str(error)) from error
-                    runtime.complete_bootstrap(lease)
-            return CallToolResult(
-                content=[],
-                _meta={
-                    "anywidget": {
-                        "protocolVersion": PROTOCOL_VERSION,
-                        "assetContents": contents,
-                    }
-                },
-            )
+                        raise ToolError(protocol_error(error)) from error
+            return CallToolResult(content=[], _meta={"anywidget": payload})
+
+        async def anywidget_write(
+            instance_id: str,
+            operation_id: OperationId,
+            blob_id: str,
+            byte_length: int,
+            offset: int,
+            data: Annotated[str, Field(max_length=4 * ((CHUNK_BYTES + 2) // 3))],
+        ) -> CallToolResult:
+            with self._require_runtime().use(instance_id) as lease:
+                with lease.protocol_lock:
+                    try:
+                        if (
+                            operation_id <= lease.last_operation_sequence
+                            and operation_id not in lease.comm_replays
+                        ):
+                            raise ToolError(
+                                "Widget operation sequence was already completed"
+                            )
+                        payload = lease.session.write_attachment(
+                            operation_id, blob_id, byte_length, offset, data
+                        )
+                    except (KeyError, RuntimeError, ValueError) as error:
+                        raise ToolError(protocol_error(error)) from error
+            return CallToolResult(content=[], _meta={"anywidget": payload})
 
         state_annotations = ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=False,
         )
         self._mcp.add_tool(anywidget_bootstrap, meta=app_only, structured_output=False)
         self._mcp.add_tool(
@@ -605,13 +672,15 @@ class WidgetTools:
             meta=model_only,
             structured_output=False,
         )
-        self._mcp.add_tool(anywidget_assets, meta=app_only, structured_output=False)
+        self._mcp.add_tool(anywidget_read, meta=app_only, structured_output=False)
+        self._mcp.add_tool(anywidget_write, meta=app_only, structured_output=False)
         self._mcp.add_tool(anywidget_comm, meta=app_only, structured_output=False)
         self._mcp.add_tool(anywidget_poll, meta=app_only, structured_output=False)
         self._mcp.add_tool(anywidget_dispose, meta=app_only, structured_output=False)
+        self._mcp.add_tool(anywidget_cancel, meta=app_only, structured_output=False)
 
 
-def _validated_app_uri(mcp: FastMCP, app_uri: str) -> str:
+def _validated_app_uri(mcp: MCPServer, app_uri: str) -> str:
     if not isinstance(app_uri, str):
         raise TypeError("app_uri must be a string")
     if "{" in app_uri or "}" in app_uri:
@@ -620,11 +689,9 @@ def _validated_app_uri(mcp: FastMCP, app_uri: str) -> str:
         normalized = str(AnyUrl(app_uri))
     except ValueError as error:
         raise ValueError(f"Invalid app_uri {app_uri!r}: {error}") from error
-    occupied = {
-        str(resource.uri) for resource in mcp._resource_manager.list_resources()
-    }
+    occupied = {resource.uri for resource in mcp._resource_manager.list_resources()}
     if normalized in occupied:
-        raise ValueError(f"FastMCP already defines the app resource {normalized!r}")
+        raise ValueError(f"MCPServer already defines the app resource {normalized!r}")
     return normalized
 
 

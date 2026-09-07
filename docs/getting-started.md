@@ -1,158 +1,68 @@
-<script setup>
-import { withBase } from 'vitepress'
-</script>
-
 # Getting started
 
-Run `ColorPicker` and `LiveEdit` in Inspector Chat. Choose a color, then ask for
-an interactive explanation based on your selection.
+Open a color picker in an AI conversation, choose a color, then ask the model
+about your selection.
 
-Requires Python 3.11 or newer.
+You need Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/)
+to run the Python packages, and Node.js 22.22.2+ to run the Inspector host.
+Inspector Chat also needs a model provider configured in its settings. Calls
+use that provider's credentials and billing.
 
-## Run both widgets
+## Start the widget server
 
-Serve [Wigglystuff](https://koaning.github.io/wigglystuff/?utm_source=anywidget-mcp)'s `ColorPicker` and
-`LiveEdit` together:
+Serve `ColorPicker` from [Wigglystuff](https://koaning.github.io/wigglystuff/),
+a collection of AnyWidgets:
 
 ```sh
-uvx --with wigglystuff anywidget-mcp serve \
-  wigglystuff:ColorPicker \
-  wigglystuff:LiveEdit \
-  --port 8010
+uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
-The MCP endpoint is `http://127.0.0.1:8010/mcp`. The server exposes both widgets
-as tools.
-
-Browse the [AnyWidget gallery](https://try.anywidget.dev/?utm_source=anywidget-mcp) for more widgets and
-links to their packages.
+The command keeps running and exposes the `color_picker` tool at
+`http://127.0.0.1:8010/mcp`.
 
 ## See it in Inspector Chat
 
-Keep the widget server running. In another terminal, start the
-[mcp-use Inspector](https://github.com/mcp-use/mcp-use?utm_source=anywidget-mcp), a local MCP Apps host:
+In another terminal, start [mcp-use Inspector](https://github.com/mcp-use/mcp-use),
+a local host for [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview).
+MCP Apps lets a tool render an interactive interface inside a conversation.
 
 ```sh
-npx --yes @mcp-use/inspector@12.0.3 \
+npx --yes @mcp-use/inspector@20.3.7 \
   --url http://127.0.0.1:8010/mcp \
   --port 7878
 ```
 
-Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure a
+Open [Inspector Chat](http://127.0.0.1:7878/inspector?tab=chat), configure your
 model provider, and ask:
 
-> let me pick a color
+> Open a color picker.
 
-Choose a color, then ask:
+Choose a different color in the widget, then ask:
 
-> given my current selection help explain the HEX to RGB algo interactively
+> What color did I choose? Give me its RGB values.
 
-The model reads the picker's current color from its model-visible state and can
-open `LiveEdit` for an interactive explanation.
+The answer should use your current selection. Python owns the widget state,
+and the model reads it through [model-visible state](./state).
 
-<video class="demo-video" controls muted playsinline preload="metadata" :poster="withBase('/demos/anywidget-mcp-demo-poster.jpg')" aria-label="A conversation uses ColorPicker to choose a color and LiveEdit to explain HEX-to-RGB conversion" :src="withBase('/demos/anywidget-mcp-demo.mp4')"></video>
+## If something fails
 
-If port 7878 is busy, use the Inspector URL printed in the terminal.
+| Symptom                                  | Check                                                                                   |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| Inspector cannot connect                 | Keep the Python terminal running and use its `/mcp` URL.                                |
+| The port is occupied                     | Choose another `--port` and update the connecting URL. Inspector prints its actual URL. |
+| A tool returns text but no widget        | Use a host with MCP Apps rendering support.                                             |
+| Chat cannot call the tool                | Configure a model provider, select the connected server, and enable its tools.          |
+| The model describes an earlier selection | Ask it to read the current widget state through `anywidget_state`.                      |
 
-## Use another MCP client
+Stop both terminal processes with Ctrl+C when finished.
 
-Codex can connect to MCP servers, but inline widget rendering requires MCP Apps
-support. ChatGPT on the web and Claude Desktop support MCP Apps. Check the
-[current client support list](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp#client-support)
-before configuring another client.
+## Use your own host or widget
 
-## Install in a project
+Connect another MCP Apps host to the same server URL. Check the
+[client support list](https://modelcontextprotocol.io/extensions/apps/overview#client-support)
+for host-specific setup. A host that launches Python itself can use
+[standard input and output](./deployment#standard-input-and-output).
 
-Install `anywidget-mcp` in the Python environment that owns your widget code:
-
-```sh
-uv pip install anywidget-mcp
-```
-
-## Bring your own AnyWidget
-
-Define a counter with the same Python state and frontend module you would use in
-a notebook:
-
-```python
-# counter.py
-import anywidget
-import traitlets
-
-
-class Counter(anywidget.AnyWidget):
-    """Adjust a counter and inspect its current value."""
-
-    _esm = """
-    function render({ model, el, signal }) {
-      const button = document.createElement("button");
-      const draw = () => {
-        button.textContent = `Count: ${model.get("value")}`;
-      };
-      button.addEventListener("click", () => {
-        model.set("value", model.get("value") + 1);
-        model.save_changes();
-      }, { signal });
-      model.on("change:value", draw);
-      signal.addEventListener("abort", () => {
-        model.off("change:value", draw);
-      }, { once: true });
-      draw();
-      el.append(button);
-    }
-    export default { render };
-    """
-
-    value = traitlets.Int(0, help="Current counter value.").tag(sync=True)
-```
-
-Point the CLI at the widget's import path:
-
-```sh
-anywidget-mcp serve counter:Counter
-```
-
-A button click updates `Counter.value` in Python. The default model-visible
-state includes `value`.
-
-## Use the same widget in marimo
-
-Render `Counter` while developing it in a marimo notebook:
-
-```python
-import marimo as mo
-
-from counter import Counter
-
-counter = mo.ui.anywidget(Counter())
-counter
-```
-
-The notebook and MCP App use the same widget code and synchronized `value`.
-
-## Start the server from Python
-
-Call `serve()` when the widget module should start the MCP server:
-
-```python
-from anywidget_mcp import serve
-from counter import Counter
-
-serve(Counter, state="value")
-```
-
-`serve()` listens on streamable HTTP by default and blocks until the transport
-exits. Set `transport="stdio"` when the MCP host launches the process.
-
-[How it works](./how-it-works) explains how the widget becomes an MCP tool, how
-browser changes reach Python, and how the model reads the current value.
-
-## Next steps
-
-- [Model-visible state](./state) chooses which widget values the model can use.
-- [Pass input to widgets](./factories) accepts values from the model, loads
-  data, returns several widgets, and adds widgets to an existing MCP server.
-- [Create AnyWidgets from source at runtime](./factories#create-anywidgets-from-source-at-runtime)
-  covers generated widget code and its sandbox requirements.
-- [Deployment](./deployment) covers tool inspection, HTTP and standard-input
-  transports, browser policy, and session lifetime.
+[Write a widget](./authoring) to build your own interface,
+[pass input](./factories) to choose its initial values, or
+[combine widgets](./composition) through one server.

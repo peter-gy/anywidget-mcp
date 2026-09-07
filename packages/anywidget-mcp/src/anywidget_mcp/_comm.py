@@ -2,26 +2,17 @@
 
 from __future__ import annotations
 
-import base64
 import copy
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
 
-def _encode_buffer(buffer: bytes | bytearray | memoryview) -> str:
-    return base64.b64encode(memoryview(buffer).tobytes()).decode("ascii")
-
-
-def _decode_buffer(buffer: str) -> bytes:
-    return base64.b64decode(buffer, validate=True)
-
-
 @dataclass(frozen=True)
 class WidgetMessage:
     model_id: str
     data: dict[str, Any]
-    buffers: tuple[str, ...]
+    buffers: tuple[bytes, ...]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -34,7 +25,7 @@ class WidgetMessage:
 class BridgeComm:
     """Implement the kernel-style comm interface expected by AnyWidget.
 
-    Outbound buffers become base64 wire values. Inbound values are decoded into
+    Outbound buffers are frozen before capture. Inbound values enter
     the callback envelope consumed by widget comm handlers.
     """
 
@@ -61,11 +52,16 @@ class BridgeComm:
             WidgetMessage(
                 model_id=self.comm_id,
                 data=data or {},
-                buffers=tuple(_encode_buffer(buffer) for buffer in buffers or ()),
+                buffers=tuple(
+                    buffer
+                    if isinstance(buffer, bytes)
+                    else memoryview(buffer).tobytes()
+                    for buffer in buffers or ()
+                ),
             )
         )
 
-    def receive(self, data: dict[str, Any], buffers: Iterable[str] = ()) -> None:
+    def receive(self, data: dict[str, Any], buffers: Iterable[bytes] = ()) -> None:
         if self._closed:
             raise RuntimeError("The widget session is closed")
         if self._on_msg is None:
@@ -73,7 +69,7 @@ class BridgeComm:
         self._on_msg(
             {
                 "content": {"data": copy.deepcopy(data)},
-                "buffers": [_decode_buffer(buffer) for buffer in buffers],
+                "buffers": list(buffers),
             }
         )
 

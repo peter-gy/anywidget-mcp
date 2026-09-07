@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from anywidget import AnyWidget
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from traitlets import Int
 from wigglystuff import ColorPicker
 
@@ -218,7 +218,7 @@ def test_cli_imports_widget_class_and_forwards_server_options(
         def widget(self, target: object) -> None:
             events.append(("widget", target))
 
-        def run(self, *, transport: str) -> None:
+        def run(self, *, transport: str, **_options: object) -> None:
             events.append(("run", transport))
 
     monkeypatch.setattr(cli, "AnyWidgetMCP", FakeServer)
@@ -243,7 +243,7 @@ def test_cli_imports_widget_class_and_forwards_server_options(
             "init",
             (
                 "ColorPicker MCP",
-                {"host": "0.0.0.0", "port": 8123, "log_level": "DEBUG"},
+                {"log_level": "DEBUG"},
             ),
         ),
         ("widget", ColorPicker),
@@ -264,7 +264,7 @@ def test_cli_registers_multiple_targets_in_command_line_order(
         def widget(self, target: object) -> None:
             events.append(("widget", target))
 
-        def run(self, *, transport: str) -> None:
+        def run(self, *, transport: str, **_options: object) -> None:
             events.append(("run", transport))
 
     monkeypatch.setattr(cli, "AnyWidgetMCP", FakeServer)
@@ -290,7 +290,7 @@ def test_cli_registers_multiple_targets_in_command_line_order(
             "init",
             (
                 "AnyWidget MCP",
-                {"host": "0.0.0.0", "port": 8123, "log_level": "DEBUG"},
+                {"log_level": "DEBUG"},
             ),
         ),
         ("widget", MinimalWidget),
@@ -513,7 +513,7 @@ def test_cli_preserves_runtime_failures(
         def widget(self, _target: object) -> None:
             pass
 
-        def run(self, *, transport: str) -> None:
+        def run(self, *, transport: str, **_options: object) -> None:
             del transport
             raise runtime_error
 
@@ -535,7 +535,7 @@ def test_serve_registers_and_runs_the_server(
         def widget(self, target: object, **options: Any) -> None:
             events.append(("widget", (target, options)))
 
-        def run(self, *, transport: str) -> None:
+        def run(self, *, transport: str, **_options: object) -> None:
             events.append(("run", transport))
 
     monkeypatch.setattr("anywidget_mcp.server.AnyWidgetMCP", FakeServer)
@@ -554,8 +554,6 @@ def test_serve_registers_and_runs_the_server(
             (
                 "ColorPicker MCP",
                 {
-                    "host": "0.0.0.0",
-                    "port": 8123,
                     "log_level": "INFO",
                     "icons": None,
                 },
@@ -589,7 +587,7 @@ def test_serve_preserves_runtime_failures(
         def widget(self, _target: object, **_options: Any) -> None:
             pass
 
-        def run(self, *, transport: str) -> None:
+        def run(self, *, transport: str, **_options: object) -> None:
             del transport
             raise RuntimeError("failed")
 

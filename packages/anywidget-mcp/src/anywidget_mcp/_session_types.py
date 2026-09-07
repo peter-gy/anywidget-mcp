@@ -14,7 +14,7 @@ class SessionSnapshot:
 
     messages: list[dict[str, Any]]
     models: dict[str, dict[str, Any]]
-    asset_manifest: dict[str, dict[str, Any]]
+    attachment_ids: tuple[str, ...]
     removed_model_ids: list[str]
     projection: ProjectionUpdate | None
     projection_error: str | None
@@ -24,7 +24,7 @@ def empty_snapshot() -> SessionSnapshot:
     return SessionSnapshot(
         messages=[],
         models={},
-        asset_manifest={},
+        attachment_ids=(),
         removed_model_ids=[],
         projection=None,
         projection_error=None,

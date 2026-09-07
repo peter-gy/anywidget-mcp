@@ -45,12 +45,12 @@ export interface AnyModel {
 export interface ModelRuntime {
 	model(modelId: string): BridgeModel;
 	enqueueUpdate(model: BridgeModel, state: Map<string, WidgetValue>): void;
-	enqueueCustom(model: BridgeModel, data: CommData, buffers: string[]): void;
+	enqueueCustom(model: BridgeModel, data: CommData, buffers: ArrayBuffer[]): void;
 }
 
 interface ExtractedBuffers {
 	value: State;
-	buffers: string[];
+	buffers: ArrayBuffer[];
 	paths: JsonPath[];
 }
 
@@ -58,8 +58,6 @@ interface PendingCustomMessage {
 	content: RuntimeValue;
 	buffers: DataView[];
 }
-
-const MAX_PENDING_CUSTOM_MESSAGES = 100;
 
 export class BridgeModel implements AnyModel {
 	readonly widget_manager = {
@@ -77,7 +75,8 @@ export class BridgeModel implements AnyModel {
 		string,
 		(content: State, buffers: DataView[]) => void
 	>();
-	private readonly pendingCustomMessages: PendingCustomMessage[] = [];
+	private readonly pendingCustomMessages = new Set<PendingCustomMessage>();
+	private initializing = true;
 	private disposed = false;
 	private readonly signal?: AbortSignal;
 	private readonly abort = (): void => this.dispose();
@@ -189,6 +188,10 @@ export class BridgeModel implements AnyModel {
 		}
 	}
 
+	finishInitialization(): void {
+		this.initializing = false;
+	}
+
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
@@ -196,7 +199,7 @@ export class BridgeModel implements AnyModel {
 		this.dirty.clear();
 		this.handlers.clear();
 		this.commandResponseHandlers.clear();
-		this.pendingCustomMessages.length = 0;
+		this.pendingCustomMessages.clear();
 	}
 
 	receive(data: CommData, buffers: DataView[]): void {
@@ -213,10 +216,9 @@ export class BridgeModel implements AnyModel {
 				return;
 			}
 			if ((this.handlers.get("msg:custom")?.size ?? 0) === 0) {
-				if (this.pendingCustomMessages.length >= MAX_PENDING_CUSTOM_MESSAGES) {
-					throw new Error(`Pending custom messages overflowed for model ${this.modelId}`);
-				}
-				this.pendingCustomMessages.push({ content: data.content, buffers });
+				// Preserve launch messages for listeners installed by a later child view.
+				// Once initialization finishes, unobserved live events are discarded.
+				if (this.initializing) this.pendingCustomMessages.add({ content: data.content, buffers });
 				return;
 			}
 			this.emit("msg:custom", data.content, buffers);
@@ -244,12 +246,10 @@ export class BridgeModel implements AnyModel {
 	}
 
 	private flushPendingCustomMessages(): void {
-		while (
-			this.pendingCustomMessages.length > 0 &&
-			(this.handlers.get("msg:custom")?.size ?? 0) > 0
-		) {
-			const message = this.pendingCustomMessages.shift();
-			if (message) this.emit("msg:custom", message.content, message.buffers);
+		for (const message of this.pendingCustomMessages) {
+			if ((this.handlers.get("msg:custom")?.size ?? 0) === 0) return;
+			this.pendingCustomMessages.delete(message);
+			this.emit("msg:custom", message.content, message.buffers);
 		}
 	}
 }
@@ -259,19 +259,20 @@ export function eventNames(name: string): string[] {
 }
 
 export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
-	const handlers = new Map<string, Set<EventHandler>>();
+	const handlers = new Map<string, Map<EventHandler, EventHandler>>();
 	let active = !signal.aborted;
 
 	const remove = (name: string, callback: EventHandler): void => {
-		model.off(name, callback);
 		const eventHandlers = handlers.get(name);
+		const registered = eventHandlers?.get(callback);
+		if (registered) model.off(name, registered);
 		eventHandlers?.delete(callback);
 		if (eventHandlers?.size === 0) handlers.delete(name);
 	};
 
 	const clear = (): void => {
 		for (const [name, eventHandlers] of handlers) {
-			for (const callback of eventHandlers) model.off(name, callback);
+			for (const callback of eventHandlers.values()) model.off(name, callback);
 		}
 		handlers.clear();
 	};
@@ -290,10 +291,15 @@ export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
 		on(name, callback) {
 			if (!active) return;
 			for (const eventName of eventNames(name)) {
-				model.on(eventName, callback);
-				const eventHandlers = handlers.get(eventName) ?? new Set<EventHandler>();
-				eventHandlers.add(callback);
+				if (!active) return;
+				const eventHandlers = handlers.get(eventName) ?? new Map<EventHandler, EventHandler>();
+				if (eventHandlers.has(callback)) continue;
+				const registered: EventHandler = (...args) => {
+					if (active) callback(...args);
+				};
+				eventHandlers.set(callback, registered);
 				handlers.set(eventName, eventHandlers);
+				model.on(eventName, registered);
 			}
 		},
 		off(name, callback) {
@@ -310,7 +316,7 @@ export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
 			}
 			for (const eventName of eventNames(name)) {
 				if (callback == null) {
-					for (const eventHandler of Array.from(handlers.get(eventName) ?? [])) {
+					for (const eventHandler of Array.from(handlers.get(eventName)?.keys() ?? [])) {
 						remove(eventName, eventHandler);
 					}
 					continue;
@@ -341,7 +347,7 @@ export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
 
 export interface SerializedComm {
 	data: CommData;
-	buffers: string[];
+	buffers: ArrayBuffer[];
 }
 
 export function serializeUpdate(state: ReadonlyMap<string, WidgetValue>): SerializedComm {
@@ -362,19 +368,19 @@ export function serializeCustom(
 ): SerializedComm {
 	return {
 		data: { method: "custom", content: normalizeRuntimeValue(structuredClone(content)) },
-		buffers: buffers.map((buffer) => encodeBuffer(buffer)),
+		buffers: buffers.map((buffer) => copyBuffer(buffer)),
 	};
 }
 
 function extractBuffers(state: WidgetValue): ExtractedBuffers {
-	const buffers: string[] = [];
+	const buffers: ArrayBuffer[] = [];
 	const paths: JsonPath[] = [];
 	const removed = Symbol("buffer");
 	const active = new Set<object>();
 
 	const visit = (value: WidgetValue, path: JsonPath): RuntimeValue | typeof removed => {
 		if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-			buffers.push(encodeBuffer(value));
+			buffers.push(copyBuffer(value));
 			paths.push(path);
 			return removed;
 		}
@@ -458,7 +464,7 @@ function setAtPath(root: State, path: JsonPath, value: RuntimeValue): void {
 	if (path.length === 0) throw new Error("Buffer path cannot be empty");
 	let target: RuntimeValue = root;
 	for (const part of path.slice(0, -1)) {
-		if (!isRecord(target) && !Array.isArray(target)) {
+		if ((!isRecord(target) && !Array.isArray(target)) || !Object.hasOwn(target, part)) {
 			throw new Error(`Invalid buffer path ${JSON.stringify(path)}`);
 		}
 		if (Array.isArray(target)) {
@@ -476,19 +482,19 @@ function setAtPath(root: State, path: JsonPath, value: RuntimeValue): void {
 		if (!isNumber(key)) throw new Error(`Invalid buffer path ${JSON.stringify(path)}`);
 		target[key] = value;
 	} else {
-		target[String(key)] = value;
+		Object.defineProperty(target, String(key), {
+			value,
+			writable: true,
+			enumerable: true,
+			configurable: true,
+		});
 	}
 }
 
-function encodeBuffer(buffer: ArrayBuffer | ArrayBufferView): string {
+function copyBuffer(buffer: ArrayBuffer | ArrayBufferView): ArrayBuffer {
 	const bytes =
 		buffer instanceof ArrayBuffer
 			? new Uint8Array(buffer)
 			: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-	let binary = "";
-	const chunkSize = 0x8000;
-	for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-		binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-	}
-	return btoa(binary);
+	return bytes.slice().buffer;
 }

@@ -3,6 +3,8 @@ import { defineConfig } from "vite-plus";
 import { antiSlopIgnorePatterns, antiSlopRules } from "./tools/oxlint/anti-slop/preset.ts";
 
 const generated = [
+	"apps/e2e/playwright-report/**",
+	"apps/e2e/test-results/**",
 	"**/*.har",
 	"**/.vitepress/cache/**",
 	"**/.vitepress/dist/**",

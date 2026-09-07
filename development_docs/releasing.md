@@ -2,7 +2,8 @@
 
 A release-bearing pull request updates the package version. CI validates that
 commit and builds the distributions. After the pull request is merged,
-`scripts/release.sh` tags the green `main` commit and starts Trusted Publishing.
+`scripts/release.sh` tags the green `main` commit. The publish workflow selects
+that commit's successful CI run and publishes its validated distributions.
 
 ## Trusted publisher
 
@@ -15,16 +16,17 @@ Configure the PyPI project with this publisher identity:
 | Workflow    | `publish.yml`   |
 | Environment | `pypi`          |
 
-The `pypi` environment grants the publish job an OpenID Connect token. The
-workflow builds the wheel and source distribution, publishes both artifacts,
-installs the public package, and creates the GitHub release notes.
+The `pypi` environment grants the publish job an OpenID Connect token through
+[PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/). The
+workflow publishes the wheel and source distribution from CI, installs the
+public package, and creates the GitHub release notes.
 
 ## Prepare the version
 
 Create a branch and update the package version with uv:
 
 ```sh
-git switch -c release/0.0.3
+git switch -c pgy/release-0.0.3
 uv version --package anywidget-mcp 0.0.3
 git add packages/anywidget-mcp/pyproject.toml uv.lock
 git commit -m "chore: release 0.0.3"
@@ -46,6 +48,10 @@ git pull --ff-only origin main
 The helper requires a clean `main` branch that matches `origin/main` and has a
 successful push CI run. It creates and pushes the annotated `v<version>` tag.
 The package version remains the PEP 440 value without the `v` prefix.
+
+The publish workflow also verifies the annotated tag, package version, and
+successful CI run for that commit. CI retains the `dist` artifact for 30 days.
+If it has expired, rerun CI for the release commit before retrying publication.
 
 ## Verify the release
 

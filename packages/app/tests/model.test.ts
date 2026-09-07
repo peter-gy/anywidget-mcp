@@ -5,6 +5,7 @@ import {
 	scopedModel,
 	serializeCustom,
 	serializeUpdate,
+	type EventHandler,
 	type ModelPayload,
 	type State,
 } from "../src/model";
@@ -35,6 +36,34 @@ function modelRuntime() {
 }
 
 describe("BridgeModel state synchronization", () => {
+	test("round-trips binary dictionary keys through comm updates", () => {
+		const harness = modelRuntime();
+		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
+		harness.attach(model);
+		const bytes = new DataView(new Uint8Array([1, 2, 3]).buffer);
+
+		model.receive(
+			{
+				method: "update",
+				state: { data: {} },
+				buffer_paths: [["data", "__proto__"]],
+			},
+			[bytes],
+		);
+		model.set("data", model.get("data"));
+		model.save_changes();
+
+		expect(harness.enqueueUpdate).toHaveBeenCalledTimes(1);
+		expect(serializeUpdate(harness.enqueueUpdate.mock.calls[0]![1])).toEqual({
+			data: {
+				method: "update",
+				state: { data: {} },
+				buffer_paths: [["data", "__proto__"]],
+			},
+			buffers: [new Uint8Array([1, 2, 3]).buffer],
+		});
+	});
+
 	test("snapshots state when save_changes returns", () => {
 		const harness = modelRuntime();
 		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
@@ -57,7 +86,7 @@ describe("BridgeModel state synchronization", () => {
 				state: { config: { value: 1 } },
 				buffer_paths: [["payload"]],
 			},
-			buffers: ["AQID"],
+			buffers: [new Uint8Array([1, 2, 3]).buffer],
 		});
 	});
 
@@ -75,7 +104,7 @@ describe("BridgeModel state synchronization", () => {
 		expect(harness.enqueueCustom).toHaveBeenCalledWith(
 			model,
 			{ method: "custom", content: { nested: { value: 1 } } },
-			["AQID"],
+			[new Uint8Array([1, 2, 3]).buffer],
 		);
 	});
 
@@ -137,6 +166,51 @@ describe("BridgeModel state synchronization", () => {
 });
 
 describe("BridgeModel events", () => {
+	test.each(["off", "abort"] as const)(
+		"keeps shared callbacks subscribed in other scopes after %s",
+		(close) => {
+			const harness = modelRuntime();
+			const model = new BridgeModel(harness.runtime, payload({ value: 0 }), vi.fn());
+			const first = new AbortController();
+			const second = new AbortController();
+			const firstModel = scopedModel(model, first.signal);
+			const secondModel = scopedModel(model, second.signal);
+			const callback = vi.fn();
+			firstModel.on("change:value", callback);
+			secondModel.on("change:value", callback);
+
+			model.receive({ method: "update", state: { value: 1 } }, []);
+			expect(callback).toHaveBeenCalledTimes(2);
+			if (close === "off") firstModel.off("change:value", callback);
+			else first.abort();
+			model.receive({ method: "update", state: { value: 2 } }, []);
+
+			expect(callback).toHaveBeenCalledTimes(3);
+			first.abort();
+			second.abort();
+		},
+	);
+
+	test("retains buffered custom messages after the subscribing scope aborts", () => {
+		const harness = modelRuntime();
+		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
+		const controller = new AbortController();
+		const scoped = scopedModel(model, controller.signal);
+		const received: unknown[] = [];
+		model.receive({ method: "custom", content: { index: 1 } }, []);
+		model.receive({ method: "custom", content: { index: 2 } }, []);
+
+		scoped.on("msg:custom", (content) => {
+			received.push(content);
+			controller.abort();
+		});
+		const next = vi.fn();
+		model.on("msg:custom", next);
+
+		expect(received).toEqual([{ index: 1 }]);
+		expect(next).toHaveBeenCalledExactlyOnceWith({ index: 2 }, []);
+	});
+
 	test("buffers custom messages until the first listener subscribes", () => {
 		const harness = modelRuntime();
 		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
@@ -209,17 +283,28 @@ describe("BridgeModel events", () => {
 		expect(received).toEqual([{ source: "before" }, { source: "after" }]);
 	});
 
-	test("fails when pending custom messages exceed the bounded queue", () => {
+	test("retains startup messages for the first listener and drops unobserved live messages", () => {
 		const harness = modelRuntime();
 		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
 		harness.attach(model);
-
-		for (let index = 0; index < 100; index += 1) {
-			model.receive({ method: "custom", content: { index } }, []);
+		const received: unknown[] = [];
+		const listener: EventHandler = (content) => received.push(content);
+		for (let index = 0; index < 150; index += 1) {
+			model.receive({ method: "custom", content: index }, []);
 		}
-		expect(() => model.receive({ method: "custom", content: { index: 100 } }, [])).toThrow(
-			"Pending custom messages overflowed",
-		);
+		model.finishInitialization();
+		for (let index = 150; index < 300; index += 1) {
+			model.receive({ method: "custom", content: index }, []);
+		}
+		model.on("msg:custom", listener);
+		expect(received).toEqual(Array.from({ length: 150 }, (_, index) => index));
+
+		model.off("msg:custom", listener);
+		model.receive({ method: "custom", content: "unobserved" }, []);
+		model.on("msg:custom", listener);
+		model.receive({ method: "custom", content: "observed" }, []);
+		expect(received.at(-1)).toBe("observed");
+		expect(received).toHaveLength(151);
 	});
 
 	test("dispatches space-delimited change subscriptions with no arguments", () => {

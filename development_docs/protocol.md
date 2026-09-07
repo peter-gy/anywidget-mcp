@@ -1,233 +1,226 @@
 # Widget bridge protocol
 
-## Decision
+Protocol version 3 separates ordered widget operations from immutable payload
+bytes. The browser implements the [AnyWidget frontend model
+API](https://anywidget.dev/en/afm/). Python applies the widget's serialization,
+trait validation, observers, and custom-message handlers.
 
-Use an adapter-owned comm for each AnyWidget model. The MCP App browser runtime
-implements the AnyWidget Frontend Model API and carries canonical ipywidgets
-messages and content-addressed widget sources through five app-only MCP
-tools.
+Every app tool request and response carries bounded JSON. Sources, binary
+buffers, and oversized JSON travel as attachments. The same tools work through
+standard input/output and streamable HTTP.
 
-Python applies each widget's state contract, including trait validation,
-serialization, observers, and custom commands when the model provides them.
-The app loads ESM and CSS, renders views, and forwards model events through
-canonical comm messages.
+## Discovery and launch
 
-## Prototype results
+A registered widget tool points to its shared HTML resource through
+`_meta.ui.resourceUri`. Its result repeats that metadata and contains:
 
-The comparison used wigglystuff 0.5.13 with `ColorPicker` and `SortableList`
-plus test widgets for binary state and custom messages.
+- A model-facing summary and optional projected state.
+- `structuredContent.tool`, plus `state` and `state_id` when projection is enabled.
+- A separate text block matching
+  `urn:anywidget-mcp:bootstrap:<32-lowercase-hex-capability>` exactly.
 
-| Prototype           | Observed behavior                                                                                                                                                                        | Result                          |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| Snapshot export     | Rendered initial JSON. Browser edits left Python state unchanged. The ColorPicker snapshot was 2,628 bytes and the SortableList snapshot was 12,677 bytes.                               | Suitable for static rendering   |
-| Direct trait mirror | Updated string and list values. It bypassed trait serializers, emitted redundant updates for inbound values, failed JSON encoding for a `Bytes` trait, and lacked a custom-message path. | Too narrow for existing widgets |
-| Comm tunnel         | Preserved serialized state, binary paths, echo locking, observers, state requests, and custom messages.                                                                                  | Selected                        |
+The app calls `anywidget_bootstrap(bootstrap_id, operation_id)` to claim the
+capability. Repeating that operation ID replays its response. Another claimant
+is rejected. The capability differs from the widget instance and state handles.
+The configured session idle lifetime applies from launch onward. A `None`
+lifetime delegates cleanup to explicit disposal and server shutdown.
 
-The comm prototype produced these traces:
+The host may replay the primary result. The app accepts each bootstrap
+capability once during its own lifetime. A new capability starts a replacement
+runtime after teardown of the previous runtime.
 
-- Updating `ColorPicker.color` to `#abcdef` stored the value in Python, fired its observer once, emitted `echo_update` for `color`, then emitted an `update` for the observer-derived trait.
-- Reordering `SortableList.value` updated Python with the new list and fired its observer once.
-- A four-byte trait used `buffer_paths=[["payload"]]` and one binary part. The MCP envelope encoded that part as base64.
-- An AnyWidget experimental command received its custom message and binary part, then returned a custom response with its output buffer.
-- A parent serialized widget references nested in dicts, lists, and tuples as
-  `anywidget:<model_id>`. Repeated references enrolled one model. A
-  descriptor-backed protocol child used the same session and comm path.
+## Deliveries
 
-## Protocol mapping
+Bootstrap, comm, and poll responses put a delivery in `_meta.anywidget`:
 
-| AnyWidget or MCP concept | Adapter mapping                                                                                                                                         |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Widget construction      | A class creates one AnyWidget. A factory returns one AnyWidget or a non-empty ordered sequence. Managed factories remain active until session teardown. |
-| Request context          | FastMCP injects `Context` after compiling the model-facing input schema                                                                                 |
-| Initialization status    | Generated `loading_message` input reaches the app through `ui/notifications/tool-input` and the bootstrap response                                      |
-| Initial state            | `widget.send_state()` emits canonical state, buffer paths, buffers, and widget sources                                                                  |
-| Runtime bootstrap        | A machine text block carries a 32-hex capability. `anywidget_bootstrap` claims it and returns the versioned runtime payload.                            |
-| Widget source            | `_esm` and `_css` become typed SHA-256 references. `anywidget_assets` returns session-owned source text for browser verification.                       |
-| Browser comm             | `anywidget_comm` delivers an ipywidgets `update` or `custom` message with an idempotent operation ID                                                    |
-| Python state change      | Comm output is returned immediately or collected by an idempotent `anywidget_poll` cycle                                                                |
-| Model state read         | `anywidget_state` accepts a launch `state_id` and returns the latest complete projection without draining app updates                                   |
-| Child composition        | References nested in synchronized dicts, lists, and tuples share the session and AFM host. Replacements enroll before the parent update is applied.     |
-| Child removal            | The browser acknowledges applied removals through a later `anywidget_poll`, then Python closes the detached models.                                     |
-| App teardown             | `anywidget_dispose` closes every enrolled model and exits the factory manager                                                                           |
-| HTTP runtime ownership   | The Starlette application lifespan retains widget sessions across MCP connection rotation                                                               |
-| MCP App discovery        | Tool `_meta.ui.resourceUri` points to `ui://anywidget-mcp/app.html`                                                                                     |
-| Internal tool discovery  | `_meta.ui.visibility=["app"]` keeps bootstrap, assets, comm, poll, and disposal app-only. `anywidget_state` is model-only                               |
-| Live model context       | `ui/update-model-context` replaces the previous state projection                                                                                        |
+```typescript
+type BlobRef = { id: string; byteLength: number };
 
-The primary tool result separates host discovery, model output, and app
-bootstrap. Its top-level `_meta` contains a single `ui` object with
-`resourceUri`. Its content contains the model-facing summary and a separate
-text block whose complete value has the form
-`urn:anywidget-mcp:bootstrap:<32-lowercase-hex-capability>`. The capability is
-distinct from the widget `instanceId`. `structuredContent` identifies the
-registered tool and carries the optional initial state projection. Projected
-results also carry a distinct `state_id`.
+type Delivery =
+	| { protocolVersion: 3; instanceId: string; payload: RuntimePayload }
+	| { protocolVersion: 3; instanceId: string; payloadRef: BlobRef };
+```
 
-The browser parses the capability from that exact marker and calls the app-only
-`anywidget_bootstrap` tool with `bootstrap_id` and `operation_id`. That direct
-response `_meta.anywidget` is the sole full runtime payload. It carries
-`protocolVersion: 1`, `instanceId`, `rootModelId`, `sessionIdleTimeoutMs`,
-`assetManifest`, `models`, ordered `messages`, `loadingMessage`, and optional
-`context`. Model and message payloads use `sourceRefs` for ESM and CSS. The app
-verifies and hydrates those references before registering the launch graph or
-applying a transaction. Tool results and model context use the `tool` field for
-the registered identity. After interaction, the app sends Python-authoritative
-projections through `ui/update-model-context`.
+Exactly one of `payload` and `payloadRef` is present. JSON payloads larger than
+64 KiB, or values the MCP SDK cannot encode inline, use an attachment. This
+includes large ordinary JSON traits and model graphs, as well as custom-message
+results.
 
-Hosts that omit `ui/update-model-context` retain a model-visible pull path.
-The launch summary tells the model to pass `state_id` to `anywidget_state`
-before answering later questions about the widget. The tool reads the retained
-Python-authoritative projection under the session protocol lock. It does not
-consume messages, pending models, removals, or the projection waiting for the
-app. The state handle shares the widget session lifetime and is revoked during
-disposal, idle expiry, launch failure, or server shutdown.
+`RuntimePayload` carries ordered `models`, `messages`, `removedModelIds`,
+`context`, and `contextError` as applicable. The initial payload also identifies
+`rootModelId` and `loadingMessage`. `sessionIdleTimeoutMs` is present when idle
+expiry is configured.
 
-Registration adds an optional `loading_message` tool argument when the target
-has no parameter with that name. The MCP Apps host sends complete arguments
-through `ui/notifications/tool-input`, which lets the app show the message
-before the launch result arrives. Python normalizes the value, removes a
-generated argument before target construction, and repeats the selected text in
-the bootstrap response as `_meta.anywidget.loadingMessage`. A target-defined
-`loading_message` keeps its schema and receives its validated value. The browser
-treats the bootstrap response value as authoritative when it mounts after tool
-execution.
+Model records contain their synchronized `state`, `bufferPaths`, and `buffers`.
+A buffer slot is a `BlobRef`. A record's optional `sourceRefs` maps `_esm` and
+`_css` to references containing their UTF-8 source. Incremental messages use the
+same source and buffer representation. The decoder knows each attachment's
+interpretation from its position in the payload.
 
-Hosts may deliver the same primary tool result more than once. The app records
-each accepted bootstrap capability for its lifetime. It resolves and mounts the
-first delivery, ignores later deliveries for that capability, and accepts a
-result with a new capability as a runtime replacement. The first bootstrap
-operation ID claims the capability. Repeating that ID replays the same response,
-while another operation ID is rejected. A host replay cannot reapply launch
-messages or dispose the active Python session.
+The browser resolves the delivery and verifies every referenced source and
+buffer before applying its graph changes. This hydration stays inside the
+operation's queue slot. Model context is published after the complete outer
+transaction succeeds, including nested commands awaited during initialization.
 
-A sequence result receives one internal group model as its wire root. The
-returned widgets become child models in sequence order and render through that
-root. Each emitted projection applies the public `state` specification to every
-returned widget, then the adapter publishes `{"widgets": [state, ...]}`. A
-one-item sequence keeps the aggregate shape, so the factory's result shape
-determines the state contract.
+## Immutable attachments
 
-## Source asset protocol
+An attachment ID is `sha256:<64-lowercase-hex-digest>` over its exact raw bytes.
+`byteLength` is the raw length, before base64 encoding. Empty attachments use
+the SHA-256 digest of an empty byte sequence.
 
-Source IDs use `esm:sha256:<digest>` or `css:sha256:<digest>`. The digest covers
-the protocol namespace, source kind, and exact UTF-8 text. The manifest records
-the source kind and byte length for every reference in one snapshot.
+`anywidget_read(instance_id, blob_id, offset)` returns:
 
-The browser validates the manifest before requesting assets. It checks memory
-and the Cache API first, batches the missing IDs through `anywidget_assets`, and
-verifies each returned digest and byte length before caching the source. Every
-referenced ID must appear in the manifest, and every manifest entry must be
-referenced by that snapshot. Inline `_esm` and `_css` values are invalid in a
-versioned wire payload. Cache reads accept the runtime abort signal and have a
-500 ms deadline. Cache writes start after verified source enters memory and do
-not delay source hydration.
+```json
+{
+	"protocolVersion": 3,
+	"id": "sha256:...",
+	"offset": 0,
+	"byteLength": 8000368,
+	"data": "..."
+}
+```
 
-The browser memory cache retains at most 32 MiB of verified UTF-8 source text
-and evicts the least-recently-used entries. A larger source still hydrates the
-active transaction and remains eligible for browser Cache API storage.
+The record appears directly in `_meta.anywidget`. `data` is base64 for at most
+64 KiB of raw bytes starting at `offset`. An offset equal to the length returns
+empty data. Invalid offsets and references outside the session are rejected.
 
-Launch state, queued launch messages, comm responses, poll responses, dynamic
-models, and live `_esm` or `_css` updates use the same source-reference shape.
-The browser resolves the complete set before it mutates the model graph. This
-keeps asset loading inside the protocol transaction that introduced the source.
+Reads are immutable and idempotent. They renew session activity, but never
+consume widget messages, acknowledge model removals, or retire bootstrap
+retention. Independent ranges can be read concurrently within the active
+transaction. Retry requests preserve their exact offset.
 
-The Python session retains the last emitted source for each live model plus
-every source referenced by the latest snapshot. Bounded comm and poll replay
-entries pin the sources required by their stored responses. The app hydrates a
-snapshot before it issues another comm or poll. Each ordered snapshot releases
-unpinned superseded versions. Replay eviction releases versions retained by
-that replay. The bootstrap replay pins its launch sources until the first later
-successful app call retires the replay. Asset requests are repeatable during the
-active transaction and do not consume registry entries.
+The browser checks response identity, range, total length, and the final SHA-256
+digest before exposing content. Sources are decoded as UTF-8 after assembly.
+Binary data becomes the frontend model's buffers. JSON is parsed after assembly.
+A missing, truncated, or corrupt attachment fails the transaction.
 
-The current wire contract uses `protocolVersion: 1`. The field is required on
-bootstrap, comm, poll, and asset responses. The browser rejects a payload whose
-version differs from its runtime contract.
+Large Python attachments spill into session-owned temporary storage. Mutable
+producer buffers are copied at capture so later mutations cannot change an
+already recorded response. Base64 encoding happens per transfer chunk.
 
-Each browser comm and poll cycle keeps one `operation_id` across bounded
-transport retries. The session caches complete comm responses for recent IDs
-and the complete response for the latest poll ID. Cached comm outcomes include
-application errors. A retry therefore receives the messages, model changes,
-projection, or error produced by the first application. Reusing a comm ID with
-another payload is a protocol error. A poll operation ID also binds its
-`acknowledged_model_ids` set.
+## Browser writes
 
-The browser polls after 500 ms of activity, then backs off through 1 s, 2 s,
-5 s, 10 s, and 15 s while idle. A response with activity resets the next poll
-to 500 ms. A browser comm interrupts the current idle wait, then schedules a
-poll after 500 ms.
+`anywidget_write(instance_id, operation_id, blob_id, byte_length, offset, data)` uploads a
+chunk of at most 64 KiB raw bytes. Its response reports `protocolVersion`, `id`,
+`byteLength`, `received`, and `complete` directly in `_meta.anywidget`.
 
-Each session snapshot waits for a completed trait notification batch, then
-captures messages, graph changes, and context together. Default and selected
-context uses last-notified values. A custom projector runs only when every
-observed live trait matches its last-notified value, and a second check rejects
-concurrent drift before commit. Projection callables must not mutate
-synchronized traits.
+Writes append at the next offset. Retrying an accepted range requires identical
+bytes. The completed upload becomes readable after its full digest is verified.
+Uploads share the eventual comm operation ID. A dispatched operation releases
+its upload staging, and a newer comm or poll retires lower abandoned upload
+groups. Future operation groups remain staged. Session disposal closes every
+remaining staging file.
 
-`StateProjection` can narrow invalidation to selected traits on each projection
-root. A sequence applies the same `watch` selection to every returned widget.
-The state runtime still observes the enrolled graph while the projector runs so
-mutation checks and committed-shadow validation remain intact. `watch=None`
-invalidates from the complete graph, while an empty watch set publishes the
-initial projection once.
+`anywidget_comm` carries one reference to canonical message JSON:
 
-The runtime scheduler records browser comms and polls at API-call time. It
-coalesces only adjacent updates for the same model. Custom messages, another
-model, and polls preserve their position as ordering barriers. `ToolCallQueue`
-then holds one global slot through transport retries and complete response
-application. Calls cannot overtake an unacknowledged response.
+```typescript
+{
+  instance_id: string;
+  model_id: string;
+  operation_id: number;
+  payload_ref: BlobRef;
+  acknowledged_operation_id?: number;
+}
+```
 
-Dynamic model initialization may await an experimental command. That command
-uses the active queue slot and applies its nested response before initialization
-continues. Exhausting delivery retries or failing to apply a response disposes
-the runtime because the browser can no longer prove that its model graph
-matches Python.
+The browser uploads binary buffers, then the JSON `{ data, buffers }` containing
+their references, before dispatching the comm. This envelope keeps transport
+parsing independent of widget value size and nesting depth.
 
-## Runtime ownership
+Python resolves the request and applies the canonical widget message once under
+its operation ID. Uploading bytes does not mutate the widget. Browser trait
+changes still pass through Python validation and observers before the response
+is published to the host.
 
-The stdio transport holds one widget runtime for its server lifespan. The
-streamable HTTP adapter also acquires that runtime from the Starlette
-application lifespan. Individual MCP connections may enter and leave the
-FastMCP lifespan while the application reference keeps the application-level
-session registry active for the serving process. This applies to
-`AnyWidgetMCP` and to a `FastMCP` server configured through `attach()`.
+An abandoned upload calls
+`anywidget_cancel(instance_id, operation_id, acknowledged_operation_id=0)`.
+The response contains `protocolVersion`, `instanceId`, `operationId`, and
+`retired: true` directly in `_meta.anywidget`. Cancellation retires that operation
+ID and releases its upload staging. Repeating cancellation is idempotent.
+Retirement preserves any mutation that an already-dispatched comm performed.
 
-An `instance_id` therefore remains valid when a streamable HTTP host opens a
-new MCP connection. `anywidget_dispose`, idle expiry, `aclose()`, and
-application shutdown remove the session through the same cleanup path.
+## Retention and replay
 
-An unclaimed launch expires after the shorter of 30 seconds and the configured
-session idle timeout. A claimed bootstrap response reports that configured
-timeout as `sessionIdleTimeoutMs` so the browser can align its lifecycle with
-the Python lease.
+Attachment retention follows widget and operation ownership:
 
-Python keeps a detached model comm active after announcing its ID in
-`removedModelIds`. The browser initializes newly announced models, applies
-messages, disposes removed bindings, then records those IDs for acknowledgment.
-A later poll snapshots the recorded IDs when that poll begins. Python validates
-the complete set and closes those detached models before taking the poll
-snapshot. A poll already queued inside an active transaction carries the older
-acknowledgment set, so transient model initializers can finish against their
-live comm.
+- Live models retain their current source and binary references.
+- Pending delivery and the latest snapshot retain their referenced attachments.
+- Bootstrap and unacknowledged operation replays pin the attachment closure needed to
+  reconstruct their responses, including overflow JSON.
+- Superseded unpinned versions are released during snapshot or replay cleanup.
+- Disposal closes the full graph and attachment storage before exiting a managed
+  factory.
 
-## Reference alignment
+The first subsequent successful widget operation retires bootstrap replay.
+Attachment transfer alone keeps the bootstrap usable while a large launch is
+loading.
 
-- anywidget 0.11 defines the browser-facing model API and ESM lifecycle used by the runtime.
-- ipywidgets 8.1 defines the comm messages used for `update`, `echo_update`, `request_state`, and `custom`.
-- MCP Apps 2026-01-26 defines nested UI metadata, app-visible tools, resource CSP, permissions, and `text/html;profile=mcp-app`.
-- The official Python MCP SDK provides the FastMCP tool and resource metadata used by the server.
-- mcp-use provides the pinned Inspector used for host-side testing. Inspector 12.0.3 replaces tool metadata with result metadata while rendering a result, so launch results mirror the canonical nested resource URI. It handles `ui/update-model-context` and uses that state in later chat turns, but omits the capability from its initialization response. The app recognizes this Inspector host and sends complete text and structured state snapshots.
+Comm and poll operation IDs are positive safe integers assigned in dispatch
+order within the session. Uploads use their eventual comm ID. Bootstrap claim
+IDs remain opaque strings. Gaps from canceled work are valid.
 
-## Resource and model graph boundaries
+Comm and poll retries preserve their `operation_id`. Comm fingerprints are
+SHA-256 hashes rather than retained copies of request JSON. A comm replay
+returns the original success or error. Reusing an ID for another request is an
+error. A poll ID also binds its `acknowledged_model_ids` set.
 
-Verified inline ESM runs in an appended module script. URL-based ESM and CSS
-retain their original URL after source hydration and require their origins in
-the resource CSP. The app resource includes `blob:` for widgets that construct
-blob-backed modules at runtime. Camera, microphone, geolocation, and clipboard
-access require matching resource permissions and host approval.
+Comm, poll, and cancel accept `acknowledged_operation_id`, defaulting to `0`.
+It names the highest fully applied outer transaction. Python releases replies
+and attachment pins through that sequence. The browser keeps its previous
+acknowledgment while nested initialization commands run, then advances after
+the complete transaction applies. Confirmed cancellation can also advance it.
 
-The factory's child graph is enrolled at launch. A sequence adds its returned
-widgets beneath one internal group root. Graph discovery recursively walks
-every synchronized dict, list, and tuple. Replacing a container enrolls the new
-reachable graph in the current session. Detached models close after the browser
-acknowledges their applied removal in a later poll.
+An acknowledgment beyond the completed sequence is rejected. Lower retry
+acknowledgments are harmless. Dispatch and acknowledgment watermarks reject
+retired operation IDs even after their replay records have been released.
+
+The browser weakly caches verified binary buffers. A cache hit is copied and
+verified again because widget code can mutate or transfer a buffer. Persistent
+source caching follows browser storage quota. On quota exhaustion it evicts its
+oldest source entries and retries. A storage failure leaves active source
+loading available.
+
+## Graph and state ordering
+
+Each tool invocation owns a fresh widget graph. References nested in
+synchronized dicts, lists, and tuples use `anywidget:<model_id>`. Repeated
+references enroll one model. A factory sequence receives an internal group root
+and projects its returned widgets as `{"widgets": [state, ...]}`.
+
+Container replacement enrolls the new reachable graph before its parent update
+reaches the browser. Detached comms remain active while the app disposes their
+views. Later polls acknowledge applied removals in byte-bounded batches and let
+Python close those models. Unsent acknowledgments remain queued.
+
+A snapshot captures messages, graph changes, and model-visible state at one
+notification boundary. Default and selected projections use last-notified
+trait values. Custom projectors run against consistent live values, remain
+read-only, and are checked again before commit. `StateProjection.watch` narrows
+invalidation to selected root traits.
+
+The browser scheduler records API calls in order. It coalesces adjacent updates
+for the same model. Custom messages, other models, and polls remain ordering
+barriers. A dynamic initializer can await a command inside the active slot.
+Exhausted delivery or response-application failure disposes the runtime before
+another operation can change the graph.
+
+Polling starts at 500 ms after activity and backs off through 1 s, 2 s, 5 s,
+10 s, and 15 s while idle. Activity resets the next poll to 500 ms.
+
+## Host and server lifetimes
+
+The SDK owns one server lifespan per HTTP application. Individual MCP
+connections borrow that application-owned runtime. A host can reconnect while
+its widget instance remains active. Stdio holds the runtime for its server
+lifespan. App disposal, idle expiry, `aclose()`, and shutdown share cleanup.
+
+`anywidget_state(state_id)` reads the latest complete Python projection for the
+language model. It preserves pending app messages and delivery state. The handle
+expires with the widget session. Hosts with `updateModelContext` receive complete
+replacement projections through that capability.
+
+The host controls iframe policy. External scripts, workers, styles, images, and
+network requests require the matching resource CSP, the browser's content
+security policy. Source transfer does not grant browser permissions. Resource
+metadata requests those permissions through [MCP
+Apps](https://modelcontextprotocol.io/extensions/apps/overview).

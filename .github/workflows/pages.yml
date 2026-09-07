@@ -1,84 +1,69 @@
 name: GitHub Pages
 
 on:
-  pull_request:
-  push:
+  workflow_run:
+    workflows: [CI]
     branches: [main]
-  workflow_dispatch:
+    types: [completed]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: github-pages
+  cancel-in-progress: false
 
 jobs:
-  docs:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      pages: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          fetch-depth: 0
-
-      - name: Read Node.js version
-        id: node-version
-        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Vite+
-        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
-        with:
-          version: 0.2.4
-          node-version: ${{ steps.node-version.outputs.version }}
-          sfw: true
-          cache: true
-          run-install: |
-            - args: ['--frozen-lockfile']
-
-      - name: Configure GitHub Pages
-        if: github.event_name != 'pull_request'
-        id: pages
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
-
-      - name: Build docs
-        env:
-          BASE_PATH: ${{ steps.pages.outputs.base_path }}
-        run: vp exec -F @anywidget-mcp/docs -- vitepress build
-
-      - name: Verify docs base path
-        env:
-          BASE_PATH: ${{ steps.pages.outputs.base_path }}
-        run: |
-          index=apps/docs/.vitepress/dist/index.html
-          test -f apps/docs/.vitepress/dist/getting-started.html
-          grep -q "href=\"${BASE_PATH}/assets/" "$index"
-          grep -q "src=\"${BASE_PATH}/assets/" "$index"
-          grep -q "href=\"${BASE_PATH}/getting-started\"" "$index"
-
-      - name: Upload GitHub Pages artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
-        with:
-          path: apps/docs/.vitepress/dist
-
   deploy:
-    if: github.event_name != 'pull_request'
-    needs: docs
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     permissions:
+      actions: read
+      contents: read
       pages: write
       id-token: write
     steps:
+      - name: Download validated docs
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: docs
+          path: docs
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+
+      - name: Check deployment revision
+        id: revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          if [ "$DOCS_SHA" = "$main_sha" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping docs for $DOCS_SHA because main is now $main_sha"
+          fi
+
+      - name: Upload GitHub Pages artifact
+        if: steps.revision.outputs.current == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: docs
+
       - name: Deploy to GitHub Pages
+        if: steps.revision.outputs.current == 'true'
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
         with:

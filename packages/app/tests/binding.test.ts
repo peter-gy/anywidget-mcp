@@ -43,10 +43,6 @@ function element(): HTMLElement {
 	return document.createElement("div");
 }
 
-function trackedElement(): HTMLElement {
-	return document.createElement("div");
-}
-
 function createHost(): Host {
 	return {
 		async getModel() {
@@ -139,64 +135,138 @@ describe("WidgetBinding live source lifecycle", () => {
 		await binding.dispose();
 	});
 
-	test("bounds initializer source churn and cleans each generation", async () => {
-		const model = createModel({ _esm: "first", _css: ".first {}" });
+	test("reconciles repeated source pairs as initializer state advances", async () => {
+		const model = createModel({ _esm: "first", _css: ".first {}", revision: 0 });
 		const scopes: InitializeProtocolScope[] = [];
-		const cleanups: string[] = [];
+		const cleanups: number[] = [];
 		const runtime: BindingRuntime = {
 			host: createHost,
 			experimental: (_model, _signal, scope) => {
 				if (scope) scopes.push(scope);
-				return {
-					async invoke() {
-						const first = model.get("_esm") === "first";
-						model.receive(
-							{
-								method: "update",
-								state: {
-									_esm: first ? "second" : "first",
-									_css: first ? ".second {}" : ".first {}",
-								},
-							},
-							[],
-						);
-						return [{}, []];
-					},
-				};
+				return createExperimental();
 			},
 		};
-		const replaceCss = vi.fn().mockResolvedValue(undefined);
-		const loadWidget = vi.fn(
-			async (source: string): Promise<WidgetDefinition> => ({
-				async initialize({ experimental }) {
-					await experimental.invoke("toggle_source");
-					return () => cleanups.push(source);
-				},
-			}),
-		);
 		const binding = new WidgetBinding(runtime, model, {
 			reportError: vi.fn(),
-			replaceCss,
-			loadWidget,
-			timeoutMilliseconds: 10,
+			replaceCss: async () => undefined,
+			loadWidget: async () => ({
+				initialize({ model }) {
+					const revision = Number(model.get("revision"));
+					if (revision < 40) {
+						const next = revision + 1;
+						model.set("revision", next);
+						model.set("_esm", next % 2 ? "second" : "first");
+						model.set("_css", next % 2 ? ".second {}" : ".first {}");
+					}
+					return () => cleanups.push(revision);
+				},
+				render({ el, model }) {
+					el.textContent = String(Number(model.get("revision")));
+				},
+			}),
 		});
 		const call: QueuedToolCall = async () => ({ content: [] });
+		await binding.initialize(call);
+		const root = element();
+		await binding.render(root, new AbortController().signal);
 
-		await expect(binding.initialize(call)).rejects.toThrow(
-			"Widget sources did not converge during initialization",
-		);
-
-		expect(loadWidget.mock.calls.map(([source]) => source)).toEqual(["first", "second"]);
-		expect(replaceCss.mock.calls.map(([css]) => css)).toEqual([
-			".first {}",
-			".second {}",
-			undefined,
-		]);
-		expect(cleanups).toEqual(["first", "second"]);
-		expect(scopes).toHaveLength(2);
+		expect(root.textContent).toBe("40");
+		expect(scopes).toHaveLength(41);
 		expect(scopes.every((scope) => !scope.active)).toBe(true);
-		await expect(binding.dispose()).resolves.toBeUndefined();
-	}, 1000);
+		await binding.dispose();
+		expect(cleanups).toEqual(Array.from({ length: 41 }, (_, revision) => revision));
+	});
+
+	test("yields source reconciliation so disposal can cancel continuing initializers", async () => {
+		const model = createModel({ _esm: "first" });
+		const started = deferred<void>();
+		let revisions = 0;
+		let cleanups = 0;
+		const binding = new WidgetBinding(createRuntime(), model, {
+			reportError: vi.fn(),
+			replaceCss: async () => undefined,
+			loadWidget: async () => ({
+				initialize({ model }) {
+					revisions += 1;
+					model.set("_esm", model.get("_esm") === "first" ? "second" : "first");
+					if (revisions === 25) globalThis.setTimeout(() => started.resolve(undefined), 0);
+					return () => {
+						cleanups += 1;
+					};
+				},
+			}),
+		});
+		const initialization = binding.initialize();
+		const outcome = initialization.catch((cause: unknown) => cause);
+		await started.promise;
+		await binding.dispose();
+
+		expect(await outcome).toMatchObject({ name: "AbortError" });
+		expect(cleanups).toBe(revisions);
+	});
+
+	test("delivers launch messages when a child view installs its listener after initialization", async () => {
+		const model = createModel({ _esm: "child" });
+		for (let index = 0; index < 150; index += 1) {
+			model.receive({ method: "custom", content: index }, []);
+		}
+		const readyToListen = deferred<void>();
+		const received: unknown[] = [];
+		const binding = new WidgetBinding(createRuntime(), model, {
+			reportError: vi.fn(),
+			replaceCss: async () => undefined,
+			loadWidget: async () => ({
+				async render({ model }) {
+					await readyToListen.promise;
+					model.on("msg:custom", (content) => received.push(content));
+				},
+			}),
+		});
+		await binding.initialize();
+		const rendering = binding.render(element(), new AbortController().signal);
+		model.receive({ method: "custom", content: "unobserved live event" }, []);
+		readyToListen.resolve(undefined);
+		await rendering;
+
+		expect(received).toEqual(Array.from({ length: 150 }, (_, index) => index));
+		await binding.dispose();
+	});
+
+	test("waits for source loading and initialization beyond the cleanup deadline", async () => {
+		vi.useFakeTimers();
+		const css = deferred<void>();
+		const esm = deferred<WidgetDefinition>();
+		const initialize = deferred<unknown>();
+		const loadWidget = vi.fn(() => esm.promise);
+		const initializeHook = vi.fn(() => initialize.promise);
+		const binding = new WidgetBinding(
+			createRuntime(),
+			createModel({ _esm: "first", _css: ".first {}" }),
+			{
+				reportError: vi.fn(),
+				replaceCss: (source) => (source ? css.promise : Promise.resolve()),
+				loadWidget,
+			},
+		);
+		const initialization = binding.initialize();
+		let settled = false;
+		void initialization.then(() => {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(3001);
+		expect(loadWidget).not.toHaveBeenCalled();
+		css.resolve(undefined);
+		await vi.advanceTimersByTimeAsync(3001);
+		expect(loadWidget).toHaveBeenCalledOnce();
+		expect(settled).toBe(false);
+		esm.resolve({ initialize: initializeHook });
+		await vi.advanceTimersByTimeAsync(3001);
+		expect(initializeHook).toHaveBeenCalledOnce();
+		expect(settled).toBe(false);
+		initialize.resolve(undefined);
+		await initialization;
+		await binding.dispose();
+	});
 
 	test("cleans up the prior generation before rerendering active views", async () => {
 		const events: string[] = [];
@@ -250,7 +320,7 @@ describe("WidgetBinding live source lifecycle", () => {
 
 	test("keeps a rendered mount present through hot-reload cleanup", async () => {
 		const model = createModel({ _esm: "first" });
-		const root = trackedElement();
+		const root = element();
 		const mount = document.createTextNode("mount");
 		const cleanup = deferred<void>();
 		let cleanupStarted = false;
@@ -288,7 +358,7 @@ describe("WidgetBinding live source lifecycle", () => {
 	});
 
 	test("keeps a rendered mount present through disposal cleanup", async () => {
-		const root = trackedElement();
+		const root = element();
 		const mount = document.createTextNode("mount");
 		const cleanup = deferred<void>();
 		let cleanupStarted = false;
@@ -321,7 +391,7 @@ describe("WidgetBinding live source lifecycle", () => {
 	});
 
 	test("preserves replacement-owned content when an old binding finishes disposal", async () => {
-		const root = trackedElement();
+		const root = element();
 		const oldMount = document.createTextNode("old mount");
 		const replacementMount = document.createTextNode("replacement mount");
 		const cleanup = deferred<void>();
@@ -366,7 +436,7 @@ describe("WidgetBinding live source lifecycle", () => {
 
 	test("clears an owned stale mount after a failed hot reload finishes cleanup", async () => {
 		const model = createModel({ _esm: "working" });
-		const root = trackedElement();
+		const root = element();
 		const mount = document.createTextNode("mount");
 		const cleanup = deferred<void>();
 		const reportError = vi.fn();
@@ -465,7 +535,7 @@ describe("WidgetBinding live source lifecycle", () => {
 			reportError,
 			loadWidget,
 			replaceCss,
-			timeoutMilliseconds: 1000,
+			cleanupTimeoutMilliseconds: 1000,
 		});
 
 		await binding.initialize();
@@ -501,7 +571,7 @@ describe("WidgetBinding live source lifecycle", () => {
 			reportError: vi.fn(),
 			replaceCss: async () => undefined,
 			loadWidget: async () => ({ initialize }),
-			timeoutMilliseconds: 10,
+			cleanupTimeoutMilliseconds: 10,
 		});
 
 		const initialization = initializing.initialize();
@@ -524,7 +594,7 @@ describe("WidgetBinding live source lifecycle", () => {
 					return never;
 				},
 			}),
-			timeoutMilliseconds: 10,
+			cleanupTimeoutMilliseconds: 10,
 		});
 		await active.initialize();
 		await active.render(element(), new AbortController().signal);
@@ -575,7 +645,7 @@ describe("WidgetBinding live source lifecycle", () => {
 			reportError: vi.fn(),
 			replaceCss: async () => undefined,
 			loadWidget: async () => ({ initialize }),
-			timeoutMilliseconds: 1000,
+			cleanupTimeoutMilliseconds: 1000,
 		});
 
 		const initialization = binding.initialize();
@@ -603,7 +673,7 @@ describe("WidgetBinding live source lifecycle", () => {
 			reportError: vi.fn(),
 			replaceCss: async () => undefined,
 			loadWidget: async () => ({ render }),
-			timeoutMilliseconds: 1000,
+			cleanupTimeoutMilliseconds: 1000,
 		});
 		await binding.initialize();
 		const rendering = binding.render(element(), new AbortController().signal);

@@ -5,8 +5,8 @@ packages:
 catalogMode: prefer
 
 catalog:
-  "@modelcontextprotocol/ext-apps": 1.7.4
-  "@modelcontextprotocol/sdk": 1.29.0
+  "@modelcontextprotocol/ext-apps": 1.7.5
+  "@modelcontextprotocol/sdk": 1.30.0
   "@oxlint/plugins": 1.76.0
   "@types/node": ^22.20.1
   oxlint: 1.76.0
@@ -15,15 +15,17 @@ catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.4
   vite-plugin-singlefile: 2.3.3
   vite-plus: 0.2.4
-  vitepress: ^1.6.3
-  vue: ^3.5.13
+  vitepress: ^1.6.4
+  vue: ^3.5.42
+  zod: 4.4.3
 
-minimumReleaseAge: 20160
+minimumReleaseAge: 2880
 minimumReleaseAgeStrict: true
 
 overrides:
+  jsdom>undici: 7.29.0
   vite: "catalog:"
-  vitepress>vite: ^5.4.0
+  vitepress>vite: 6.4.3
 
 peerDependencyRules:
   allowAny:

@@ -1,62 +1,44 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { WidgetRuntime } from "../src/app";
-import { clearAssetMemoryCache, widgetAssetId, type AssetKind } from "../src/assets";
+import { blobRef, type BlobRef } from "../src/attachments";
+import { readResult, writeResult } from "./attachment-test-support";
+import { isRecord } from "../src/runtime-value";
+import type { ToolArguments } from "../src/tool-calls";
 import type { RuntimeBinding } from "../src/binding";
 import type { BridgeModel } from "../src/model";
 import type { RuntimeRecord } from "../src/runtime-value";
 import { ToolCallQueue, type ToolRequest } from "../src/tool-calls";
-import { fixtureStrings } from "./runtime-test-support";
+import { deferred, fixtureStrings } from "./runtime-test-support";
 
 interface FixtureAsset {
 	id: string;
-	kind: AssetKind;
+	ref: BlobRef;
 	text: string;
 	byteLength: number;
 }
 
-async function fixtureAsset(kind: AssetKind, text: string): Promise<FixtureAsset> {
-	return {
-		id: await widgetAssetId(kind, text),
-		kind,
-		text,
-		byteLength: new TextEncoder().encode(text).byteLength,
-	};
+async function fixtureAsset(text: string): Promise<FixtureAsset> {
+	const ref = await blobRef(new TextEncoder().encode(text));
+	return { id: ref.id, ref, text, byteLength: ref.byteLength };
 }
 
-function manifest(...assets: FixtureAsset[]): RuntimeRecord {
-	return Object.fromEntries(
-		assets.map((asset) => [asset.id, { kind: asset.kind, byteLength: asset.byteLength }]),
-	);
-}
-
-function assetContents<Value>(
+function assetContents(
 	assets: ReadonlyMap<string, FixtureAsset>,
-	assetIds: Value,
+	args: ToolArguments = {},
 ): CallToolResult {
-	const ids = fixtureStrings(assetIds);
+	const asset = assets.get(String(args.blob_id));
+	if (!asset) throw new Error("unknown fixture source");
+	return readResult(new TextEncoder().encode(asset.text), args);
+}
+
+function delivered(result: CallToolResult): CallToolResult {
+	const payload = result._meta?.anywidget;
+	if (!isRecord(payload)) throw new Error("missing fixture payload");
 	return {
-		content: [],
-		_meta: {
-			anywidget: {
-				protocolVersion: 1,
-				assetContents: Object.fromEntries(
-					ids.map((assetId) => {
-						const asset = assets.get(String(assetId));
-						if (!asset) throw new Error(`unknown fixture asset ${String(assetId)}`);
-						return [
-							asset.id,
-							{
-								kind: asset.kind,
-								byteLength: asset.byteLength,
-								text: asset.text,
-							},
-						];
-					}),
-				),
-			},
-		},
+		...result,
+		_meta: { anywidget: { protocolVersion: 3, instanceId: "session-1", payload } },
 	};
 }
 
@@ -88,10 +70,10 @@ type RuntimePayload = Parameters<typeof WidgetRuntime.create>[0];
 
 function runtimePayload(overrides: Partial<RuntimePayload> = {}): RuntimePayload {
 	return {
-		protocolVersion: 1,
+		protocolVersion: 3,
 		instanceId: "invalid-session",
 		rootModelId: "root-model",
-		assetManifest: {},
+
 		models: {
 			"root-model": {
 				modelId: "root-model",
@@ -106,12 +88,12 @@ const invalidLaunches: Array<[string, RuntimePayload, string]> = [
 	[
 		"an unversioned payload",
 		runtimePayload({ protocolVersion: undefined }),
-		"Widget payload protocol version undefined is incompatible with version 1",
+		"Widget payload protocol version undefined is incompatible with version 3",
 	],
 	[
 		"an incompatible protocol version",
-		runtimePayload({ protocolVersion: 2 }),
-		"Widget payload protocol version 2 is incompatible with version 1",
+		runtimePayload({ protocolVersion: 4 }),
+		"Widget payload protocol version 4 is incompatible with version 3",
 	],
 	[
 		"a missing root model ID",
@@ -129,67 +111,25 @@ const invalidLaunches: Array<[string, RuntimePayload, string]> = [
 		}),
 		"Widget source _esm must use a content-addressed reference",
 	],
-	[
-		"non-object source references",
-		runtimePayload({
-			models: { "root-model": { state: {}, sourceRefs: "not-an-object" } },
-		}),
-		"Widget source references must be an object",
-	],
-	[
-		"an unknown source reference",
-		runtimePayload({
-			models: {
-				"root-model": {
-					state: {},
-					sourceRefs: { script: `esm:sha256:${"0".repeat(64)}` },
-				},
-			},
-		}),
-		"Unknown widget source reference script",
-	],
-	[
-		"an invalid source reference",
-		runtimePayload({
-			models: {
-				"root-model": {
-					state: {},
-					sourceRefs: { _esm: "esm:sha256:short" },
-				},
-			},
-		}),
-		"Invalid widget source reference for _esm",
-	],
 ];
 
 describe("WidgetRuntime asset hydration", () => {
-	beforeEach(() => {
-		clearAssetMemoryCache();
-	});
-
 	afterEach(() => {
-		clearAssetMemoryCache();
 		vi.unstubAllGlobals();
 		vi.restoreAllMocks();
 	});
 
 	test("hydrates initial models and launch source updates before exposing the runtime", async () => {
-		const initialEsm = await fixtureAsset("esm", "\nexport default { render() {} }\n");
-		const initialCss = await fixtureAsset("css", ".initial { color: red; }\n");
-		const launchedEsm = await fixtureAsset(
-			"esm",
-			"\nexport default { render() { /* launch λ */ } }\n",
-		);
-		const launchedCss = await fixtureAsset(
-			"css",
-			'[data-state="launch"]::after { content: "✓"; }\n',
-		);
+		const initialEsm = await fixtureAsset("\nexport default { render() {} }\n");
+		const initialCss = await fixtureAsset(".initial { color: red; }\n");
+		const launchedEsm = await fixtureAsset("\nexport default { render() { /* launch λ */ } }\n");
+		const launchedCss = await fixtureAsset('[data-state="launch"]::after { content: "✓"; }\n');
 		const assets = new Map(
 			[initialEsm, initialCss, launchedEsm, launchedCss].map((asset) => [asset.id, asset]),
 		);
 		const callServerTool = vi.fn(async (request: ToolRequest) => {
-			if (request.name === "anywidget_assets") {
-				return assetContents(assets, request.arguments?.asset_ids);
+			if (request.name === "anywidget_read") {
+				return assetContents(assets, request.arguments);
 			}
 			return { content: [] } satisfies CallToolResult;
 		});
@@ -201,22 +141,22 @@ describe("WidgetRuntime asset hydration", () => {
 
 		const runtime = await WidgetRuntime.create(
 			{
-				protocolVersion: 1,
+				protocolVersion: 3,
 				instanceId: "session-1",
 				rootModelId: "root-model",
-				assetManifest: manifest(initialEsm, initialCss, launchedEsm, launchedCss),
+
 				models: {
 					"root-model": {
 						modelId: "root-model",
 						state: { value: 0 },
-						sourceRefs: { _esm: initialEsm.id, _css: initialCss.id },
+						sourceRefs: { _esm: initialEsm.ref, _css: initialCss.ref },
 					},
 				},
 				messages: [
 					{
 						modelId: "root-model",
 						data: { method: "update", state: { value: 1 } },
-						sourceRefs: { _esm: launchedEsm.id, _css: launchedCss.id },
+						sourceRefs: { _esm: launchedEsm.ref, _css: launchedCss.ref },
 						buffers: [],
 					},
 				],
@@ -232,25 +172,25 @@ describe("WidgetRuntime asset hydration", () => {
 		expect(root.get("_esm")).toBe(launchedEsm.text);
 		expect(root.get("_css")).toBe(launchedCss.text);
 		const assetRequest = callServerTool.mock.calls.find(
-			([request]) => request.name === "anywidget_assets",
+			([request]) => request.name === "anywidget_read",
 		)?.[0];
 		expect(assetRequest).toMatchObject({
-			name: "anywidget_assets",
+			name: "anywidget_read",
 			arguments: { instance_id: "session-1" },
 		});
-		expect(new Set(fixtureStrings(assetRequest?.arguments?.asset_ids))).toEqual(
-			new Set([initialEsm.id, initialCss.id, launchedEsm.id, launchedCss.id]),
-		);
+		expect(
+			callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_read"),
+		).toHaveLength(4);
 
 		await runtime.dispose();
 	});
 
 	test("hydrates dynamic models and hot ESM and CSS inside the active comm transaction", async () => {
-		const initialEsm = await fixtureAsset("esm", "export default { render() {} }");
-		const initialCss = await fixtureAsset("css", ".initial {}");
-		const hotEsm = await fixtureAsset("esm", "\nexport default { render() { /* hot café */ } }\n");
-		const hotCss = await fixtureAsset("css", '[data-hot="true"] { content: "λ"; }\n');
-		const childCss = await fixtureAsset("css", ".child { color: rgb(1, 2, 3); }\n");
+		const initialEsm = await fixtureAsset("export default { render() {} }");
+		const initialCss = await fixtureAsset(".initial {}");
+		const hotEsm = await fixtureAsset("\nexport default { render() { /* hot café */ } }\n");
+		const hotCss = await fixtureAsset('[data-hot="true"] { content: "λ"; }\n');
+		const childCss = await fixtureAsset(".child { color: rgb(1, 2, 3); }\n");
 		const assets = new Map(
 			[initialEsm, initialCss, hotEsm, hotCss, childCss].map((asset) => [asset.id, asset]),
 		);
@@ -258,34 +198,35 @@ describe("WidgetRuntime asset hydration", () => {
 		const names: string[] = [];
 		const callServerTool = vi.fn(async (request: ToolRequest) => {
 			names.push(request.name);
-			if (request.name === "anywidget_assets") {
-				return assetContents(assets, request.arguments?.asset_ids);
+			if (request.name === "anywidget_read") {
+				return assetContents(assets, request.arguments);
 			}
+			if (request.name === "anywidget_write") return writeResult(request.arguments ?? {});
 			if (request.name === "anywidget_comm") {
-				return {
+				return delivered({
 					content: [],
 					_meta: {
 						anywidget: {
-							protocolVersion: 1,
-							assetManifest: manifest(hotEsm, hotCss, childCss),
+							protocolVersion: 3,
+
 							models: {
 								"child-model": {
 									modelId: "child-model",
 									state: { value: 9 },
-									sourceRefs: { _esm: hotEsm.id, _css: childCss.id },
+									sourceRefs: { _esm: hotEsm.ref, _css: childCss.ref },
 								},
 							},
 							messages: [
 								{
 									modelId: "root-model",
 									data: { method: "update", state: { value: 2 } },
-									sourceRefs: { _esm: hotEsm.id, _css: hotCss.id },
+									sourceRefs: { _esm: hotEsm.ref, _css: hotCss.ref },
 									buffers: [],
 								},
 							],
 						},
 					},
-				} satisfies CallToolResult;
+				} satisfies CallToolResult);
 			}
 			return { content: [] } satisfies CallToolResult;
 		});
@@ -297,15 +238,15 @@ describe("WidgetRuntime asset hydration", () => {
 		const calls = new ToolCallQueue(app);
 		const runtime = await WidgetRuntime.create(
 			{
-				protocolVersion: 1,
+				protocolVersion: 3,
 				instanceId: "session-1",
 				rootModelId: "root-model",
-				assetManifest: manifest(initialEsm, initialCss),
+
 				models: {
 					"root-model": {
 						modelId: "root-model",
 						state: { value: 0 },
-						sourceRefs: { _esm: initialEsm.id, _css: initialCss.id },
+						sourceRefs: { _esm: initialEsm.ref, _css: initialCss.ref },
 					},
 				},
 			},
@@ -315,9 +256,17 @@ describe("WidgetRuntime asset hydration", () => {
 			(_bindingRuntime, model) => new RecordingBinding(model, initialized),
 		);
 
-		await runtime.send("root-model", { method: "update", state: { value: 1 } }, [], "operation-1");
+		await runtime.send("root-model", { method: "update", state: { value: 1 } }, []);
 
-		expect(names).toEqual(["anywidget_assets", "anywidget_comm", "anywidget_assets"]);
+		expect(names).toEqual([
+			"anywidget_read",
+			"anywidget_read",
+			"anywidget_write",
+			"anywidget_comm",
+			"anywidget_read",
+			"anywidget_read",
+			"anywidget_read",
+		]);
 		expect(runtime.model("root-model").get("value")).toBe(2);
 		expect(runtime.model("root-model").get("_esm")).toBe(hotEsm.text);
 		expect(runtime.model("root-model").get("_css")).toBe(hotCss.text);
@@ -330,14 +279,6 @@ describe("WidgetRuntime asset hydration", () => {
 				css: childCss.text,
 			},
 		]);
-		const dynamicAssetRequest = callServerTool.mock.calls.find(
-			([request]) =>
-				request.name === "anywidget_assets" &&
-				fixtureStrings(request.arguments?.asset_ids).includes(hotEsm.id),
-		)?.[0];
-		expect(new Set(fixtureStrings(dynamicAssetRequest?.arguments?.asset_ids))).toEqual(
-			new Set([hotEsm.id, childCss.id, hotCss.id]),
-		);
 
 		await runtime.dispose();
 	});
@@ -379,7 +320,7 @@ describe("WidgetRuntime asset hydration", () => {
 				{
 					instanceId: "stalled-disposal-session",
 					rootModelId: "root-model",
-					assetManifest: {},
+
 					models: {},
 				},
 				new ToolCallQueue(app),
@@ -393,7 +334,7 @@ describe("WidgetRuntime asset hydration", () => {
 
 			expect(await creationError).toEqual(
 				expect.objectContaining({
-					message: "Widget payload protocol version undefined is incompatible with version 1",
+					message: "Widget payload protocol version undefined is incompatible with version 3",
 				}),
 			);
 		} finally {
@@ -402,11 +343,11 @@ describe("WidgetRuntime asset hydration", () => {
 	});
 
 	test("aborts stalled source loading and disposes its server session", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
+		const esm = await fixtureAsset("export default { render() {} }");
 		const names: string[] = [];
 		const callServerTool = vi.fn(async (request: { name: string }): Promise<CallToolResult> => {
 			names.push(request.name);
-			if (request.name === "anywidget_assets") {
+			if (request.name === "anywidget_read") {
 				return await new Promise<CallToolResult>(() => undefined);
 			}
 			return { content: [] };
@@ -419,14 +360,14 @@ describe("WidgetRuntime asset hydration", () => {
 		const controller = new AbortController();
 		const creation = WidgetRuntime.create(
 			{
-				protocolVersion: 1,
+				protocolVersion: 3,
 				instanceId: "cancelled-session",
 				rootModelId: "root-model",
-				assetManifest: manifest(esm),
+
 				models: {
 					"root-model": {
 						state: {},
-						sourceRefs: { _esm: esm.id },
+						sourceRefs: { _esm: esm.ref },
 					},
 				},
 			},
@@ -437,16 +378,21 @@ describe("WidgetRuntime asset hydration", () => {
 			controller.signal,
 		);
 
-		await vi.waitFor(() => expect(names).toEqual(["anywidget_assets"]));
+		await vi.waitFor(() => expect(names).toEqual(["anywidget_read"]));
 		controller.abort(new DOMException("teardown", "AbortError"));
 
 		await expect(creation).rejects.toMatchObject({ name: "AbortError" });
-		expect(names).toEqual(["anywidget_assets", "anywidget_dispose"]);
+		expect(names).toEqual(["anywidget_read", "anywidget_dispose"]);
 	});
 
 	test("aborts stalled persistent cache reads and disposes the server session", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		const open = vi.fn(async (): Promise<Cache> => await new Promise<Cache>(() => undefined));
+		const esm = await fixtureAsset("export default { render() {} }");
+		const opened = deferred<void>();
+		const open = vi.fn(async (): Promise<Cache> => {
+			opened.resolve();
+			return await new Promise<Cache>(() => undefined);
+		});
+		vi.stubGlobal("navigator", { locks: { request: vi.fn() } });
 		vi.stubGlobal("caches", { open });
 		const names: string[] = [];
 		const callServerTool = vi.fn(async (request: { name: string }): Promise<CallToolResult> => {
@@ -461,14 +407,14 @@ describe("WidgetRuntime asset hydration", () => {
 		const controller = new AbortController();
 		const creation = WidgetRuntime.create(
 			{
-				protocolVersion: 1,
+				protocolVersion: 3,
 				instanceId: "stalled-cache-session",
 				rootModelId: "root-model",
-				assetManifest: manifest(esm),
+
 				models: {
 					"root-model": {
 						state: {},
-						sourceRefs: { _esm: esm.id },
+						sourceRefs: { _esm: esm.ref },
 					},
 				},
 			},
@@ -479,34 +425,24 @@ describe("WidgetRuntime asset hydration", () => {
 			controller.signal,
 		);
 
-		await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+		const rejected = expect(creation).rejects.toMatchObject({ name: "AbortError" });
+		await opened.promise;
 		controller.abort(new DOMException("superseded", "AbortError"));
 
-		await expect(creation).rejects.toMatchObject({ name: "AbortError" });
+		await rejected;
 		expect(names).toEqual(["anywidget_dispose"]);
 	});
 
 	test("disposes the server session exactly once when asset verification prevents creation", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
+		const esm = await fixtureAsset("export default { render() {} }");
 		const names: string[] = [];
 		const callServerTool = vi.fn(async (request: ToolRequest) => {
 			names.push(request.name);
-			if (request.name === "anywidget_assets") {
-				return {
-					content: [],
-					_meta: {
-						anywidget: {
-							protocolVersion: 1,
-							assetContents: {
-								[esm.id]: {
-									kind: esm.kind,
-									byteLength: esm.byteLength,
-									text: "export default { render() { throw new Error(); } }",
-								},
-							},
-						},
-					},
-				} satisfies CallToolResult;
+			if (request.name === "anywidget_read") {
+				return readResult(
+					new TextEncoder().encode("x".repeat(esm.byteLength)),
+					request.arguments ?? {},
+				);
 			}
 			return { content: [] } satisfies CallToolResult;
 		});
@@ -519,15 +455,15 @@ describe("WidgetRuntime asset hydration", () => {
 		await expect(
 			WidgetRuntime.create(
 				{
-					protocolVersion: 1,
+					protocolVersion: 3,
 					instanceId: "failed-session",
 					rootModelId: "root-model",
-					assetManifest: manifest(esm),
+
 					models: {
 						"root-model": {
 							modelId: "root-model",
 							state: {},
-							sourceRefs: { _esm: esm.id },
+							sourceRefs: { _esm: esm.ref },
 						},
 					},
 				},
@@ -535,9 +471,9 @@ describe("WidgetRuntime asset hydration", () => {
 				app,
 				Promise.resolve(),
 			),
-		).rejects.toThrow(`Widget asset response failed verification for ${esm.id}`);
+		).rejects.toThrow(`Widget attachment failed verification for ${esm.id}`);
 
-		expect(names).toEqual(["anywidget_assets", "anywidget_dispose"]);
+		expect(names).toEqual(["anywidget_read", "anywidget_dispose"]);
 		expect(callServerTool.mock.calls.at(-1)?.[0]).toEqual({
 			name: "anywidget_dispose",
 			arguments: { session_id: "failed-session" },
@@ -546,19 +482,20 @@ describe("WidgetRuntime asset hydration", () => {
 
 	test("rejects inline source traits in dynamic messages", async () => {
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-		const initialEsm = await fixtureAsset("esm", "export default { render() {} }");
+		const initialEsm = await fixtureAsset("export default { render() {} }");
 		const assets = new Map([[initialEsm.id, initialEsm]]);
 		const callServerTool = vi.fn(async (request: ToolRequest) => {
-			if (request.name === "anywidget_assets") {
-				return assetContents(assets, request.arguments?.asset_ids);
+			if (request.name === "anywidget_read") {
+				return assetContents(assets, request.arguments);
 			}
+			if (request.name === "anywidget_write") return writeResult(request.arguments ?? {});
 			if (request.name === "anywidget_comm") {
-				return {
+				return delivered({
 					content: [],
 					_meta: {
 						anywidget: {
-							protocolVersion: 1,
-							assetManifest: {},
+							protocolVersion: 3,
+
 							messages: [
 								{
 									modelId: "root-model",
@@ -568,7 +505,7 @@ describe("WidgetRuntime asset hydration", () => {
 							],
 						},
 					},
-				} satisfies CallToolResult;
+				} satisfies CallToolResult);
 			}
 			return { content: [] } satisfies CallToolResult;
 		});
@@ -579,14 +516,14 @@ describe("WidgetRuntime asset hydration", () => {
 		};
 		const runtime = await WidgetRuntime.create(
 			{
-				protocolVersion: 1,
-				instanceId: "dynamic-inline-session",
+				protocolVersion: 3,
+				instanceId: "session-1",
 				rootModelId: "root-model",
-				assetManifest: manifest(initialEsm),
+
 				models: {
 					"root-model": {
 						state: {},
-						sourceRefs: { _esm: initialEsm.id },
+						sourceRefs: { _esm: initialEsm.ref },
 					},
 				},
 			},
@@ -596,9 +533,9 @@ describe("WidgetRuntime asset hydration", () => {
 			(_runtime, model) => new RecordingBinding(model, []),
 		);
 
-		await expect(
-			runtime.send("root-model", { method: "update", state: {} }, [], "inline-operation"),
-		).rejects.toThrow("Widget source _css must use a content-addressed reference");
+		await expect(runtime.send("root-model", { method: "update", state: {} }, [])).rejects.toThrow(
+			"Widget source _css must use a content-addressed reference",
+		);
 		await vi.waitFor(() =>
 			expect(
 				callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_dispose"),

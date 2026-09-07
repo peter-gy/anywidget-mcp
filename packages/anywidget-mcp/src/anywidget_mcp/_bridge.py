@@ -15,7 +15,7 @@ from ._detachment import DetachedModels
 from ._model_connection import connect_models
 from ._notifications import NotificationGate
 from ._session_types import SessionSnapshot, empty_snapshot as _empty_snapshot
-from ._source_assets import SourceAssets
+from ._attachments import Attachments
 from ._state import (
     DEFAULT_STATE,
     ProjectionUpdate,
@@ -43,7 +43,6 @@ from ._widget_protocol import (
 )
 
 _MAX_PROJECTION_REFRESH_RETRIES = 8
-PROTOCOL_VERSION = 1
 
 
 class WidgetSessionInitializationError(ExceptionGroup):
@@ -76,7 +75,7 @@ class WidgetSession:
         self._pending_models: dict[str, dict[str, Any]] = {}
         self._pending_removed_model_ids: list[str] = []
         self._detached = DetachedModels()
-        self._sources = SourceAssets()
+        self._attachments = Attachments()
         self._graph_sync_suspended = False
         self._closed = False
         self._closing_widgets: dict[int, object] = {}
@@ -154,7 +153,7 @@ class WidgetSession:
         self,
         model_id: str,
         data: dict[str, Any],
-        buffers: Iterable[str] = (),
+        buffers: Iterable[bytes] = (),
     ) -> SessionSnapshot:
         with self._lock:
             if self._closed:
@@ -224,6 +223,7 @@ class WidgetSession:
                 or self._notifications.has_pending_restores
                 or bool(self._widget_close_pending)
                 or bool(self._comms)
+                or self._attachments.has_files
             )
             if self._closed and not cleanup_pending:
                 return
@@ -257,7 +257,6 @@ class WidgetSession:
                 self._pending_models.clear()
                 self._pending_removed_model_ids.clear()
                 self._detached.clear()
-                self._sources.clear()
                 self._models.clear()
                 self._widgets_by_identity.clear()
 
@@ -269,6 +268,12 @@ class WidgetSession:
             ]
             widgets = list(reversed(self._closing_widgets.values()))
             comms = list(self._comms.items())
+
+        try:
+            with self._lock:
+                self._attachments.clear()
+        except Exception as error:
+            errors.append(error)
 
         if context is not None:
             try:
@@ -390,11 +395,12 @@ class WidgetSession:
                     messages = [message.as_dict() for message in self._messages]
                     removed_model_ids = self._pending_removed_model_ids
 
-                models, messages, asset_manifest = self._externalize_sources(
+                models, messages, attachment_ids = self._externalize_attachments(
                     models,
                     messages,
                 )
 
+                self._models = {model_id: {} for model_id in self._models}
                 self._messages.clear()
                 self._pending_models = {}
                 self._pending_removed_model_ids = []
@@ -410,7 +416,7 @@ class WidgetSession:
                 snapshot = SessionSnapshot(
                     messages=messages,
                     models=models,
-                    asset_manifest=asset_manifest,
+                    attachment_ids=attachment_ids,
                     removed_model_ids=removed_model_ids,
                     projection=projection,
                     projection_error=projection_error,
@@ -425,36 +431,53 @@ class WidgetSession:
                     self._detached.announce(removed_model_ids)
                 return snapshot
 
-    def asset_contents(self, asset_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
-        """Return session-owned source assets addressed by content digest."""
+    def retire_uploads_before(self, operation_id: int) -> None:
         with self._lock:
-            if self._closed:
-                raise RuntimeError("The widget session is closed")
-            return self._sources.contents(asset_ids)
+            self._attachments.retire_uploads_before(operation_id)
 
-    def pin_assets(self, asset_ids: Iterable[str]) -> tuple[str, ...]:
-        """Retain snapshot assets while a protocol response remains replayable."""
+    def finish_delivery(self) -> None:
         with self._lock:
-            return self._sources.pin(asset_ids)
+            self._attachments.finish_delivery()
 
-    def release_assets(self, asset_ids: Iterable[str]) -> None:
-        """Release assets after their protocol replay entry expires."""
+    def read_attachment(self, identifier: str, offset: int) -> dict[str, Any]:
         with self._lock:
-            self._sources.release(asset_ids)
+            return self._attachments.read(identifier, offset)
 
-    def _externalize_sources(
-        self,
-        models: dict[str, dict[str, Any]],
-        messages: list[dict[str, Any]],
-    ) -> tuple[
-        dict[str, dict[str, Any]],
-        list[dict[str, Any]],
-        dict[str, dict[str, Any]],
-    ]:
-        return self._sources.externalize(
-            models,
-            messages,
-            live_model_ids=set(self._models),
+    def write_attachment(
+        self, operation_id: int, identifier: str, size: int, offset: int, data: str
+    ) -> dict[str, Any]:
+        with self._lock:
+            return self._attachments.write(operation_id, identifier, size, offset, data)
+
+    def resolve_attachment(self, ref: object) -> bytes:
+        with self._lock:
+            return self._attachments.resolve(ref)
+
+    def consume_uploads(self, operation_id: int) -> None:
+        with self._lock:
+            self._attachments.consume_uploads(operation_id)
+
+    def delivery(
+        self, payload: dict[str, Any], ids: Iterable[str], *, inline: bool = True
+    ) -> tuple[dict[str, Any], tuple[str, ...]]:
+        with self._lock:
+            return self._attachments.delivery(
+                self.instance_id, payload, ids, inline=inline
+            )
+
+    def pin_attachments(self, ids: Iterable[str]) -> tuple[str, ...]:
+        with self._lock:
+            return self._attachments.pin(ids)
+
+    def release_attachments(self, ids: Iterable[str]) -> None:
+        with self._lock:
+            self._attachments.release(ids)
+
+    def _externalize_attachments(
+        self, models: dict[str, dict[str, Any]], messages: list[dict[str, Any]]
+    ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], tuple[str, ...]]:
+        return self._attachments.externalize(
+            models, messages, live_model_ids=set(self._models)
         )
 
     def _restore_notification_gate(self, widget: object) -> None:
@@ -708,7 +731,7 @@ class WidgetSession:
                     self._graph_observers.pop(identity, None)
             self._widgets_by_identity.pop(identity, None)
             self._models.pop(model_id, None)
-            self._sources.forget_models((model_id,))
+            self._attachments.forget_models((model_id,))
             self._pending_models.pop(model_id, None)
             self._messages = [
                 message for message in self._messages if message.model_id != model_id
@@ -811,7 +834,7 @@ class WidgetSession:
             self._widgets_by_identity.pop(identity, None)
             model_id = model_ids[identity]
             self._models.pop(model_id, None)
-            self._sources.forget_models((model_id,))
+            self._attachments.forget_models((model_id,))
             self._detached.add(model_id, widget, self._comms.get(model_id))
             if model_id not in self._pending_removed_model_ids:
                 self._pending_removed_model_ids.append(model_id)

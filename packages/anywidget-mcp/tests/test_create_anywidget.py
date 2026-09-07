@@ -12,7 +12,7 @@ import pytest
 
 from anywidget_mcp import AnyWidgetMCP, create_anywidget
 
-from ._server_support import bootstrap_runtime, connected, state_id
+from ._server_support import bootstrap_runtime, connected, read_blob, state_id
 
 ROOT = Path(__file__).parents[3]
 RETRY_BUDGET_CODE = (ROOT / "examples" / "retry_budget.py").read_text()
@@ -219,40 +219,35 @@ async def test_create_anywidget_exposes_schema_and_generated_assets() -> None:
         )
         runtime = await bootstrap_runtime(client, launch)
         model = runtime["models"][runtime["rootModelId"]]
-        assets = await client.call_tool(
-            "anywidget_assets",
-            {
-                "instance_id": runtime["instanceId"],
-                "asset_ids": list(model["sourceRefs"].values()),
-            },
-        )
+        sources = {
+            name: await read_blob(client, runtime["instanceId"], ref)
+            for name, ref in model["sourceRefs"].items()
+        }
         await client.call_tool(
             "anywidget_dispose",
             {"session_id": runtime["instanceId"]},
         )
 
-    assert tool.inputSchema["required"] == ["code"]
-    assert tool.inputSchema["properties"]["code"] == {
+    assert tool.input_schema["required"] == ["code"]
+    assert tool.input_schema["properties"]["code"] == {
         "title": "Code",
         "type": "string",
     }
-    assert tool.inputSchema["properties"]["classnames"] == {
+    assert tool.input_schema["properties"]["classnames"] == {
         "default": [],
         "items": {"type": "string"},
         "title": "Classnames",
         "type": "array",
     }
-    assert launch.structuredContent == {
+    assert launch.structured_content == {
         "tool": "create_anywidget",
         "state": {"attempts": 4, "base_delay": 0.5, "total_wait": 3.5},
         "state_id": state_id(launch),
     }
     assert set(model["sourceRefs"]) == {"_css", "_esm"}
     assert set(model["state"]).isdisjoint(model["sourceRefs"])
-    assert assets.meta is not None
-    fetched = assets.meta["anywidget"]["assetContents"]
-    assert set(fetched) == set(model["sourceRefs"].values())
-    assert {asset["kind"] for asset in fetched.values()} == {"css", "esm"}
+    assert set(sources) == {"_esm", "_css"}
+    assert all(source.decode("utf-8") for source in sources.values())
 
 
 @pytest.mark.anyio
@@ -274,7 +269,7 @@ async def test_create_anywidget_launches_multiple_selected_classes() -> None:
             {"session_id": runtime["instanceId"]},
         )
 
-    assert launch.structuredContent == {
+    assert launch.structured_content == {
         "tool": "create_anywidget",
         "state_id": state_id(launch),
         "state": {

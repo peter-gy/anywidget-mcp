@@ -4,9 +4,11 @@
 
 - `packages/app/src/` contains the browser MCP App runtime.
 - `packages/app/tests/` contains Vite+ tests for browser contracts.
+- `apps/e2e/` contains Playwright browser tests, the MCP App host, and the
+  Python widget fixture.
 - `packages/anywidget-mcp/src/anywidget_mcp/` contains the public Python API,
   MCP server, state projection, widget bridge, and CLI.
-- `packages/anywidget-mcp/tests/` contains Python and Inspector fixtures.
+- `packages/anywidget-mcp/tests/` contains Python contract tests and fixtures.
 - `packages/anywidget-mcp/frontend/` contains the final Vite composition
   entry.
 - `development_docs/` contains contributor architecture and protocol material.
@@ -23,7 +25,7 @@ comm messages, metadata, buffers, model membership, or model context.
 Install both workspaces from the repository root:
 
 ```sh
-uv sync --all-packages --group dev
+uv sync --all-packages --group dev --locked
 pnpm install --frozen-lockfile
 ```
 
@@ -36,8 +38,14 @@ pnpm --filter @anywidget-mcp/python build
 Run the local gate:
 
 ```sh
+pnpm --filter @anywidget-mcp/e2e install-browser
 make check
 ```
+
+The browser installation downloads Chromium, Firefox, and WebKit for
+[Playwright](https://playwright.dev/docs/intro), the browser test runner.
+On Linux, installing browser system dependencies may require administrator
+privileges. Repeat the installation after upgrading Playwright.
 
 ## Iteration checks
 
@@ -64,6 +72,43 @@ The build provides the app resource read by the Python resource tests.
 
 Use one test module or test name while iterating, then return to `make check`.
 
+## End-to-end browser tests
+
+Build the packaged app and run the integration scenarios in Chromium, Firefox,
+and WebKit:
+
+```sh
+pnpm e2e
+```
+
+Playwright starts the Python widget server and Vite host, renders the packaged
+MCP App in an iframe, and stops both servers when the run finishes. The tests
+exercise browser interaction against Python state through the MCP connection.
+
+Select one browser while iterating:
+
+```sh
+pnpm e2e --project=chromium
+```
+
+After building the browser resource, run the package directly or open
+Playwright's interactive test runner:
+
+```sh
+pnpm --filter @anywidget-mcp/e2e e2e --project=chromium
+pnpm --filter @anywidget-mcp/e2e e2e:ui
+```
+
+`pnpm test` runs the Vite+ unit suite. `make check` runs the browser integration
+suite after its build step. CI runs a separate job for each browser and uploads
+`apps/e2e/playwright-report/` and `apps/e2e/test-results/` after the test run.
+
+The browser suite transfers an 8 MiB binary value and 40,000 JSON records,
+recovers a dropped attachment response, and checks the resulting Python state.
+The host enforces a 128 KiB tool-message budget and applies resource content
+security policy. Startup coverage includes repeated source revisions and
+custom messages emitted before rendering.
+
 ## Package boundary
 
 Build both JavaScript packages and the Python artifacts:
@@ -85,6 +130,12 @@ The package gate performs these checks:
 The Hatch build hook reports the build command when the HTML resource is
 missing.
 
+CI builds the browser packages once. The Python compatibility matrix, browser
+integration matrix, and distribution job consume that browser artifact.
+`make package-artifacts` checks distributions from an existing browser build,
+and `make package` builds the browser packages first. CI retains the validated
+distributions for the release workflow.
+
 ## Local MCP server
 
 Serve a widget package:
@@ -102,7 +153,7 @@ uv run --package anywidget-mcp anywidget-mcp inspect wigglystuff:ColorPicker --j
 The inspector and server resolve the same `MODULE:OBJECT` target and use the
 same compiled registration description. Inspection reports `widget-class` or
 `factory`. Explicit target parameters define widget arguments in the input
-schema, and FastMCP `Context` parameters stay outside it. `anywidget-mcp` adds
+schema, and MCPServer `Context` parameters stay outside it. `anywidget-mcp` adds
 optional `loading_message` for host progress text. A class with variadic
 constructor parameters exposes this framework field and no widget arguments.
 Use an explicit factory signature when the MCP tool accepts widget arguments.
@@ -110,7 +161,7 @@ Use an explicit factory signature when the MCP tool accepts widget arguments.
 Run the browser fixture used for protocol checks:
 
 ```sh
-uv run --package anywidget-mcp python packages/anywidget-mcp/tests/fixtures/browser_bridge_server.py --port 8766
+uv run --package anywidget-mcp python apps/e2e/server.py --port 8766
 ```
 
 The fixture provides `bridge_probe` for binary state, custom commands, child
@@ -118,15 +169,15 @@ replacement, and model context. It also provides `hot_reload_probe` for ESM
 and CSS replacement. `large_asset_probe` renders two models backed by one shared
 three-megabyte ESM source. Every probe exercises the versioned source-asset
 protocol. Initial and dynamic sources travel as content references, and the
-browser fetches missing text through `anywidget_assets` before initializing
-bindings.
+browser reads verified source attachments in bounded `anywidget_read` chunks
+before initializing bindings.
 
 ## mcp-use Inspector Chat
 
 Start the pinned Inspector after the fixture is listening:
 
 ```sh
-npx --yes @mcp-use/inspector@12.0.3 \
+npx --yes @mcp-use/inspector@20.3.7 \
   --url http://127.0.0.1:8766/mcp \
   --port 8082
 ```
@@ -153,7 +204,8 @@ Exercise the affected scenarios:
   three-megabyte source digest appears in the cache, and the second launch
   reuses it.
 - Inspect bridge calls and verify that each snapshot requests each missing
-  asset ID once through `anywidget_assets`.
+  attachment range through `anywidget_read`. Transfer retries keep the same
+  range and data identity.
 - Check page errors, browser console errors, and failed requests.
 
 Use a custom session ID for every `agent-browser` command. Close that session,

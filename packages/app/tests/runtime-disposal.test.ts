@@ -40,8 +40,6 @@ describe("widget session disposal", () => {
 					operation_id: "bootstrap-operation",
 				},
 			]);
-			expect(requests[1]?.arguments).toBe(requests[0]?.arguments);
-			expect(requests[2]?.arguments).toBe(requests[0]?.arguments);
 		} finally {
 			vi.useRealTimers();
 		}

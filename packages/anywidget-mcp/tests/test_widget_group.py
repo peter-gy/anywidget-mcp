@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import anywidget
@@ -174,7 +175,7 @@ def test_group_state_none_disables_the_aggregate_projection() -> None:
 
 def test_group_state_keeps_a_bounded_preview_of_large_compositions() -> None:
     widgets = tuple(
-        GroupStateWidget(detail=f"{index}-{'x' * 500}") for index in range(10)
+        GroupStateWidget(detail=f"{index}-{'x' * 1000}") for index in range(10)
     )
     group = _WidgetGroup(widgets)
     session = WidgetSession(
@@ -186,13 +187,43 @@ def test_group_state_keeps_a_bounded_preview_of_large_compositions() -> None:
     try:
         initial = session.take_projection()
         assert initial is not None
-        summary = initial.state["widgets"]
-        assert summary["type"] == "sequence"
-        assert summary["length"] == 10
-        assert summary["omitted"] > 0
-        assert summary["items"][0] == {
-            "detail": f"0-{'x' * 500}",
+        projected = initial.state["widgets"]
+        assert len(json.dumps(initial.state, separators=(",", ":")).encode()) <= 8_000
+        assert projected[0] == {
+            "detail": f"0-{'x' * 1000}",
             "selected": 0,
         }
+        assert any(item.get("_summary", {}).get("omitted", 0) > 0 for item in projected)
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("max_bytes", [8_000, 16_000, None])
+def test_group_projection_applies_the_byte_budget_to_the_complete_sequence(
+    max_bytes: int | None,
+) -> None:
+    widgets = tuple(GroupStateWidget(detail="x" * 4_000) for _ in range(3))
+    group = _WidgetGroup(widgets)
+    session = WidgetSession(
+        "instance",
+        group,
+        _group_state(
+            StateProjection(
+                lambda widget: {"detail": widget.detail}, max_bytes=max_bytes
+            ),
+            widgets,
+        ),
+    )
+
+    try:
+        initial = session.take_projection()
+        assert initial is not None
+        encoded = json.dumps(initial.state, separators=(",", ":")).encode()
+        if max_bytes == 8_000:
+            assert len(encoded) <= 8_000
+            assert initial.state["widgets"] != [{"detail": "x" * 4_000}] * 3
+        else:
+            assert initial.state == {"widgets": [{"detail": "x" * 4_000}] * 3}
+        assert [widget.detail for widget in widgets] == ["x" * 4_000] * 3
     finally:
         session.close()

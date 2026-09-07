@@ -49,8 +49,8 @@ async def test_direct_and_async_factories_return_ordered_widget_sequences() -> N
             ("direct", direct_result, (1, 2)),
             ("awaited", awaited_result, (3, 4)),
         ):
-            assert result.isError is False
-            assert result.structuredContent == {
+            assert result.is_error is False
+            assert result.structured_content == {
                 "tool": name,
                 "state_id": state_id(result),
                 "state": {
@@ -69,7 +69,7 @@ async def test_direct_and_async_factories_return_ordered_widget_sequences() -> N
                 "anywidget_dispose",
                 {"session_id": runtime["instanceId"]},
             )
-            assert disposed.structuredContent == {"disposed": True}
+            assert disposed.structured_content == {"disposed": True}
 
     assert all(
         widget.comm is None for widgets in created.values() for widget in widgets
@@ -167,7 +167,7 @@ async def test_factory_sequence_is_snapshotted_at_return() -> None:
             "anywidget_poll",
             {
                 "instance_id": runtime["instanceId"],
-                "operation_id": "sequence-snapshot",
+                "operation_id": 1,
             },
         )
         await client.call_tool(
@@ -175,7 +175,7 @@ async def test_factory_sequence_is_snapshotted_at_return() -> None:
             {"session_id": runtime["instanceId"]},
         )
 
-    assert poll.isError is False
+    assert poll.is_error is False
     assert set(runtime["models"]) == {
         runtime["rootModelId"],
         first_model_id,
@@ -214,13 +214,13 @@ async def test_empty_and_invalid_factory_sequences_report_the_result_boundary() 
         empty_result = await client.call_tool("empty", {})
         invalid_result = await client.call_tool("invalid", {})
 
-    assert empty_result.isError is True
+    assert empty_result.is_error is True
     assert isinstance(empty_result.content[0], TextContent)
     assert (
         "Widget factory returned an empty widget sequence"
         in empty_result.content[0].text
     )
-    assert invalid_result.isError is True
+    assert invalid_result.is_error is True
     assert isinstance(invalid_result.content[0], TextContent)
     assert (
         "Widget factory context manager yielded str at sequence index 1, "
@@ -251,10 +251,36 @@ async def test_invalid_nested_sequence_closes_every_returned_widget() -> None:
     async with connected(server) as client:
         result = await client.call_tool("invalid", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert isinstance(result.content[0], TextContent)
     assert "list at sequence index 1, expected AnyWidget" in result.content[0].text
     assert closed == ["nested", "outer"]
+
+
+@pytest.mark.anyio
+async def test_invalid_mapping_result_closes_fresh_widgets_and_preserves_live_widgets() -> (
+    None
+):
+    server = AnyWidgetMCP("test")
+    live = CounterWidget(value=1)
+    fresh = CounterWidget(value=2)
+
+    @server.widget
+    def counter() -> CounterWidget:
+        return live
+
+    @server.widget
+    def invalid() -> dict[str, object]:
+        return {"live": live, "fresh": [fresh]}
+
+    async with connected(server) as client:
+        launch = await client.call_tool("counter", {})
+        await bootstrap_runtime(client, launch)
+        rejected = await client.call_tool("invalid", {})
+
+        assert rejected.is_error is True
+        assert fresh.comm is None
+        assert live.comm is not None
 
 
 @pytest.mark.anyio
@@ -292,8 +318,8 @@ async def test_invalid_user_sequences_close_discovered_widgets() -> None:
         cyclic_result = await client.call_tool("cyclic", {})
         interrupted_result = await client.call_tool("interrupted", {})
 
-    assert cyclic_result.isError is True
-    assert interrupted_result.isError is True
+    assert cyclic_result.is_error is True
+    assert interrupted_result.is_error is True
     assert closed == [
         "cyclic nested",
         "cyclic outer",

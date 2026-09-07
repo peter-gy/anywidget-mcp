@@ -1,6 +1,8 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import { hydrateSources } from "./assets";
+import { hydrateSources, resolveSources } from "./assets";
+import { AttachmentStore, normalizeBlobRef } from "./attachments";
+import type { QueuedToolCall } from "./tool-calls";
 import type { ModelContextSnapshot } from "./context";
 import {
 	insertBuffers,
@@ -31,7 +33,6 @@ export interface RawRuntimePayload {
 	rootModelId?: string;
 	loadingMessage?: RuntimeValue;
 	sessionIdleTimeoutMs?: RuntimeValue;
-	assetManifest?: RuntimeValue;
 	models?: RuntimeValue;
 	messages?: RuntimeValue;
 	context?: RuntimeValue;
@@ -97,15 +98,39 @@ export function pollDelayLimit<Value>(value: Value, fallback: number): number {
 	return Math.max(1, Math.floor(value / 2));
 }
 
-export function hydrateRuntimePayload(
+export async function hydrateRuntimePayload(
 	payload: RawRuntimePayload,
-	assets: Map<string, string>,
-): RawRuntimePayload {
-	return {
-		...payload,
-		models: hydrateRawModels(payload.models, assets),
-		messages: hydrateRawMessages(payload.messages, assets),
-	};
+	store: AttachmentStore,
+	call: QueuedToolCall,
+	signal?: AbortSignal,
+): Promise<RawRuntimePayload> {
+	const sources = await resolveSources(
+		sourceRefValues(payload.models, payload.messages),
+		store,
+		call,
+		signal,
+	);
+	const models = hydrateRawModels(payload.models, sources);
+	const messages = hydrateRawMessages(payload.messages, sources);
+	const records = [
+		...(isRecord(models) ? Object.values(models) : []),
+		...(Array.isArray(messages) ? messages : []),
+	];
+	await records.reduce<Promise<void>>(async (pending, record) => {
+		await pending;
+		if (!isRecord(record) || record.buffers === undefined) return;
+		if (!Array.isArray(record.buffers)) throw new Error("Widget buffers must be an array");
+		record.buffers = await record.buffers.reduce<Promise<ArrayBuffer[]>>(
+			async (previous, value) => {
+				const buffers = await previous;
+				buffers.push((await store.read(normalizeBlobRef(value), call, signal)).buffer);
+				return buffers;
+			},
+			Promise.resolve([]),
+		);
+	}, Promise.resolve());
+	signal?.throwIfAborted();
+	return { ...payload, models, messages };
 }
 
 export function sourceRefValues(models: RuntimeValue, messages: RuntimeValue): RuntimeValue[] {
@@ -197,13 +222,9 @@ export function decodeBuffers<Value>(raw: Value): DataView[] {
 	if (raw === undefined) return [];
 	if (!Array.isArray(raw)) throw new Error("Widget buffers must be an array");
 	return raw.map((value) => {
-		if (!isString(value)) throw new Error("Widget buffer must be base64 text");
-		const binary = atob(value);
-		const bytes = new Uint8Array(binary.length);
-		for (let index = 0; index < binary.length; index += 1) {
-			bytes[index] = binary.charCodeAt(index);
-		}
-		return new DataView(bytes.buffer);
+		if (!(value instanceof ArrayBuffer))
+			throw new Error("Widget buffer must be a hydrated ArrayBuffer");
+		return new DataView(value);
 	});
 }
 

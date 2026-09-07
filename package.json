@@ -6,7 +6,8 @@
 		"check": "vp check --no-error-on-unmatched-pattern .github apps development_docs docs packages scripts AGENTS.md CLAUDE.md README.md package.json pnpm-lock.yaml pnpm-workspace.yaml pyproject.toml tsconfig.json vite.config.ts && pnpm check:anti-slop && vp run -r typecheck",
 		"check:anti-slop": "node --test --test-concurrency=1 tools/oxlint/anti-slop/test/*.test.ts tools/oxlint/anti-slop/test/compatibility/*.test.ts && tsc -p tools/oxlint/anti-slop/tsconfig.json --noEmit",
 		"dev": "vp run @anywidget-mcp/python#dev",
-		"test": "vp run -r test"
+		"test": "vp run -r test",
+		"e2e": "make browser && pnpm --filter @anywidget-mcp/e2e e2e"
 	},
 	"devDependencies": {
 		"@oxlint/plugins": "catalog:",
@@ -14,7 +15,7 @@
 		"oxlint": "catalog:",
 		"oxlint-tsgolint": "catalog:",
 		"typescript": "catalog:",
-		"vite": "catalog:",
+		"vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
 		"vite-plus": "catalog:",
 		"vue": "catalog:"
 	},

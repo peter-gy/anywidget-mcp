@@ -53,7 +53,8 @@ describe("WidgetRuntime transport and polling", () => {
 					name: "anywidget_poll",
 					arguments: {
 						instance_id: "instance-1",
-						operation_id: expect.any(String),
+						operation_id: expect.any(Number),
+						acknowledged_operation_id: 0,
 						acknowledged_model_ids: [],
 					},
 				},
@@ -94,7 +95,7 @@ describe("WidgetRuntime transport and polling", () => {
 			const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
 				if (request.name === "anywidget_dispose") return { content: [] };
 				const operationId = request.arguments?.operation_id;
-				if (operationId === "operation-1") {
+				if (operationId === 1) {
 					firstAttempts += 1;
 					if (firstAttempts === 1) throw new Error("response lost");
 					return update;
@@ -131,32 +132,22 @@ describe("WidgetRuntime transport and polling", () => {
 				}),
 			);
 
-			const first = runtime.send(
-				rootId,
-				{ method: "update", state: { value: 1 } },
-				[],
-				"operation-1",
-			);
-			const second = runtime.send(
-				rootId,
-				{ method: "update", state: { value: 2 } },
-				[],
-				"operation-2",
-			);
+			const first = runtime.send(rootId, { method: "update", state: { value: 1 } }, []);
+			const second = runtime.send(rootId, { method: "update", state: { value: 2 } }, []);
 			await vi.advanceTimersByTimeAsync(100);
 
 			expect(events).toEqual(["processing:first-result"]);
 			const dispatchedBeforeProcessing = callServerTool.mock.calls
 				.filter(([request]) => request.name === "anywidget_comm")
 				.map(([request]) => request.arguments?.operation_id);
-			expect(dispatchedBeforeProcessing).toEqual(["operation-1", "operation-1"]);
+			expect(dispatchedBeforeProcessing).toEqual([1, 1]);
 
 			processing.resolve(undefined);
 			await Promise.all([first, second]);
 			const dispatched = callServerTool.mock.calls
 				.filter(([request]) => request.name === "anywidget_comm")
 				.map(([request]) => request.arguments?.operation_id);
-			expect(dispatched).toEqual(["operation-1", "operation-1", "operation-2"]);
+			expect(dispatched).toEqual([1, 1, 2]);
 			await runtime.dispose();
 		} finally {
 			vi.useRealTimers();
@@ -191,18 +182,8 @@ describe("WidgetRuntime transport and polling", () => {
 				(_runtime, model) => new FakeBinding(model, []),
 			);
 
-			const failed = runtime.send(
-				"root-model",
-				{ method: "update", state: { value: 1 } },
-				[],
-				"operation-1",
-			);
-			const queued = runtime.send(
-				"root-model",
-				{ method: "update", state: { value: 2 } },
-				[],
-				"operation-2",
-			);
+			const failed = runtime.send("root-model", { method: "update", state: { value: 1 } }, []);
+			const queued = runtime.send("root-model", { method: "update", state: { value: 2 } }, []);
 			const outcomesPromise = Promise.allSettled([failed, queued]);
 			await vi.runAllTimersAsync();
 			const outcomes = await outcomesPromise;
@@ -213,15 +194,10 @@ describe("WidgetRuntime transport and polling", () => {
 				requests
 					.filter((request) => request.name === "anywidget_comm")
 					.map((request) => request.arguments?.operation_id),
-			).toEqual(["operation-1", "operation-1", "operation-1"]);
+			).toEqual([1, 1, 1]);
 			expect(requests.filter((request) => request.name === "anywidget_dispose")).toHaveLength(1);
 
-			await runtime.send(
-				"root-model",
-				{ method: "update", state: { value: 3 } },
-				[],
-				"operation-3",
-			);
+			await runtime.send("root-model", { method: "update", state: { value: 3 } }, []);
 			expect(callServerTool).toHaveBeenCalledTimes(4);
 		} finally {
 			consoleError.mockRestore();
@@ -265,7 +241,8 @@ describe("WidgetRuntime transport and polling", () => {
 					name: "anywidget_poll",
 					arguments: {
 						instance_id: "instance-1",
-						operation_id: expect.any(String),
+						operation_id: expect.any(Number),
+						acknowledged_operation_id: 0,
 						acknowledged_model_ids: [],
 					},
 				},
@@ -474,7 +451,6 @@ describe("WidgetRuntime transport and polling", () => {
 				"root-model",
 				{ method: "custom", content: { kind: "schedule-python-update" } },
 				[],
-				"comm-after-idle",
 			);
 			await vi.advanceTimersByTimeAsync(499);
 			expect(pollCount()).toBe(5);
@@ -520,12 +496,7 @@ describe("WidgetRuntime transport and polling", () => {
 			await runtime.mount(document.createElement("div"));
 			await vi.advanceTimersByTimeAsync(500);
 
-			const comm = runtime.send(
-				"root-model",
-				{ method: "custom", content: { kind: "ping" } },
-				[],
-				"comm-operation",
-			);
+			const comm = runtime.send("root-model", { method: "custom", content: { kind: "ping" } }, []);
 			await vi.advanceTimersByTimeAsync(100);
 			await comm;
 
@@ -540,11 +511,69 @@ describe("WidgetRuntime transport and polling", () => {
 			const pollOperationIds = requests
 				.filter((request) => request.name === "anywidget_poll")
 				.map((request) => request.arguments?.operation_id);
-			expect(pollOperationIds[0]).toEqual(expect.any(String));
+			expect(pollOperationIds[0]).toBe(1);
 			expect(pollOperationIds[1]).toBe(pollOperationIds[0]);
 			await runtime.dispose();
 		} finally {
 			vi.useRealTimers();
 		}
 	});
+});
+
+test("batches large removal acknowledgments through retried polls and preserves new removals", async () => {
+	vi.useFakeTimers();
+	const removed = Array.from({ length: 4000 }, (_, index) => `model-${index}`.padEnd(36, "a"));
+	const late = "late-model";
+	let attempts = 0;
+	const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
+		if (request.name === "anywidget_comm")
+			return { content: [], _meta: { anywidget: { removedModelIds: removed } } };
+		if (request.name === "anywidget_poll") {
+			attempts += 1;
+			if (attempts === 1) throw new Error("lost poll response");
+			if (attempts === 2) return { content: [], _meta: { anywidget: { removedModelIds: [late] } } };
+		}
+		return { content: [] };
+	});
+	const runtime = new WidgetRuntime(
+		{
+			instanceId: "instance-1",
+			rootModelId: "root",
+			models: Object.fromEntries(
+				["root", ...removed, late].map((id) => [id, { state: { _esm: "export default {}" } }]),
+			),
+		},
+		new ToolCallQueue({ callServerTool }),
+		{ getHostCapabilities: () => ({}), updateModelContext: vi.fn().mockResolvedValue({}) },
+		Promise.resolve(),
+		(_runtime, model) => new FakeBinding(model, []),
+	);
+	try {
+		await runtime.send("root", { method: "custom" }, []);
+		await runtime.mount(document.createElement("div"));
+		await vi.advanceTimersByTimeAsync(20000);
+		const polls = callServerTool.mock.calls
+			.map(([request]) => request)
+			.filter((request) => request.name === "anywidget_poll");
+		expect(polls[0]?.arguments).toEqual(polls[1]?.arguments);
+		const deliveries = new Map(
+			polls.map((request) => [
+				request.arguments?.operation_id,
+				request.arguments?.acknowledged_model_ids,
+			]),
+		);
+		const acknowledged = Array.from(deliveries.values()).flat();
+		expect(acknowledged).toEqual([...removed, late]);
+		expect(deliveries.size).toBeGreaterThan(1);
+		for (const request of polls) {
+			expect(
+				new TextEncoder().encode(JSON.stringify(request.arguments?.acknowledged_model_ids))
+					.byteLength,
+			).toBeLessThanOrEqual(32768);
+			expect(new TextEncoder().encode(JSON.stringify(request)).byteLength).toBeLessThan(131072);
+		}
+	} finally {
+		await runtime.dispose();
+		vi.useRealTimers();
+	}
 });

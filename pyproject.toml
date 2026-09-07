@@ -2,20 +2,21 @@
 members = ["packages/anywidget-mcp"]
 
 [tool.uv]
-exclude-newer = "3 days"
+exclude-newer = "2 days"
 
 [dependency-groups]
 dev = [
-	"marimo[recommended]>=0.23.14",
-	"pyrefly>=1.1.1",
-	"pytest>=9.1.1",
-	"ruff>=0.15.21",
-	"ty>=0.0.59",
-	"wigglystuff>=0.5.18",
+	"marimo[recommended]==0.24.0",
+	"pyrefly==1.2.0",
+	"pytest==9.1.1",
+	"ruff==0.16.6",
+	"twine==7.0.0",
+	"ty==0.0.78",
+	"wigglystuff==0.5.32",
 ]
 
 [tool.pyrefly]
-project-includes = ["packages/anywidget-mcp", "scripts"]
+project-includes = ["packages/anywidget-mcp", "scripts", "apps/e2e/server.py"]
 search-path = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
 
 [tool.pytest.ini_options]
@@ -23,3 +24,6 @@ testpaths = ["packages/anywidget-mcp/tests"]
 
 [tool.ruff]
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
