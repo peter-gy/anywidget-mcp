@@ -1,0 +1,23 @@
+apps/e2e/playwright.config.ts
+  s_714d3a9b445793::t_6c97fe67b604dd 35
+apps/e2e/playwright.atlas.config.ts
+  s_714d3a9b445793::t_6c97fe67b604dd 47
+.github/workflows/ci.yml
+  s_714d3a9b445793::t_6c97fe67b604dd 182,186,242,245,257
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "35f69a07ccceb8e623cd7546d9d1acaa452a3f60",
+  "prompts": {},
+  "sessions": {
+    "s_714d3a9b445793": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07d8e-4aa5-7061-91e4-a891c8865299",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
