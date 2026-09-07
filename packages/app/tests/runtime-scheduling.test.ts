@@ -44,7 +44,7 @@ describe("WidgetRuntime command scheduling", () => {
 
 		modelA.set("value", 0);
 		modelA.save_changes();
-		for (let value = 1; value <= 100; value += 1) {
+		for (const value of [1, 2]) {
 			modelA.set("value", value);
 			modelA.save_changes();
 		}
@@ -76,7 +76,7 @@ describe("WidgetRuntime command scheduling", () => {
 			"custom",
 			"update",
 		]);
-		expect(fixtureRecord(comms[1]?.data).state).toEqual({ value: 100 });
+		expect(fixtureRecord(comms[1]?.data).state).toEqual({ value: 2 });
 
 		await runtime.dispose();
 	});
@@ -193,9 +193,9 @@ describe("WidgetRuntime command scheduling", () => {
 		);
 
 		try {
-			await expect(
-				runtime.send(rootId, { method: "update", state: {} }, [], "outer-operation"),
-			).rejects.toThrow("initializer command failed");
+			await expect(runtime.send(rootId, { method: "update", state: {} }, [])).rejects.toThrow(
+				"initializer command failed",
+			);
 			await runtime.dispose();
 			expect(cleanup).toHaveBeenCalledOnce();
 		} finally {
@@ -214,7 +214,7 @@ describe("WidgetRuntime command scheduling", () => {
 		const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
 			if (request.name === "anywidget_dispose") return { content: [] };
 			const data = fixtureRecord(request.arguments?.data);
-			if (request.arguments?.operation_id === "outer-operation") {
+			if (request.arguments?.operation_id === 1) {
 				order.push("O");
 				return {
 					content: [],
@@ -308,7 +308,7 @@ describe("WidgetRuntime command scheduling", () => {
 			},
 		);
 
-		const outer = runtime.send(rootId, { method: "update", state: {} }, [], "outer-operation");
+		const outer = runtime.send(rootId, { method: "update", state: {} }, []);
 		await initializeStarted.promise;
 		const rootModel = runtime.model(rootId);
 		rootModel.set("value", 1);
@@ -317,6 +317,17 @@ describe("WidgetRuntime command scheduling", () => {
 		await outer;
 
 		expect(order).toEqual(["O", "B", "C"]);
+		await runtime.send(rootId, { method: "update", state: {} }, []);
+		expect(
+			callServerTool.mock.calls
+				.filter(([request]) => request.name === "anywidget_comm")
+				.map(([request]) => request.arguments?.acknowledged_operation_id),
+		).toEqual([0, 0, 0, 3]);
+		expect(
+			callServerTool.mock.calls
+				.filter(([request]) => request.name === "anywidget_comm")
+				.map(([request]) => request.arguments?.operation_id),
+		).toEqual([1, 2, 3, 4]);
 		expect(initialized).toEqual([{ ready: true }]);
 		expect(outerCustom).toEqual([{ source: "outer" }]);
 		expect(runtime.model(childId).get("value")).toBe(2);

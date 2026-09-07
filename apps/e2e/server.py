@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import threading
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 import anywidget
 import traitlets
+import uvicorn
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 from anywidget._descriptor import MimeBundleDescriptor
 from anywidget.experimental import command
 
@@ -323,7 +326,11 @@ class HotReloadProbe(anywidget.AnyWidget):
         esm.dataset.testid = "change-esm";
         esm.textContent = "Change ESM";
         esm.addEventListener("click", async () => {
-          await experimental.invoke("schedule_esm_reload", {}, { signal });
+          try {
+            await experimental.invoke("replace_esm", {}, { signal });
+          } catch (error) {
+            if (!signal.aborted) throw error;
+          }
         });
 
         el.append(label, css, esm);
@@ -342,7 +349,7 @@ class HotReloadProbe(anywidget.AnyWidget):
         return {"color": "blue"}, []
 
     @command
-    def schedule_esm_reload(
+    def replace_esm(
         self,
         _message: object,
         _buffers: list[bytes],
@@ -357,17 +364,174 @@ class HotReloadProbe(anywidget.AnyWidget):
           },
         };
         """
-        timer = threading.Timer(0.05, setattr, args=(self, "_esm", source))
-        timer.daemon = True
-        timer.start()
-        return {"scheduled": True}, []
+        self._esm = source
+        return {"reloaded": True}, []
 
 
-def create_server(*, host: str, port: int) -> AnyWidgetMCP:
+class ValidationProbe(anywidget.AnyWidget):
+    value = traitlets.Int(1).tag(sync=True)
+    _esm = """
+    export default {
+      render({ model, el, signal }) {
+        const output = document.createElement("output");
+        const draw = () => { output.value = String(model.get("value")); };
+        model.on("change:value", draw);
+        draw();
+        const button = document.createElement("button");
+        button.textContent = "Send invalid value";
+        button.addEventListener("click", () => {
+          model.set("value", "invalid");
+          model.save_changes();
+        }, { signal });
+        el.append(output, button);
+        return () => model.off("change:value", draw);
+      }
+    };
+    """
+
+
+class LargeStateProbe(anywidget.AnyWidget):
+    payload = traitlets.Bytes(bytes(8 * 1024 * 1024 - 1) + b"\xff").tag(sync=True)
+    payload_size = traitlets.Int(8 * 1024 * 1024).tag(sync=True)
+    payload_checksum = traitlets.Int(255).tag(sync=True)
+    rows = traitlets.List().tag(sync=True)
+    row_count = traitlets.Int(0).tag(sync=True)
+    last_label = traitlets.Unicode("").tag(sync=True)
+
+    _esm = """
+    export default {
+      render({ model, el, signal }) {
+        const binary = document.createElement("output");
+        binary.dataset.testid = "large-binary";
+        const rows = document.createElement("output");
+        rows.dataset.testid = "large-json";
+        const draw = () => {
+          const bytes = model.get("payload");
+          binary.value = `${bytes.byteLength} | ${bytes.getUint8(0)} | ${bytes.getUint8(bytes.byteLength - 1)}`;
+          const records = model.get("rows");
+          rows.value = `${records.length} | ${records.at(-1)?.label ?? ""}`;
+        };
+        model.on("change:payload change:rows", draw);
+        draw();
+        const upload = document.createElement("button");
+        upload.textContent = "Upload binary";
+        upload.addEventListener("click", () => {
+          const bytes = new Uint8Array(8 * 1024 * 1024).fill(7);
+          bytes[0] = 11;
+          bytes[bytes.length - 1] = 13;
+          model.set("payload", new DataView(bytes.buffer));
+          model.save_changes();
+        }, { signal });
+        const records = document.createElement("button");
+        records.textContent = "Upload records";
+        records.addEventListener("click", () => {
+          model.set("rows", Array.from({ length: 40000 }, (_, index) => ({
+            index, label: `row ${index} λ`,
+          })));
+          model.save_changes();
+        }, { signal });
+        el.append(binary, upload, rows, records);
+        return () => model.off("change:payload change:rows", draw);
+      }
+    };
+    """
+
+    @traitlets.observe("payload")
+    def _update_payload(self, change: traitlets.Bunch) -> None:
+        self.payload_size = len(change.new)
+        self.payload_checksum = sum(change.new)
+
+    @traitlets.observe("rows")
+    def _update_rows(self, change: traitlets.Bunch) -> None:
+        self.row_count = len(change.new)
+        self.last_label = change.new[-1]["label"] if change.new else ""
+
+
+STARTUP_MODULE = """
+export default {
+  async initialize({ model, experimental, signal }) {
+    if (model.get("stage") < 41) {
+      await experimental.invoke("advance", {}, { signal });
+    }
+  },
+  render({ model, el, experimental, signal }) {
+    const events = [];
+    const output = document.createElement("output");
+    output.dataset.testid = "startup-progress";
+    const draw = () => {
+      output.value = `Stage ${model.get("stage")}, ${events.length} events`;
+    };
+    const collect = (message) => { events.push(message.index); draw(); };
+    model.on("msg:custom", collect);
+    draw();
+    const live = document.createElement("button");
+    live.textContent = "Resume live events";
+    live.addEventListener("click", async () => {
+      model.off("msg:custom", collect);
+      await experimental.invoke("emit_events", { count: 250 }, { signal });
+      model.on("msg:custom", collect);
+      await experimental.invoke("emit_events", { count: 1 }, { signal });
+    }, { signal });
+    el.append(output, live);
+    return () => model.off("msg:custom", collect);
+  }
+};
+"""
+
+
+class StartupProbe(anywidget.AnyWidget):
+    stage = traitlets.Int(0).tag(sync=True)
+    _esm = STARTUP_MODULE + "\nexport const phase = 0;"
+
+    @command
+    def advance(self, _message: object, _buffers: list[bytes]):
+        if self.stage == 0:
+            for index in range(250):
+                self.send({"index": index})
+        self.stage += 1
+        self._esm = STARTUP_MODULE + f"\nexport const phase = {self.stage % 2};"
+        return {}, []
+
+    @command
+    def emit_events(self, message: dict[str, Any], _buffers: list[bytes]):
+        for index in range(message["count"]):
+            self.send({"index": index})
+        return {}, []
+
+
+class ProjectionProbe(anywidget.AnyWidget):
+    payload = traitlets.Dict().tag(sync=True)
+    _esm = """
+    export default {
+      render({ model, el }) {
+        const output = document.createElement("output");
+        const draw = () => {
+          const payload = model.get("payload");
+          let value = payload.nested;
+          let depth = 0;
+          while (Array.isArray(value)) { depth++; value = value[0]; }
+          output.value = `${payload.values.length} records; ${payload.text.length} characters; ${depth} levels; ${value}`;
+        };
+        model.on("change:payload", draw);
+        draw();
+        const update = document.createElement("button");
+        update.textContent = "Update deep value";
+        update.onclick = () => {
+          let nested = "updated";
+          for (let index = 0; index < 300; index++) nested = [nested];
+          model.set("payload", { ...model.get("payload"), nested });
+          model.save_changes();
+        };
+        el.append(output, update);
+        return () => model.off("change:payload", draw);
+      }
+    };
+    """
+
+
+def create_server() -> AnyWidgetMCP:
     server = AnyWidgetMCP(
         "AnyWidget browser bridge fixture",
-        host=host,
-        port=port,
         cors_origins=[
             "http://localhost:8080",
             "http://127.0.0.1:8080",
@@ -413,7 +577,38 @@ def create_server(*, host: str, port: int) -> AnyWidgetMCP:
             }
         )
 
+    server.widget(ValidationProbe, name="validation_probe")
+    server.widget(
+        LargeStateProbe,
+        name="large_state_probe",
+        state=("payload_size", "payload_checksum", "row_count", "last_label"),
+    )
+
+    @server.widget(name="widget_group", state="value")
+    def widget_group() -> list[ChildWidget]:
+        return [ChildWidget(value=2), ChildWidget(value=5)]
+
+    server.widget(StartupProbe, name="startup_probe", state="stage")
+
+    @server.widget(name="projection_probe", state="payload")
+    def projection_probe() -> ProjectionProbe:
+        nested: Any = "complete"
+        for _ in range(300):
+            nested = cast(Any, [nested])
+        return ProjectionProbe(
+            payload={
+                "values": list(range(200)),
+                "text": "λ" * 1500,
+                "nested": nested,
+                "k" * 500: "full key",
+            }
+        )
+
     return server
+
+
+async def health(_request: Request) -> PlainTextResponse:
+    return PlainTextResponse("ready")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -421,9 +616,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8766, type=int)
     arguments = parser.parse_args(argv)
-    server = create_server(host=arguments.host, port=arguments.port)
+    server = create_server()
     try:
-        server.run(transport="streamable-http")
+        app = server.streamable_http_app()
+        app.routes.append(Route("/health", health))
+        uvicorn.run(app, host=arguments.host, port=arguments.port)
     except KeyboardInterrupt:
         pass
 

@@ -59,8 +59,10 @@ annotations, and installed widget dependencies match the server process.
 
 ## Configure browser and app policy
 
-`AnyWidgetMCP` accepts FastMCP server options plus
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp) resource
+`AnyWidgetMCP` accepts Python SDK
+[`MCPServer`](https://github.com/modelcontextprotocol/python-sdk/tree/v2.1.1)
+options plus
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview) resource
 policy:
 
 ```python
@@ -69,8 +71,6 @@ from my_widgets import MediaWidget
 
 mcp = AnyWidgetMCP(
     "Media tools",
-    host="127.0.0.1",
-    port=8000,
     csp={
         "connectDomains": ["https://api.example.com"],
         "resourceDomains": ["https://esm.sh"],
@@ -80,7 +80,7 @@ mcp = AnyWidgetMCP(
     session_idle_timeout=900,
 )
 mcp.widget(MediaWidget)
-mcp.run(transport="streamable-http")
+mcp.run(transport="streamable-http", host="127.0.0.1", port=8000)
 ```
 
 Add network destinations used by widget code to the matching content security
@@ -101,11 +101,34 @@ capability.
 endpoint. `prefers_border` defaults to `True` and advertises the app's border
 preference to the host.
 
+## Attachment storage
+
+Large attachments use server temporary storage. Provision that storage alongside
+the memory needed by your widgets. Uploads belong to their operations, and
+acknowledged responses release their retained attachments. Session cleanup
+closes every remaining attachment file. See [Work with large widgets](./large-widgets)
+for a query-backed viewer and session ownership.
+
 ## Session lifetime
 
-`session_idle_timeout` is a positive number of seconds and defaults to `900`.
+`session_idle_timeout` defaults to `900` seconds and applies from launch onward.
+Pass a positive finite number to change it, or `None` to keep sessions until
+explicit disposal or server shutdown. With `None`, an abandoned app continues
+to own its widget graph and storage until the server closes it.
+
 App disposal, idle expiry, `aclose()`, and server shutdown close the complete
 widget graph. A context-managed factory exits after its widget graph closes.
 
 Inside an active server lifespan, `await mcp.aclose()` closes current sessions
 and rejects further widget calls until a new lifespan starts.
+
+## Move from the MCP 1.x integration
+
+`anywidget-mcp` uses MCP Python SDK 2.x. Import `MCPServer` and `Context` from
+`mcp.server.mcpserver` when attaching to an existing server or declaring a
+request context. Pass `host`, `port`, `stateless_http`, and `json_response` to
+`run()` or `streamable_http_app()` as appropriate for the transport.
+
+The `serve()` convenience function keeps its `host` and `port` arguments.
+Widget registration, factory class-name selection, and model-visible state
+keep the same contracts.

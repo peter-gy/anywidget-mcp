@@ -1,7 +1,9 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { requireProtocolVersion } from "./assets";
+import { AttachmentStore, deliveryPayload } from "./attachments";
+import { randomId } from "./runtime-lifecycle";
 import { isNumber, isRecord, isString, type RuntimeRecord } from "./runtime-value";
 import type { ToolArguments } from "./tool-calls";
+import { retryTransport } from "./transport";
 
 export type ToolLaunch =
 	| { kind: "bootstrap"; bootstrapId: string }
@@ -17,7 +19,6 @@ type CallTool = (name: string, args: ToolArguments) => Promise<CallToolResult>;
 
 const BOOTSTRAP_MARKER_PREFIX = "urn:anywidget-mcp:bootstrap:";
 const BOOTSTRAP_MARKER = /^urn:anywidget-mcp:bootstrap:([0-9a-f]{32})$/u;
-const BOOTSTRAP_TRANSPORT_RETRY_DELAYS_MS = [100, 200] as const;
 
 export function parseToolLaunch(result: CallToolResult): ToolLaunch {
 	let bootstrapId: string | undefined;
@@ -39,7 +40,7 @@ export function parseToolLaunch(result: CallToolResult): ToolLaunch {
 export async function loadWidgetRuntime(
 	launch: ToolLaunch,
 	call: CallTool,
-	operationId: string = randomOperationId(),
+	operationId: string = randomId(),
 	signal?: AbortSignal,
 ): Promise<MaterializedLaunch> {
 	if (launch.kind === "malformed") throw launch.error;
@@ -49,43 +50,25 @@ export async function loadWidgetRuntime(
 		bootstrap_id: launch.bootstrapId,
 		operation_id: operationId,
 	};
-	const result = await callBootstrapWithRetry(call, args, signal);
+	const result = await retryTransport(() => call("anywidget_bootstrap", args), signal);
 	if (result.isError) throw new Error(toolErrorText(result));
-	const payload = anywidgetMeta(result._meta);
-	if (!payload) throw new Error("Widget bootstrap returned no runtime data");
-	requireProtocolVersion(payload.protocolVersion);
-	const instanceId = nonemptyString(payload.instanceId);
+	const delivery = anywidgetMeta(result._meta);
+	if (!delivery) throw new Error("Widget bootstrap returned no runtime data");
+	const instanceId = nonemptyString(delivery.instanceId);
 	if (!instanceId) throw new Error("Widget bootstrap returned no instance ID");
+	const payload = await deliveryPayload(result, new AttachmentStore(instanceId), call, signal);
 	if (!nonemptyString(payload.rootModelId)) {
 		throw new Error("Widget bootstrap returned no root model ID");
 	}
 	if (
-		!isNumber(payload.sessionIdleTimeoutMs) ||
-		!Number.isFinite(payload.sessionIdleTimeoutMs) ||
-		payload.sessionIdleTimeoutMs <= 0
+		payload.sessionIdleTimeoutMs !== undefined &&
+		(!isNumber(payload.sessionIdleTimeoutMs) ||
+			!Number.isFinite(payload.sessionIdleTimeoutMs) ||
+			payload.sessionIdleTimeoutMs <= 0)
 	) {
 		throw new Error("Widget bootstrap returned no valid session idle timeout");
 	}
 	return { result, payload };
-}
-
-async function callBootstrapWithRetry(
-	call: CallTool,
-	args: ToolArguments,
-	signal?: AbortSignal,
-	attempt = 0,
-): Promise<CallToolResult> {
-	try {
-		signal?.throwIfAborted();
-		const result = call("anywidget_bootstrap", args);
-		return signal ? await abortable(result, signal) : await result;
-	} catch (error) {
-		signal?.throwIfAborted();
-		const retryDelay = BOOTSTRAP_TRANSPORT_RETRY_DELAYS_MS[attempt];
-		if (retryDelay === undefined) throw error;
-		await delay(retryDelay, signal);
-		return callBootstrapWithRetry(call, args, signal, attempt + 1);
-	}
 }
 
 export class ToolResultGate {
@@ -131,46 +114,4 @@ function nonemptyString<Value>(value: Value): string | undefined {
 function toolErrorText(result: CallToolResult): string {
 	const text = result.content.find((item) => item.type === "text");
 	return text?.text || "Widget bootstrap failed";
-}
-
-function randomOperationId(): string {
-	return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
-
-function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		let settled = false;
-		const settle = (callback: () => void): void => {
-			if (settled) return;
-			settled = true;
-			signal.removeEventListener("abort", abort);
-			callback();
-		};
-		const abort = (): void => settle(() => reject(signal.reason));
-
-		signal.addEventListener("abort", abort, { once: true });
-		void task.then(
-			(value) => settle(() => resolve(value)),
-			(cause: unknown) => settle(() => reject(cause)),
-		);
-		if (signal.aborted) abort();
-	});
-}
-
-function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
-	if (!signal) return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
-	signal.throwIfAborted();
-	return new Promise((resolve, reject) => {
-		const timeout = globalThis.setTimeout(() => {
-			signal.removeEventListener("abort", abort);
-			resolve();
-		}, milliseconds);
-		const abort = (): void => {
-			globalThis.clearTimeout(timeout);
-			signal.removeEventListener("abort", abort);
-			reject(signal.reason);
-		};
-		signal.addEventListener("abort", abort, { once: true });
-		if (signal.aborted) abort();
-	});
 }

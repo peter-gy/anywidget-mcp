@@ -14,7 +14,7 @@ from typing import Any, NoReturn, cast
 
 import anyio
 from anywidget import AnyWidget
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from ._bridge import WidgetSession
 from ._group import _WidgetGroup
@@ -45,10 +45,11 @@ def normalize_widget_output(value: object, *, origin: str) -> WidgetOutput:
         )
 
     if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
-        raise ToolError(
+        error = ToolError(
             f"Widget factory {origin} {type(value).__name__}, expected AnyWidget "
             "or a non-empty sequence of AnyWidget instances"
         )
+        _raise_after_output_cleanup(error, (value,))
 
     snapshot: list[object] = []
     try:
@@ -159,6 +160,7 @@ class FactoryOwner:
         self.session: WidgetSession | None = None
         self.error: BaseException | None = None
         self.cleanup_error: BaseException | None = None
+        self._hold_cancellation: BaseException | None = None
         self._acquisition_scope: anyio.CancelScope | None = None
         self._close_unowned_output = True
         self._close_reason = "session cleanup"
@@ -216,8 +218,12 @@ class FactoryOwner:
                     assert output is not None
                     await self._hold(output)
         except BaseException as error:
-            self.error = error
+            # Native task cancellation bypasses AnyIO shielding. The original
+            # hold cancellation reaches here after the managers have unwound.
+            if error is not self._hold_cancellation:
+                self.error = error
         finally:
+            self._hold_cancellation = None
             self.ready.set()
             self.closed.set()
 
@@ -252,6 +258,9 @@ class FactoryOwner:
         self.ready.set()
         try:
             await self.close_requested.wait()
+        except anyio.get_cancelled_exc_class() as error:
+            self._hold_cancellation = error
+            raise
         finally:
             self._cleanup_once()
             self.retry_cleanup()

@@ -31,7 +31,7 @@ async def test_state_modes_control_initial_model_visibility() -> None:
         selected_result = await client.call_tool("selected_counter", {})
         selected_runtime = await bootstrap_runtime(client, selected_result)
 
-    assert selected_result.structuredContent == {
+    assert selected_result.structured_content == {
         "tool": "selected_counter",
         "state": {"value": 4},
         "state_id": state_id(selected_result),
@@ -48,7 +48,7 @@ async def test_state_modes_control_initial_model_visibility() -> None:
         hidden_result = await client.call_tool("hidden_counter", {})
         hidden_runtime = await bootstrap_runtime(client, hidden_result)
 
-    assert hidden_result.structuredContent == {"tool": "hidden_counter"}
+    assert hidden_result.structured_content == {"tool": "hidden_counter"}
     assert isinstance(hidden_result.content[0], TextContent)
     assert hidden_result.content[0].text == "Opened Hidden Counter."
     assert "context" not in hidden_runtime
@@ -62,7 +62,7 @@ async def test_state_modes_control_initial_model_visibility() -> None:
     async with connected(custom) as client:
         custom_result = await client.call_tool("custom_counter", {})
 
-    assert custom_result.structuredContent == {
+    assert custom_result.structured_content == {
         "tool": "custom_counter",
         "state": {"answer": 12},
         "state_id": state_id(custom_result),
@@ -83,7 +83,7 @@ async def test_unknown_selected_state_trait_is_a_tool_error() -> None:
     async with connected(server) as client:
         result = await client.call_tool("counter", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert isinstance(result.content[0], TextContent)
     assert "Unknown state trait for CounterWidget: missing" in result.content[0].text
     assert created[0].comm is None
@@ -112,7 +112,7 @@ async def test_initial_projection_failure_closes_the_root_and_child(
     async with connected(server) as client:
         result = await client.call_tool("parent", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert isinstance(result.content[0], TextContent)
     assert "Widget state projection failed" in result.content[0].text
     if failure == "raising":
@@ -121,55 +121,6 @@ async def test_initial_projection_failure_closes_the_root_and_child(
         assert "must return a mapping" in result.content[0].text
     assert created[0][0].comm is None
     assert created[0][1].comm is None
-
-
-@pytest.mark.anyio
-async def test_comm_applies_browser_update_and_returns_observer_update() -> None:
-    server = AnyWidgetMCP("test")
-    created: list[CounterWidget] = []
-
-    @server.widget
-    def counter(value: int = 1) -> CounterWidget:
-        widget = CounterWidget(value=value)
-        created.append(widget)
-        return widget
-
-    async with connected(server) as client:
-        launch = await client.call_tool("counter", {})
-        payload = await bootstrap_runtime(client, launch)
-        result = await client.call_tool(
-            "anywidget_comm",
-            {
-                "instance_id": payload["instanceId"],
-                "model_id": payload["rootModelId"],
-                "operation_id": "apply-browser-update",
-                "data": {
-                    "method": "update",
-                    "state": {"value": 7},
-                    "buffer_paths": [],
-                },
-            },
-        )
-
-    assert created[0].value == 7
-    assert created[0].doubled == 14
-    assert result.structuredContent is None
-    assert result.meta is not None
-    messages = result.meta["anywidget"]["messages"]
-    assert any(
-        message["data"]["method"] == "echo_update"
-        and message["data"]["state"] == {"value": 7}
-        for message in messages
-    )
-    context = result.meta["anywidget"]["context"]
-    assert context["version"] == 2
-    assert context["state"]["value"] == 7
-    assert context["state"]["doubled"] == 14
-    assert any(
-        message["data"]["method"] == "update"
-        and message["data"]["state"] == {"doubled": 14}
-        for message in messages
-    )
 
 
 @pytest.mark.anyio
@@ -189,30 +140,40 @@ async def test_comm_operation_id_replays_the_complete_response() -> None:
         arguments = {
             "instance_id": payload["instanceId"],
             "model_id": payload["rootModelId"],
-            "operation_id": "operation-1",
+            "operation_id": 1,
             "data": {
                 "method": "update",
                 "state": {"value": 7},
                 "buffer_paths": [],
             },
         }
-        first = await client.call_tool("anywidget_comm", arguments)
-        replay = await client.call_tool("anywidget_comm", arguments)
+        first = await client.comm(arguments)
+        replay = await client.comm(arguments)
         idle = await client.call_tool(
             "anywidget_poll",
             {
                 "instance_id": payload["instanceId"],
-                "operation_id": "poll-after-comm-replay",
+                "operation_id": 2,
             },
         )
 
     assert created[0].value == 7
     assert created[0].doubled == 14
-    assert replay.meta == first.meta
+    assert first.structured_content is None
+    assert first.meta is not None
+    assert [
+        (message["data"]["method"], message["data"]["state"])
+        for message in first.meta["anywidget"]["messages"]
+    ] == [("echo_update", {"value": 7}), ("update", {"doubled": 14})]
+    assert first.meta["anywidget"]["context"] == {
+        "version": 2,
+        "tool": "counter",
+        "state": {"value": 7, "doubled": 14},
+    }
+    assert replay == first
     assert idle.meta is not None
     assert idle.meta["anywidget"] == {
-        "protocolVersion": 1,
-        "assetManifest": {},
+        "protocolVersion": 3,
         "messages": [],
     }
 
@@ -234,25 +195,23 @@ async def test_comm_operation_id_rejects_another_request() -> None:
         common = {
             "instance_id": payload["instanceId"],
             "model_id": payload["rootModelId"],
-            "operation_id": "operation-1",
+            "operation_id": 1,
         }
-        first = await client.call_tool(
-            "anywidget_comm",
+        first = await client.comm(
             {
                 **common,
                 "data": {"method": "update", "state": {"value": 7}},
             },
         )
-        reused = await client.call_tool(
-            "anywidget_comm",
+        reused = await client.comm(
             {
                 **common,
                 "data": {"method": "update", "state": {"value": 8}},
             },
         )
 
-    assert first.isError is False
-    assert reused.isError is True
+    assert first.is_error is False
+    assert reused.is_error is True
     assert created[0].value == 7
     assert isinstance(reused.content[0], TextContent)
     assert "was reused for another comm request" in reused.content[0].text
@@ -284,13 +243,12 @@ async def test_comm_operation_id_replays_handler_failure() -> None:
         arguments = {
             "instance_id": payload["instanceId"],
             "model_id": payload["rootModelId"],
-            "operation_id": "failing-update",
+            "operation_id": 1,
             "data": {"method": "update", "state": {"value": 7}},
         }
-        first = await client.call_tool("anywidget_comm", arguments)
-        replay = await client.call_tool("anywidget_comm", arguments)
-        mismatched = await client.call_tool(
-            "anywidget_comm",
+        first = await client.comm(arguments)
+        replay = await client.comm(arguments)
+        mismatched = await client.comm(
             {
                 **arguments,
                 "data": {"method": "update", "state": {"value": 8}},
@@ -298,10 +256,10 @@ async def test_comm_operation_id_replays_handler_failure() -> None:
         )
 
     assert attempts == 1
-    assert first.isError is True
-    assert replay.isError is True
+    assert first.is_error is True
+    assert replay.is_error is True
     assert first.content == replay.content
-    assert mismatched.isError is True
+    assert mismatched.is_error is True
     assert isinstance(mismatched.content[0], TextContent)
     assert "was reused for another comm request" in mismatched.content[0].text
 
@@ -314,12 +272,11 @@ async def test_comm_projects_python_validated_state() -> None:
     async with connected(server) as client:
         launch = await client.call_tool("validated_counter_widget", {})
         payload = await bootstrap_runtime(client, launch)
-        result = await client.call_tool(
-            "anywidget_comm",
+        result = await client.comm(
             {
                 "instance_id": payload["instanceId"],
                 "model_id": payload["rootModelId"],
-                "operation_id": "validated-state-update",
+                "operation_id": 1,
                 "data": {
                     "method": "update",
                     "state": {"value": 99},
@@ -337,6 +294,42 @@ async def test_comm_projects_python_validated_state() -> None:
 
 
 @pytest.mark.anyio
+async def test_comm_replays_trait_validation_rejection() -> None:
+    server = AnyWidgetMCP("test")
+    created: list[CounterWidget] = []
+
+    @server.widget
+    def counter() -> CounterWidget:
+        widget = CounterWidget(value=2)
+        created.append(widget)
+        return widget
+
+    async with connected(server) as client:
+        launch = await client.call_tool("counter", {})
+        runtime = await bootstrap_runtime(client, launch)
+        arguments = {
+            "instance_id": runtime["instanceId"],
+            "model_id": runtime["rootModelId"],
+            "operation_id": 1,
+            "data": {"method": "update", "state": {"value": "invalid"}},
+        }
+        rejected = await client.comm(arguments)
+        replay = await client.comm(arguments)
+        state = await client.call_tool(
+            "anywidget_state", {"state_id": state_id(launch)}
+        )
+
+        assert rejected.is_error is True
+        assert replay.is_error is True
+        assert rejected.content == replay.content
+        assert isinstance(rejected.content[0], TextContent)
+        assert "expected an int" in rejected.content[0].text
+        assert created[0].value == 2
+        assert state.structured_content is not None
+        assert state.structured_content["state"] == {"value": 2, "doubled": 4}
+
+
+@pytest.mark.anyio
 async def test_poll_operation_id_replays_the_complete_response() -> None:
     server = AnyWidgetMCP("test")
     created: list[CounterWidget] = []
@@ -351,10 +344,20 @@ async def test_poll_operation_id_replays_the_complete_response() -> None:
         launch = await client.call_tool("counter", {})
         runtime = await bootstrap_runtime(client, launch)
         instance_id = runtime["instanceId"]
+        initial_idle = await client.call_tool(
+            "anywidget_poll",
+            {"instance_id": instance_id, "operation_id": 1},
+        )
+        assert initial_idle.meta is not None
+        assert initial_idle.meta["anywidget"] == {
+            "protocolVersion": 3,
+            "messages": [],
+        }
+
         created[0].doubled = 22
         arguments = {
             "instance_id": instance_id,
-            "operation_id": "poll-operation-1",
+            "operation_id": 2,
         }
         first = await client.call_tool("anywidget_poll", arguments)
 
@@ -371,17 +374,22 @@ async def test_poll_operation_id_replays_the_complete_response() -> None:
             "anywidget_poll",
             {
                 "instance_id": instance_id,
-                "operation_id": "poll-operation-2",
+                "operation_id": 3,
             },
         )
+        idle = await client.call_tool(
+            "anywidget_poll",
+            {"instance_id": instance_id, "operation_id": 4},
+        )
 
-    assert replay.meta == first.meta
-    assert mismatched.isError is True
+    assert replay == first
+    assert mismatched.is_error is True
     assert isinstance(mismatched.content[0], TextContent)
     assert "was reused for another poll request" in mismatched.content[0].text
     assert first.meta is not None
     assert any(
-        message["data"]["state"] == {"doubled": 22}
+        message["data"]["method"] == "update"
+        and message["data"]["state"] == {"doubled": 22}
         for message in first.meta["anywidget"]["messages"]
     )
     assert next_poll.meta is not None
@@ -390,11 +398,24 @@ async def test_poll_operation_id_replays_the_complete_response() -> None:
         for message in next_poll.meta["anywidget"]["messages"]
     )
 
+    assert first.meta["anywidget"]["context"] == {
+        "version": 2,
+        "tool": "counter",
+        "state": {"doubled": 22, "value": 0},
+    }
+    assert next_poll.meta["anywidget"]["context"] == {
+        "version": 3,
+        "tool": "counter",
+        "state": {"doubled": 44, "value": 0},
+    }
+    assert idle.meta is not None
+    assert idle.meta["anywidget"] == {"protocolVersion": 3, "messages": []}
+
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("operation_id", ["", "x" * 129])
+@pytest.mark.parametrize("operation_id", [-1, 0, True, 1.5, 2**53, "1"])
 async def test_poll_rejects_invalid_operation_id_without_draining(
-    operation_id: str,
+    operation_id: Any,
 ) -> None:
     server = AnyWidgetMCP("test")
     created: list[CounterWidget] = []
@@ -416,57 +437,17 @@ async def test_poll_rejects_invalid_operation_id_without_draining(
         )
         valid = await client.call_tool(
             "anywidget_poll",
-            {"instance_id": instance_id, "operation_id": "valid-poll"},
+            {"instance_id": instance_id, "operation_id": 1},
         )
 
-    assert invalid.isError is True
+    assert invalid.is_error is True
     assert isinstance(invalid.content[0], TextContent)
-    assert (
-        "operation_id must contain between 1 and 128 characters"
-        in invalid.content[0].text
-    )
+    assert "operation_id" in invalid.content[0].text
     assert valid.meta is not None
     assert any(
         message["data"]["state"] == {"doubled": 22}
         for message in valid.meta["anywidget"]["messages"]
     )
-
-
-@pytest.mark.anyio
-async def test_poll_returns_python_originated_update() -> None:
-    server = AnyWidgetMCP("test")
-    created: list[CounterWidget] = []
-
-    @server.widget
-    def counter() -> CounterWidget:
-        widget = CounterWidget()
-        created.append(widget)
-        return widget
-
-    async with connected(server) as client:
-        launch = await client.call_tool("counter", {})
-        runtime = await bootstrap_runtime(client, launch)
-        created[0].doubled = 22
-        result = await client.call_tool(
-            "anywidget_poll",
-            {
-                "instance_id": runtime["instanceId"],
-                "operation_id": "python-originated-update",
-            },
-        )
-
-    assert result.meta is not None
-    messages = result.meta["anywidget"]["messages"]
-    assert any(
-        message["data"]["method"] == "update"
-        and message["data"]["state"] == {"doubled": 22}
-        for message in messages
-    )
-    assert result.meta["anywidget"]["context"] == {
-        "version": 2,
-        "tool": "counter",
-        "state": {"doubled": 22, "value": 0},
-    }
 
 
 @pytest.mark.anyio
@@ -494,46 +475,44 @@ async def test_poll_returns_dynamic_widget_models_in_app_metadata() -> None:
             "anywidget_poll",
             {
                 "instance_id": instance_id,
-                "operation_id": "dynamic-widget-models",
+                "operation_id": 1,
             },
         )
-        before_ack = await client.call_tool(
-            "anywidget_comm",
+        before_ack = await client.comm(
             {
                 "instance_id": instance_id,
                 "model_id": first_model_id,
-                "operation_id": "detached-before-ack",
+                "operation_id": 2,
                 "data": {"method": "request_state"},
             },
         )
-        assert before_ack.isError is False
+        assert before_ack.is_error is False
         assert first.comm is not None
         acknowledged = await client.call_tool(
             "anywidget_poll",
             {
                 "instance_id": instance_id,
-                "operation_id": "acknowledge-dynamic-removal",
+                "operation_id": 3,
                 "acknowledged_model_ids": [first_model_id],
             },
         )
-        assert acknowledged.isError is False
+        assert acknowledged.is_error is False
         assert first.comm is None
-        after_ack = await client.call_tool(
-            "anywidget_comm",
+        after_ack = await client.comm(
             {
                 "instance_id": instance_id,
                 "model_id": first_model_id,
-                "operation_id": "detached-after-ack",
+                "operation_id": 4,
                 "data": {"method": "request_state"},
             },
         )
 
-    assert result.structuredContent is None
+    assert result.structured_content is None
     assert result.meta is not None
     payload = result.meta["anywidget"]
     assert payload["models"][second_model_id]["state"]["value"] == 2
     assert payload["removedModelIds"] == [first_model_id]
-    assert after_ack.isError is True
+    assert after_ack.is_error is True
     assert isinstance(after_ack.content[0], TextContent)
     assert "Unknown widget model" in after_ack.content[0].text
 
@@ -588,7 +567,7 @@ async def test_launch_rejects_projection_that_replaces_child() -> None:
     async with connected(server) as client:
         launch = await client.call_tool("parent", {})
 
-    assert launch.isError is True
+    assert launch.is_error is True
     assert isinstance(launch.content[0], TextContent)
     assert "State projection callables must not mutate" in launch.content[0].text
     root, first, second = created[0]
@@ -652,30 +631,10 @@ async def test_launch_snapshot_failure_closes_unregistered_session(
     async with connected(server) as client:
         result = await client.call_tool("counter", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert isinstance(result.content[0], TextContent)
     assert "Widget launch snapshot failed" in result.content[0].text
     assert created[0].comm is None
-
-
-@pytest.mark.anyio
-async def test_idle_poll_does_not_repeat_model_context() -> None:
-    server = AnyWidgetMCP("test")
-    server.widget(CounterWidget)
-
-    async with connected(server) as client:
-        launch = await client.call_tool("counter_widget", {})
-        runtime = await bootstrap_runtime(client, launch)
-        result = await client.call_tool(
-            "anywidget_poll",
-            {
-                "instance_id": runtime["instanceId"],
-                "operation_id": "idle-model-context",
-            },
-        )
-
-    assert result.meta is not None
-    assert "context" not in result.meta["anywidget"]
 
 
 @pytest.mark.anyio
@@ -686,12 +645,11 @@ async def test_state_none_suppresses_live_context() -> None:
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {})
         payload = await bootstrap_runtime(client, launch)
-        result = await client.call_tool(
-            "anywidget_comm",
+        result = await client.comm(
             {
                 "instance_id": payload["instanceId"],
                 "model_id": payload["rootModelId"],
-                "operation_id": "state-none-update",
+                "operation_id": 1,
                 "data": {
                     "method": "update",
                     "state": {"value": 8},
@@ -700,6 +658,6 @@ async def test_state_none_suppresses_live_context() -> None:
             },
         )
 
-    assert result.isError is False
+    assert result.is_error is False
     assert result.meta is not None
     assert "context" not in result.meta["anywidget"]

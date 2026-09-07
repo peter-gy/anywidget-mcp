@@ -1,5 +1,6 @@
 import { scopedModel, type AnyModel, type BridgeModel } from "./model";
 import { loadModule } from "./module-loader";
+import { abortable } from "./runtime-lifecycle";
 import {
 	isCallable,
 	isPlainObject,
@@ -77,7 +78,7 @@ interface WidgetBindingOptions {
 	reportError(cause: unknown): void;
 	loadWidget?: (source: string, signal?: AbortSignal) => Promise<WidgetDefinition>;
 	replaceCss?: (css: string | undefined, modelId: string, signal?: AbortSignal) => Promise<void>;
-	timeoutMilliseconds?: number;
+	cleanupTimeoutMilliseconds?: number;
 }
 
 interface ActiveView {
@@ -99,8 +100,6 @@ interface BindingGeneration {
 	cleanupTasks: Set<Promise<void>>;
 }
 
-const INITIAL_SOURCE_REVISION_MILLISECONDS = 100;
-const MAX_INITIAL_SOURCE_REVISIONS = 16;
 // The latest binding to render an element owns its contents. Older cleanup
 // must not clear output installed by a replacement binding.
 const viewOwners = new WeakMap<HTMLElement, object>();
@@ -125,7 +124,7 @@ export class WidgetBinding implements RuntimeBinding {
 		modelId: string,
 		signal?: AbortSignal,
 	) => Promise<void>;
-	private readonly timeoutMilliseconds: number;
+	private readonly cleanupTimeoutMilliseconds: number;
 	private readonly ready: Promise<void>;
 	private resolveReady!: () => void;
 	private rejectReady!: (cause: unknown) => void;
@@ -149,7 +148,7 @@ export class WidgetBinding implements RuntimeBinding {
 		this.reportError = options.reportError;
 		this.loadWidget = options.loadWidget ?? loadWidget;
 		this.replaceCss = options.replaceCss ?? replaceCss;
-		this.timeoutMilliseconds = options.timeoutMilliseconds ?? 3000;
+		this.cleanupTimeoutMilliseconds = options.cleanupTimeoutMilliseconds ?? 3000;
 		this.ready = new Promise<void>((resolve, reject) => {
 			this.resolveReady = resolve;
 			this.rejectReady = reject;
@@ -160,12 +159,8 @@ export class WidgetBinding implements RuntimeBinding {
 	async initialize(call?: QueuedToolCall): Promise<void> {
 		const initialization = this.initializeSources(call);
 		try {
-			await waitForTask(
-				initialization,
-				undefined,
-				this.timeoutMilliseconds,
-				"anywidget source initialization",
-			);
+			await initialization;
+			this.model.finishInitialization();
 			this.listen();
 			this.resolveReady();
 		} catch (error) {
@@ -185,7 +180,7 @@ export class WidgetBinding implements RuntimeBinding {
 
 		// Initializer commands can apply source updates before live listeners are
 		// installed. Reconcile those authoritative values before exposing readiness.
-		await this.reconcileInitialSources(css, esm, this.initialSourceRevisionLimit(), call);
+		await this.reconcileInitialSources(css, esm, call);
 	}
 
 	async render(element: HTMLElement, parentSignal: AbortSignal): Promise<void> {
@@ -256,7 +251,7 @@ export class WidgetBinding implements RuntimeBinding {
 					this.replaceCss(undefined, this.model.modelId, controller.signal),
 				),
 				controller.signal,
-				this.timeoutMilliseconds,
+				this.cleanupTimeoutMilliseconds,
 				"anywidget CSS cleanup",
 			);
 		} catch (error) {
@@ -307,31 +302,26 @@ export class WidgetBinding implements RuntimeBinding {
 	private async reconcileInitialSources(
 		css: string | undefined,
 		esm: string,
-		remainingRevisions: number,
 		call?: QueuedToolCall,
 	): Promise<void> {
-		if (this.disposed) return;
-		const nextCss = this.currentCss();
-		const nextEsm = this.currentEsm();
-		if (nextCss === css && nextEsm === esm) return;
-		if (remainingRevisions === 0) {
-			throw new Error(
-				`Widget sources did not converge during initialization for model ${this.model.modelId}`,
+		// Each generation reads the state committed by the previous initializer.
+		/* eslint-disable no-await-in-loop */
+		while (!this.disposed) {
+			const nextCss = this.currentCss();
+			const nextEsm = this.currentEsm();
+			if (nextCss === css && nextEsm === esm) return;
+			// Yield between generations so source-changing initializers leave runtime
+			// disposal and browser input able to cancel initialization.
+			await abortable(
+				new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0)),
+				this.controller.signal,
 			);
+			if (nextCss !== css) await this.startCssUpdate(nextCss, false);
+			if (nextEsm !== esm) await this.startEsmUpdate(nextEsm, false, call);
+			css = nextCss;
+			esm = nextEsm;
 		}
-		if (nextCss !== css) await this.startCssUpdate(nextCss, false);
-		if (nextEsm !== esm) await this.startEsmUpdate(nextEsm, false, call);
-		await this.reconcileInitialSources(nextCss, nextEsm, remainingRevisions - 1, call);
-	}
-
-	private initialSourceRevisionLimit(): number {
-		return Math.max(
-			1,
-			Math.min(
-				MAX_INITIAL_SOURCE_REVISIONS,
-				Math.ceil(this.timeoutMilliseconds / INITIAL_SOURCE_REVISION_MILLISECONDS),
-			),
-		);
+		/* eslint-enable no-await-in-loop */
 	}
 
 	private startCssUpdate(css: string | undefined, report: boolean): Promise<void> {
@@ -342,11 +332,9 @@ export class WidgetBinding implements RuntimeBinding {
 		const signal = AbortSignal.any([this.controller.signal, controller.signal]);
 		const raw = (async () => {
 			try {
-				await waitForTask(
+				await abortable(
 					Promise.resolve().then(() => this.replaceCss(css, this.model.modelId, signal)),
 					signal,
-					this.timeoutMilliseconds,
-					"anywidget CSS load",
 				);
 			} catch (error) {
 				controller.abort(error);
@@ -431,11 +419,9 @@ export class WidgetBinding implements RuntimeBinding {
 	): Promise<BindingGeneration> {
 		const signal = AbortSignal.any([this.controller.signal, controller.signal]);
 		try {
-			const definition = await waitForTask(
+			const definition = await abortable(
 				Promise.resolve().then(() => this.loadWidget(source, signal)),
 				signal,
-				this.timeoutMilliseconds,
-				"anywidget ESM load",
 			);
 			signal.throwIfAborted();
 			// Initializer commands reuse the active tool call. Waiting for the global
@@ -455,12 +441,7 @@ export class WidgetBinding implements RuntimeBinding {
 						experimental: this.runtime.experimental(this.model, signal, protocolScope),
 					}),
 				);
-				result = await waitForTask(
-					initialize,
-					signal,
-					this.timeoutMilliseconds,
-					"anywidget initialize",
-				);
+				result = await abortable(initialize, signal);
 			} catch (error) {
 				controller.abort(error);
 				if (initialize) this.trackLateInitialize(initialize);
@@ -470,12 +451,7 @@ export class WidgetBinding implements RuntimeBinding {
 			if (protocolScope) {
 				protocolScope.active = false;
 				try {
-					await waitForTask(
-						protocolScope.tail,
-						signal,
-						this.timeoutMilliseconds,
-						"anywidget initialize protocol",
-					);
+					await abortable(protocolScope.tail, signal);
 				} catch (error) {
 					controller.abort(error);
 					await protocolScope.tail;
@@ -491,13 +467,13 @@ export class WidgetBinding implements RuntimeBinding {
 			}
 			if (initializeFailed) {
 				if (isCleanup(result)) {
-					await runCleanup(result, "anywidget model", this.timeoutMilliseconds);
+					await runCleanup(result, "anywidget model", this.cleanupTimeoutMilliseconds);
 				}
 				throw initializeError;
 			}
 			if (signal.aborted) {
 				if (isCleanup(result)) {
-					await runCleanup(result, "anywidget model", this.timeoutMilliseconds);
+					await runCleanup(result, "anywidget model", this.cleanupTimeoutMilliseconds);
 				}
 				signal.throwIfAborted();
 			}
@@ -521,7 +497,7 @@ export class WidgetBinding implements RuntimeBinding {
 			initialize.then(
 				(lateResult) => {
 					if (isCleanup(lateResult)) {
-						return runCleanup(lateResult, "late anywidget model", this.timeoutMilliseconds);
+						return runCleanup(lateResult, "late anywidget model", this.cleanupTimeoutMilliseconds);
 					}
 				},
 				() => undefined,
@@ -576,13 +552,17 @@ export class WidgetBinding implements RuntimeBinding {
 		);
 		let cleanup: LifecycleValue;
 		try {
-			cleanup = await waitForTask(render, signal, undefined, "anywidget render");
+			cleanup = await abortable(render, signal);
 		} catch (error) {
 			this.trackTeardown(
 				render.then(
 					(lateCleanup) => {
 						if (isCleanup(lateCleanup)) {
-							return runCleanup(lateCleanup, "late anywidget view", this.timeoutMilliseconds);
+							return runCleanup(
+								lateCleanup,
+								"late anywidget view",
+								this.cleanupTimeoutMilliseconds,
+							);
 						}
 					},
 					() => undefined,
@@ -597,7 +577,7 @@ export class WidgetBinding implements RuntimeBinding {
 			if (cleaned) return;
 			cleaned = true;
 			signal.removeEventListener("abort", handleAbort);
-			const task = runCleanup(cleanup, "anywidget view", this.timeoutMilliseconds);
+			const task = runCleanup(cleanup, "anywidget view", this.cleanupTimeoutMilliseconds);
 			generation.cleanupTasks.add(task);
 			try {
 				await task;
@@ -614,14 +594,18 @@ export class WidgetBinding implements RuntimeBinding {
 		generation.controller.abort();
 		await settleWithin(
 			Promise.allSettled(Array.from(generation.renderTasks)),
-			this.timeoutMilliseconds,
+			this.cleanupTimeoutMilliseconds,
 		);
 		await settleWithin(
 			Promise.allSettled(Array.from(generation.cleanupTasks)),
-			this.timeoutMilliseconds,
+			this.cleanupTimeoutMilliseconds,
 		);
 		if (generation.initializeCleanup) {
-			await runCleanup(generation.initializeCleanup, "anywidget model", this.timeoutMilliseconds);
+			await runCleanup(
+				generation.initializeCleanup,
+				"anywidget model",
+				this.cleanupTimeoutMilliseconds,
+			);
 		}
 	}
 
@@ -635,7 +619,9 @@ export class WidgetBinding implements RuntimeBinding {
 		void tracked.then(() => this.teardownTasks.delete(tracked));
 	}
 
-	private joinTeardownTasks(deadline = Date.now() + this.timeoutMilliseconds): Promise<void> {
+	private joinTeardownTasks(
+		deadline = Date.now() + this.cleanupTimeoutMilliseconds,
+	): Promise<void> {
 		if (this.teardownTasks.size === 0) return Promise.resolve();
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) return Promise.resolve();

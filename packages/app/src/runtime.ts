@@ -1,6 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import { AssetStore, requireProtocolVersion } from "./assets";
+import { AttachmentStore, deliveryPayload, requireProtocolVersion } from "./attachments";
 import {
 	WidgetBinding,
 	type Experimental,
@@ -29,8 +29,6 @@ import {
 } from "./runtime-lifecycle";
 import {
 	decodeBuffers,
-	hydrateRawMessages,
-	hydrateRawModels,
 	hydrateRuntimePayload,
 	normalizeContext,
 	normalizeMessages,
@@ -46,7 +44,6 @@ import {
 	resultMessages,
 	resultModels,
 	resultRemovedModelIds,
-	sourceRefValues,
 } from "./runtime-payload";
 import type { RuntimeValue, WidgetValue } from "./runtime-value";
 import type { QueuedToolCall, ToolArguments, ToolCalls } from "./tool-calls";
@@ -62,7 +59,6 @@ interface UpdateProtocolOperation {
 	sequence: number;
 	model: BridgeModel;
 	state: Map<string, WidgetValue>;
-	operationId: string;
 }
 
 interface CustomProtocolOperation {
@@ -70,8 +66,7 @@ interface CustomProtocolOperation {
 	sequence: number;
 	model: BridgeModel;
 	data: CommData;
-	buffers: string[];
-	operationId: string;
+	buffers: ArrayBuffer[];
 	signal: AbortSignal;
 	dispatched: boolean;
 	completed: boolean;
@@ -83,7 +78,6 @@ interface CustomProtocolOperation {
 interface PollProtocolOperation {
 	kind: "poll";
 	sequence: number;
-	operationId: string;
 	resolve(messageCount: number): void;
 	reject(cause: unknown): void;
 }
@@ -103,14 +97,18 @@ export class WidgetRuntime {
 	private readonly protocolOperations: ProtocolOperation[] = [];
 	private readonly pendingRemovalAcknowledgments = new Set<string>();
 	private protocolSequence = 0;
+	private operationSequence = 0;
+	private acknowledgedOperationId = 0;
+	private pendingAppliedOperationId = 0;
 	private protocolTask?: Promise<void>;
 	private activeProtocolCall?: QueuedToolCall;
+	private pendingContext?: ModelContextSnapshot;
 	private disposeTask?: Promise<void>;
 	private disposed = false;
 	private pollTask?: Promise<void>;
 	private pollActivityVersion = 0;
 	private pollWake?: () => void;
-	private readonly assetStore?: AssetStore;
+	private readonly attachments?: AttachmentStore;
 	private readonly pollDelayLimitMs: number;
 
 	static async create(
@@ -126,21 +124,19 @@ export class WidgetRuntime {
 		try {
 			requireProtocolVersion(payload.protocolVersion);
 			signal?.throwIfAborted();
-			const assetStore = new AssetStore(instanceId);
-			const assets = await assetStore.resolve(
-				payload.assetManifest,
-				sourceRefValues(payload.models, payload.messages),
-				(name, args) => calls.call(name, args, signal),
+			const attachments = new AttachmentStore(instanceId);
+			const hydrated = await calls.transaction(
+				(call) => hydrateRuntimePayload(payload, attachments, call, signal),
 				signal,
 			);
 			signal?.throwIfAborted();
 			return new WidgetRuntime(
-				hydrateRuntimePayload(payload, assets),
+				hydrated,
 				calls,
 				app,
 				connected,
 				createBinding,
-				assetStore,
+				attachments,
 				reportError,
 			);
 		} catch (error) {
@@ -160,7 +156,7 @@ export class WidgetRuntime {
 		app: ContextApp,
 		connected: Promise<void>,
 		createBinding?: BindingFactory,
-		assetStore?: AssetStore,
+		attachments?: AttachmentStore,
 		private readonly reportError: ErrorReporter = (error) => console.error(error),
 	) {
 		this.instanceId = requiredString(payload.instanceId, "instance ID");
@@ -172,7 +168,7 @@ export class WidgetRuntime {
 		this.createBinding =
 			createBinding ??
 			((runtime, model) => new WidgetBinding(runtime, model, { reportError: this.reportError }));
-		this.assetStore = assetStore;
+		this.attachments = attachments;
 
 		for (const modelPayload of normalizeModels(payload.models)) {
 			this.registerModel(modelPayload);
@@ -209,19 +205,13 @@ export class WidgetRuntime {
 		if (this.initialContext) this.contextSync.enqueue(this.initialContext);
 	}
 
-	async send(
-		modelId: string,
-		data: CommData,
-		buffers: string[],
-		operationId: string,
-	): Promise<void> {
+	async send(modelId: string, data: CommData, buffers: ArrayBuffer[]): Promise<void> {
 		if (this.disposed) return;
 		await this.callAndProcess("anywidget_comm", {
 			instance_id: this.instanceId,
 			model_id: modelId,
 			data,
 			buffers,
-			operation_id: operationId,
 		});
 		this.noteProtocolActivity();
 	}
@@ -238,12 +228,11 @@ export class WidgetRuntime {
 			sequence: ++this.protocolSequence,
 			model,
 			state,
-			operationId: randomId(),
 		});
 		this.startProtocolOperations();
 	}
 
-	enqueueCustom(model: BridgeModel, data: CommData, buffers: string[]): void {
+	enqueueCustom(model: BridgeModel, data: CommData, buffers: ArrayBuffer[]): void {
 		if (this.disposed || this.models.get(model.modelId) !== model) return;
 		this.appendCustom(model, data, buffers);
 	}
@@ -251,7 +240,9 @@ export class WidgetRuntime {
 	dispose(cause?: unknown): Promise<void> {
 		if (this.disposeTask) return this.disposeTask;
 		this.disposed = true;
+		this.pendingContext = undefined;
 		this.controller.abort(cause);
+		this.attachments?.clear();
 		this.cancelQueuedProtocolOperations(
 			this.controller.signal.reason ?? new DOMException("Widget runtime is closed", "AbortError"),
 		);
@@ -356,7 +347,7 @@ export class WidgetRuntime {
 					const abort = () => {
 						const error =
 							signal.reason ?? new DOMException("Widget command is closed", "AbortError");
-						// Remove commands that have not reached the server. Once dispatched, keep the
+						// Discard commands until their comm is dispatched. After dispatch, keep the
 						// transaction alive to apply authoritative state, then fail if it stalls.
 						if (operation) {
 							const index = this.protocolOperations.indexOf(operation);
@@ -491,7 +482,6 @@ export class WidgetRuntime {
 			this.protocolOperations.push({
 				kind: "poll",
 				sequence: ++this.protocolSequence,
-				operationId: randomId(),
 				resolve,
 				reject,
 			});
@@ -558,26 +548,41 @@ export class WidgetRuntime {
 				: undefined;
 		const process = (name: string, args: ToolArguments): Promise<number> =>
 			call
-				? this.processProtocolCall(call, name, args, signal, beforeDispatch, suppressFailure)
-				: this.callAndProcess(name, args, signal, beforeDispatch, suppressFailure);
+				? this.processProtocolCall(
+						call,
+						name,
+						args,
+						signal,
+						beforeDispatch,
+						suppressFailure,
+						operation.kind === "custom" ? operation.signal : undefined,
+					)
+				: this.callAndProcess(
+						name,
+						args,
+						signal,
+						beforeDispatch,
+						suppressFailure,
+						operation.kind === "custom" ? operation.signal : undefined,
+					);
 		if (operation.kind === "poll") {
-			const acknowledgedModelIds = Array.from(this.pendingRemovalAcknowledgments);
-			for (const modelId of acknowledgedModelIds) {
+			const acknowledgedModelIds: string[] = [];
+			let byteLength = 2;
+			for (const modelId of this.pendingRemovalAcknowledgments) {
+				const entryBytes =
+					new TextEncoder().encode(JSON.stringify(modelId)).byteLength +
+					(acknowledgedModelIds.length > 0 ? 1 : 0);
+				if (byteLength + entryBytes > 32 * 1024) break;
+				acknowledgedModelIds.push(modelId);
+				byteLength += entryBytes;
+			}
+			const count = await process("anywidget_poll", {
+				instance_id: this.instanceId,
+				acknowledged_model_ids: acknowledgedModelIds,
+			});
+			for (const modelId of acknowledgedModelIds)
 				this.pendingRemovalAcknowledgments.delete(modelId);
-			}
-			try {
-				const count = await process("anywidget_poll", {
-					instance_id: this.instanceId,
-					operation_id: operation.operationId,
-					acknowledged_model_ids: acknowledgedModelIds,
-				});
-				operation.resolve(count);
-			} catch (error) {
-				for (const modelId of acknowledgedModelIds) {
-					this.pendingRemovalAcknowledgments.add(modelId);
-				}
-				throw error;
-			}
+			operation.resolve(count);
 			return;
 		}
 		if (this.models.get(operation.model.modelId) !== operation.model) {
@@ -598,7 +603,6 @@ export class WidgetRuntime {
 			model_id: operation.model.modelId,
 			data: serialized.data,
 			buffers: serialized.buffers,
-			operation_id: operation.operationId,
 		});
 		this.noteProtocolActivity();
 		if (operation.kind === "custom") {
@@ -610,7 +614,7 @@ export class WidgetRuntime {
 	private appendCustom(
 		model: BridgeModel,
 		data: CommData,
-		buffers: string[],
+		buffers: ArrayBuffer[],
 		resolve?: () => void,
 		reject?: (cause: unknown) => void,
 		signal = this.controller.signal,
@@ -622,7 +626,6 @@ export class WidgetRuntime {
 			model,
 			data,
 			buffers,
-			operationId: randomId(),
 			signal,
 			dispatched: false,
 			completed: false,
@@ -713,9 +716,19 @@ export class WidgetRuntime {
 		signal = this.controller.signal,
 		beforeDispatch?: () => void,
 		suppressFailure?: () => boolean,
+		preparationSignal?: AbortSignal,
 	): Promise<number> {
 		return this.calls.transaction(
-			(call) => this.processProtocolCall(call, name, args, signal, beforeDispatch, suppressFailure),
+			(call) =>
+				this.processProtocolCall(
+					call,
+					name,
+					args,
+					signal,
+					beforeDispatch,
+					suppressFailure,
+					preparationSignal,
+				),
 			signal,
 		);
 	}
@@ -727,15 +740,58 @@ export class WidgetRuntime {
 		signal = this.controller.signal,
 		beforeDispatch?: () => void,
 		suppressFailure?: () => boolean,
+		preparationSignal?: AbortSignal,
 	): Promise<number> {
 		const previousCall = this.activeProtocolCall;
 		this.activeProtocolCall = call;
+		let operationId: number | undefined;
+		let dispatched = false;
 		try {
-			const result = await this.callWithRetry(call, name, args, signal, beforeDispatch);
+			if (this.operationSequence >= Number.MAX_SAFE_INTEGER)
+				throw new Error("Widget operation sequence exhausted");
+			operationId = ++this.operationSequence;
+			args = {
+				...args,
+				operation_id: operationId,
+				acknowledged_operation_id: this.acknowledgedOperationId,
+			};
+			const wireArgs =
+				name === "anywidget_comm" && this.attachments
+					? await this.attachments.commArguments(
+							args,
+							call,
+							preparationSignal ? AbortSignal.any([signal, preparationSignal]) : signal,
+						)
+					: args;
+			const result = await this.callWithRetry(call, name, wireArgs, signal, () => {
+				beforeDispatch?.();
+				dispatched = true;
+			});
 			signal.throwIfAborted();
 			if (result.isError) throw new Error(toolErrorText(result));
-			return await this.processResult(result, call, signal);
+			const count = await this.processResult(result, call, signal);
+			signal.throwIfAborted();
+			this.confirmOperation(operationId, previousCall !== undefined);
+			// Initializer calls stage context until the outer graph transaction commits.
+			if (!previousCall && this.pendingContext) {
+				this.contextSync.enqueue(this.pendingContext);
+				this.pendingContext = undefined;
+			}
+			return count;
 		} catch (error) {
+			if (
+				preparationSignal?.aborted &&
+				!dispatched &&
+				operationId !== undefined &&
+				!this.controller.signal.aborted
+			) {
+				try {
+					await this.cancelOperation(operationId);
+					this.confirmOperation(operationId, previousCall !== undefined);
+				} catch (cleanupError) {
+					if (!this.controller.signal.aborted) this.fail(cleanupError);
+				}
+			}
 			if (!suppressFailure?.() && !this.controller.signal.aborted && !signal.aborted) {
 				this.fail(error);
 			}
@@ -744,6 +800,33 @@ export class WidgetRuntime {
 			this.activeProtocolCall = previousCall;
 			if (!previousCall) this.startProtocolOperations();
 		}
+	}
+
+	private confirmOperation(operationId: number, nested: boolean): void {
+		this.pendingAppliedOperationId = Math.max(this.pendingAppliedOperationId, operationId);
+		if (!nested) this.acknowledgedOperationId = this.pendingAppliedOperationId;
+	}
+
+	private async cancelOperation(operationId: number): Promise<void> {
+		const signal = AbortSignal.timeout(RUNTIME_LIFECYCLE_TIMEOUT_MS);
+		const args = {
+			instance_id: this.instanceId,
+			operation_id: operationId,
+			acknowledged_operation_id: this.acknowledgedOperationId,
+		};
+		const result = await retryTransport(
+			() => this.calls.callNow("anywidget_cancel", args, signal),
+			signal,
+		);
+		if (result.isError) throw new Error(toolErrorText(result));
+		const meta = resultAnywidget(result);
+		requireProtocolVersion(meta?.protocolVersion);
+		if (
+			meta?.instanceId !== this.instanceId ||
+			meta.operationId !== operationId ||
+			meta.retired !== true
+		)
+			throw new Error("Widget cancellation did not confirm operation retirement");
 	}
 
 	private async callWithRetry(
@@ -783,18 +866,13 @@ export class WidgetRuntime {
 		if (this.disposed) return 0;
 		let rawModels = resultModels(result);
 		let rawMessages = resultMessages(result);
-		if (this.assetStore) {
-			const payload = resultAnywidget(result);
-			requireProtocolVersion(payload?.protocolVersion);
-			const assets = await this.assetStore.resolve(
-				payload?.assetManifest,
-				sourceRefValues(rawModels, rawMessages),
-				call ?? ((name, args) => this.calls.call(name, args, signal)),
-				signal,
-			);
-			signal.throwIfAborted();
-			rawModels = hydrateRawModels(rawModels, assets);
-			rawMessages = hydrateRawMessages(rawMessages, assets);
+		if (this.attachments) {
+			const activeCall = call ?? ((name, args) => this.calls.call(name, args, signal));
+			const payload = await deliveryPayload(result, this.attachments, activeCall, signal);
+			const hydrated = await hydrateRuntimePayload(payload, this.attachments, activeCall, signal);
+			rawModels = hydrated.models;
+			rawMessages = hydrated.messages;
+			result = { ...result, _meta: { anywidget: payload } };
 		}
 		// Apply graph changes as one browser transaction: register additions, deliver
 		// references, initialize additions, dispose removals, then queue acknowledgments.
@@ -813,7 +891,6 @@ export class WidgetRuntime {
 				this.model(modelId).receive(message.data, decodeBuffers(message.buffers));
 			}
 			const context = resultContext(result);
-			if (context) this.contextSync.enqueue(context);
 			const contextError = resultContextError(result);
 			if (contextError) console.warn(contextError);
 
@@ -826,6 +903,9 @@ export class WidgetRuntime {
 			await this.removeModels(removedModelIds);
 			for (const modelId of removedModelIds) {
 				this.pendingRemovalAcknowledgments.add(modelId);
+			}
+			if (context && (!this.pendingContext || context.version > this.pendingContext.version)) {
+				this.pendingContext = context;
 			}
 			return messages.length + added.length + removedModelIds.length + (context ? 1 : 0);
 		} catch (error) {

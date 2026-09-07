@@ -39,7 +39,7 @@ describe("ToolCallQueue cancellation", () => {
 		const inner = new AbortController();
 
 		const result = calls.transaction(
-			(call) => call("anywidget_assets", {}, inner.signal),
+			(call) => call("anywidget_read", {}, inner.signal),
 			outer.signal,
 		);
 		await vi.waitFor(() => expect(activeSignal).toBeDefined());

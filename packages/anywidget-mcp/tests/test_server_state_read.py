@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import anyio
 import pytest
 from mcp.types import TextContent
 
@@ -25,12 +24,11 @@ async def test_state_tool_reads_browser_updates_after_comm_delivery() -> None:
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {"value": 2})
         runtime = await bootstrap_runtime(client, launch)
-        comm = await client.call_tool(
-            "anywidget_comm",
+        comm = await client.comm(
             {
                 "instance_id": runtime["instanceId"],
                 "model_id": runtime["rootModelId"],
-                "operation_id": "set-seven",
+                "operation_id": 1,
                 "data": {
                     "method": "update",
                     "state": {"value": 7},
@@ -49,7 +47,7 @@ async def test_state_tool_reads_browser_updates_after_comm_delivery() -> None:
         "tool": "counter_widget",
         "state": {"doubled": 14, "value": 7},
     }
-    assert current.structuredContent == {
+    assert current.structured_content == {
         "state_id": state_id(launch),
         "tool": "counter_widget",
         "version": 2,
@@ -87,12 +85,12 @@ async def test_state_read_does_not_consume_the_next_app_poll() -> None:
             "anywidget_poll",
             {
                 "instance_id": runtime["instanceId"],
-                "operation_id": "after-state-read",
+                "operation_id": 1,
             },
         )
 
-    assert current.structuredContent is not None
-    assert current.structuredContent["state"] == {"doubled": 8, "value": 4}
+    assert current.structured_content is not None
+    assert current.structured_content["state"] == {"doubled": 8, "value": 4}
     assert poll.meta is not None
     assert poll.meta["anywidget"]["context"] == {
         "version": 2,
@@ -125,10 +123,10 @@ async def test_state_handles_keep_live_widget_instances_isolated() -> None:
         )
 
     assert state_id(first) != state_id(second)
-    assert first_state.structuredContent is not None
-    assert second_state.structuredContent is not None
-    assert first_state.structuredContent["state"] == {"doubled": 2, "value": 1}
-    assert second_state.structuredContent["state"] == {"doubled": 18, "value": 9}
+    assert first_state.structured_content is not None
+    assert second_state.structured_content is not None
+    assert first_state.structured_content["state"] == {"doubled": 2, "value": 1}
+    assert second_state.structured_content["state"] == {"doubled": 18, "value": 9}
 
 
 @pytest.mark.anyio
@@ -143,8 +141,8 @@ async def test_state_none_omits_a_read_handle() -> None:
             {"state_id": "0" * 32},
         )
 
-    assert launch.structuredContent == {"tool": "counter_widget"}
-    assert unavailable.isError is True
+    assert launch.structured_content == {"tool": "counter_widget"}
+    assert unavailable.is_error is True
     assert isinstance(unavailable.content[0], TextContent)
     assert unavailable.content[0].text.endswith("Widget state is unavailable")
 
@@ -166,37 +164,34 @@ async def test_disposal_revokes_the_state_handle() -> None:
             {"state_id": state_id(launch)},
         )
 
-    assert unavailable.isError is True
+    assert unavailable.is_error is True
     assert isinstance(unavailable.content[0], TextContent)
     assert unavailable.content[0].text.endswith("Widget state is unavailable")
     assert state_id(launch) not in unavailable.content[0].text
 
 
 @pytest.mark.anyio
-async def test_prebootstrap_state_read_preserves_the_short_launch_timeout(
+async def test_prebootstrap_state_read_renews_the_configured_idle_lifetime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    closed = anyio.Event()
+    import types
 
-    class TrackedWidget(CounterWidget):
-        def close(self) -> None:
-            super().close()
-            closed.set()
-
-    monkeypatch.setattr(runtime_module, "UNCLAIMED_SESSION_TIMEOUT", 0.05)
-    server = AnyWidgetMCP("test", session_idle_timeout=1.0)
-    server.widget(TrackedWidget)
-
+    clock = [0.0]
+    monkeypatch.setattr(
+        runtime_module, "time", types.SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    server = AnyWidgetMCP("state-activity", session_idle_timeout=60)
+    server.widget(CounterWidget)
     async with connected(server) as client:
-        launch = await client.call_tool("tracked_widget", {})
+        launch = await client.call_tool("counter_widget", {})
+        active = server._widget_tools._require_runtime()
+        lease = active._state_handles[state_id(launch)]
+        clock[0] = 31.0
         current = await client.call_tool(
-            "anywidget_state",
-            {"state_id": state_id(launch)},
+            "anywidget_state", {"state_id": state_id(launch)}
         )
-        with anyio.fail_after(0.5):
-            await closed.wait()
-
-    assert current.isError is False
+        assert not current.is_error
+        assert lease.deadline == 91
 
 
 @pytest.mark.anyio
@@ -213,12 +208,11 @@ async def test_state_projection_error_remains_readable_after_comm_delivery() -> 
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {"value": 0})
         runtime = await bootstrap_runtime(client, launch)
-        failed_comm = await client.call_tool(
-            "anywidget_comm",
+        failed_comm = await client.comm(
             {
                 "instance_id": runtime["instanceId"],
                 "model_id": runtime["rootModelId"],
-                "operation_id": "set-one",
+                "operation_id": 1,
                 "data": {
                     "method": "update",
                     "state": {"value": 1},
@@ -230,12 +224,11 @@ async def test_state_projection_error_remains_readable_after_comm_delivery() -> 
             "anywidget_state",
             {"state_id": state_id(launch)},
         )
-        await client.call_tool(
-            "anywidget_comm",
+        await client.comm(
             {
                 "instance_id": runtime["instanceId"],
                 "model_id": runtime["rootModelId"],
-                "operation_id": "set-two",
+                "operation_id": 2,
                 "data": {
                     "method": "update",
                     "state": {"value": 2},
@@ -252,10 +245,10 @@ async def test_state_projection_error_remains_readable_after_comm_delivery() -> 
     assert failed_comm.meta["anywidget"]["contextError"] == (
         "Widget state projection failed: one is temporarily unavailable"
     )
-    assert failed_read.isError is True
+    assert failed_read.is_error is True
     assert isinstance(failed_read.content[0], TextContent)
     assert failed_read.content[0].text.endswith(
         "Widget state projection failed: one is temporarily unavailable"
     )
-    assert recovered.structuredContent is not None
-    assert recovered.structuredContent["state"] == {"value": 2}
+    assert recovered.structured_content is not None
+    assert recovered.structured_content["state"] == {"value": 2}

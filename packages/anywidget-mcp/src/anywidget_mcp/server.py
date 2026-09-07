@@ -1,11 +1,11 @@
-"""Expose public FastMCP integration and transport helpers for AnyWidget MCP Apps."""
+"""Expose public MCPServer integration and transport helpers for AnyWidget MCP Apps."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, overload
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import Icon, ToolAnnotations
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
@@ -17,8 +17,6 @@ from ._targets import (
     TargetT,
     WidgetState,
     WidgetTarget,
-    WidgetTargetDescription,
-    describe_widget_target,
 )
 from ._widget_tools import (
     APP_MIME_TYPE,
@@ -64,13 +62,13 @@ class _MCPMethodMiddleware:
 
 
 def attach(
-    mcp: FastMCP,
+    mcp: MCPServer,
     *,
     app_uri: str = APP_RESOURCE_URI,
     csp: AppCSP | None = None,
     permissions: AppPermissions | None = None,
     prefers_border: bool = True,
-    session_idle_timeout: float = 900.0,
+    session_idle_timeout: float | None = 900.0,
 ) -> WidgetTools:
     """Attach AnyWidget registration and session handling to ``mcp``.
 
@@ -78,11 +76,13 @@ def attach(
     session cleanup into the server lifespan. Await :meth:`WidgetTools.aclose`
     to close live sessions early.
     """
-    if not isinstance(mcp, FastMCP):
-        raise TypeError("attach() expected a FastMCP server")
+    if not isinstance(mcp, MCPServer):
+        raise TypeError("attach() expected an MCPServer instance")
     if getattr(mcp, "_anywidget_tools", None) is not None:
-        raise ValueError("AnyWidget tools are already attached to this FastMCP server")
-    if getattr(mcp, "_session_manager", None) is not None:
+        raise ValueError(
+            "AnyWidget tools are already attached to this MCPServer instance"
+        )
+    if getattr(mcp._lowlevel_server, "_session_manager", None) is not None:
         raise ValueError("attach() must run before streamable_http_app() is created")
     tools = WidgetTools(
         mcp,
@@ -96,8 +96,8 @@ def attach(
     return tools
 
 
-class AnyWidgetMCP(FastMCP):
-    """FastMCP server with AnyWidget registration, session cleanup, and HTTP policy."""
+class AnyWidgetMCP(MCPServer):
+    """MCPServer with AnyWidget registration, session cleanup, and HTTP policy."""
 
     def __init__(
         self,
@@ -108,10 +108,10 @@ class AnyWidgetMCP(FastMCP):
         permissions: AppPermissions | None = None,
         prefers_border: bool = True,
         cors_origins: Sequence[str] = (),
-        session_idle_timeout: float = 900.0,
-        **fastmcp_options: Any,
+        session_idle_timeout: float | None = 900.0,
+        **mcp_options: Any,
     ) -> None:
-        super().__init__(name, **fastmcp_options)
+        super().__init__(name, **mcp_options)
         self._cors_origins = tuple(cors_origins)
         self._widget_tools = attach(
             self,
@@ -173,13 +173,13 @@ class AnyWidgetMCP(FastMCP):
             icons=icons,
         )
 
-    def streamable_http_app(self) -> Starlette:
+    def streamable_http_app(self, **http_options: Any) -> Starlette:
         """Build the HTTP app with MCP method handling and configured CORS."""
 
-        app = super().streamable_http_app()
+        app = super().streamable_http_app(**http_options)
         app.add_middleware(
             _MCPMethodMiddleware,
-            path=self.settings.streamable_http_path,
+            path=http_options.get("streamable_http_path", "/mcp"),
         )
         if self._cors_origins:
             app.add_middleware(
@@ -209,7 +209,7 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8000,
     log_level: LogLevel = "INFO",
-    **fastmcp_options: Any,
+    **mcp_options: Any,
 ) -> None:
     """Register one widget target and run its MCP server until the transport exits.
 
@@ -226,7 +226,7 @@ def serve(
         host: Streamable HTTP bind address.
         port: Streamable HTTP bind port.
         log_level: Server log level.
-        **fastmcp_options: Additional options forwarded to :class:`AnyWidgetMCP`.
+        **mcp_options: Additional options forwarded to :class:`AnyWidgetMCP`.
 
     Raises:
         TypeError: If the target, signature, or state option is invalid.
@@ -241,11 +241,9 @@ def serve(
     target_name = getattr(target, "__name__", type(target).__name__)
     server = AnyWidgetMCP(
         f"{target_name} MCP",
-        host=host,
-        port=port,
         log_level=log_level,
         icons=icons,
-        **fastmcp_options,
+        **mcp_options,
     )
     server.widget(
         target,
@@ -256,7 +254,10 @@ def serve(
         annotations=annotations,
         icons=icons,
     )
-    server.run(transport=transport)
+    if transport == "stdio":
+        server.run(transport="stdio")
+    else:
+        server.run(transport=transport, host=host, port=port)
 
 
 __all__ = [
@@ -265,9 +266,7 @@ __all__ = [
     "AnyWidgetMCP",
     "AppCSP",
     "AppPermissions",
-    "WidgetTargetDescription",
     "WidgetTools",
     "attach",
-    "describe_widget_target",
     "serve",
 ]

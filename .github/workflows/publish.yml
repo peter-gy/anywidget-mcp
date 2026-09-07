@@ -16,34 +16,20 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
 
-      - name: Read Node.js version
-        id: node-version
-        run: echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
-
       - name: Set up uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-
-      - name: Install Python
-        run: uv python install "$(cat .python-version)"
-
-      - name: Set up Vite+
-        uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
-        with:
-          version: 0.2.4
-          node-version: ${{ steps.node-version.outputs.version }}
-          cache: true
-          sfw: true
-          run-install: |
-            - args: ['--frozen-lockfile']
 
       - name: Check release version
         shell: bash
@@ -60,8 +46,29 @@ jobs:
           fi
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
-      - name: Build and check package artifacts
-        run: make package
+      - name: Select validated main artifacts
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          commit="$(git rev-parse HEAD)"
+          run_id="$(gh run list --workflow ci.yml --branch main --commit "$commit" \
+            --event push --limit 1 --json databaseId,status,conclusion \
+            --jq '.[0] | select(.status == "completed" and .conclusion == "success") | .databaseId')"
+          if [ -z "$run_id" ]; then
+            echo "A successful main CI run is required for $commit" >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download validated package artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dist
+          path: dist
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Upload package artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

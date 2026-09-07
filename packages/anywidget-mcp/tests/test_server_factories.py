@@ -4,13 +4,17 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import Any
 
+import asyncio
+
 import anyio
 import pytest
 from anyio.lowlevel import checkpoint
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from mcp.types import TextContent
+from traitlets import Bytes
 
 import anywidget_mcp._runtime as runtime_module
+from anywidget_mcp._attachments import Attachments
 from anywidget_mcp import AnyWidgetMCP, StateProjection
 from anywidget_mcp._factory import FactoryOwner
 from anywidget_mcp._runtime import SessionRuntime
@@ -18,6 +22,7 @@ from anywidget_mcp._state import DEFAULT_STATE
 
 from ._server_support import (
     CounterWidget,
+    ParentWidget,
     bootstrap_id,
     bootstrap_runtime,
     connected,
@@ -29,7 +34,7 @@ from ._server_support import (
 @pytest.mark.anyio
 async def test_context_is_injected_into_direct_and_managed_factories() -> None:
     server = AnyWidgetMCP("test")
-    contexts: list[Context[Any, Any, Any]] = []
+    contexts: list[Context[Any, Any]] = []
     progress_events: list[tuple[float, float | None, str | None]] = []
 
     @server.widget
@@ -71,21 +76,21 @@ async def test_context_is_injected_into_direct_and_managed_factories() -> None:
         )
 
     assert all(
-        "ctx" not in tools[name].inputSchema["properties"]
+        "ctx" not in tools[name].input_schema["properties"]
         for name in ("direct", "managed", "async_managed")
     )
     assert all(isinstance(ctx, Context) for ctx in contexts)
-    assert direct_result.structuredContent == {
+    assert direct_result.structured_content == {
         "tool": "direct",
         "state": {"doubled": 2, "value": 1},
         "state_id": state_id(direct_result),
     }
-    assert managed_result.structuredContent == {
+    assert managed_result.structured_content == {
         "tool": "managed",
         "state": {"doubled": 4, "value": 2},
         "state_id": state_id(managed_result),
     }
-    assert async_result.structuredContent == {
+    assert async_result.structured_content == {
         "tool": "async_managed",
         "state": {"doubled": 6, "value": 3},
         "state_id": state_id(async_result),
@@ -125,7 +130,7 @@ async def test_managed_factory_cleanup_runs_on_owner_task_after_widget_close() -
             {"session_id": runtime["instanceId"]},
         )
 
-    assert disposed.structuredContent == {"disposed": True}
+    assert disposed.structured_content == {"disposed": True}
     assert events == ["resource enter", "widget close", "resource exit"]
     assert owner_tasks[0] == owner_tasks[1]
 
@@ -161,7 +166,7 @@ async def test_async_factory_can_return_an_awaited_context_manager() -> None:
             {"session_id": runtime["instanceId"]},
         )
 
-    assert disposed.structuredContent == {"disposed": True}
+    assert disposed.structured_content == {"disposed": True}
     assert events == ["resource enter", "widget close", "resource exit"]
 
 
@@ -252,11 +257,11 @@ async def test_managed_factory_exits_on_idle_expiry_and_server_shutdown() -> Non
 
     async with connected(server) as client:
         idle = await client.call_tool("managed", {"label": "idle"})
-        assert idle.isError is False
+        assert idle.is_error is False
         with anyio.fail_after(1):
             await idle_exited.wait()
         shutdown = await client.call_tool("managed", {"label": "shutdown"})
-        assert shutdown.isError is False
+        assert shutdown.is_error is False
 
     assert shutdown_exited.is_set()
     assert events == [
@@ -545,7 +550,77 @@ async def test_launch_validation_closes_managed_widget_once() -> None:
     async with connected(server) as client:
         result = await client.call_tool("managed", {})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert isinstance(result.content[0], TextContent)
     assert "Unknown state trait" in result.content[0].text
     assert events == ["widget close", "resource exit"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("cleanup", ["complete", "error", "cancelled"])
+async def test_native_task_cancellation_distinguishes_manager_cleanup_failures(
+    cleanup: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    streams: list[Any] = []
+    original = Attachments._file
+
+    def tracked_file() -> Any:
+        stream = original()
+        streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(Attachments, "_file", staticmethod(tracked_file))
+
+    class BinaryParent(ParentWidget):
+        payload = Bytes(b"x" * (2 * 1024 * 1024)).tag(sync=True)
+
+    root = BinaryParent(child=CounterWidget())
+    child = root.child
+    tasks: list[asyncio.Task[Any]] = []
+    cancellations: list[asyncio.CancelledError] = []
+    manager_closed = anyio.Event()
+    cleanup_error: BaseException | None = (
+        RuntimeError("manager cleanup failed")
+        if cleanup == "error"
+        else asyncio.CancelledError("manager cleanup cancelled")
+        if cleanup == "cancelled"
+        else None
+    )
+    server = AnyWidgetMCP("native-cancellation")
+
+    @server.widget
+    @asynccontextmanager
+    async def managed() -> AsyncGenerator[BinaryParent, None]:
+        task = asyncio.current_task()
+        assert task is not None
+        tasks.append(task)
+        try:
+            yield root
+        except asyncio.CancelledError as error:
+            cancellations.append(error)
+            raise
+        finally:
+            await asyncio.sleep(0)
+            manager_closed.set()
+            if cleanup_error is not None:
+                raise cleanup_error
+
+    async with connected(server) as client:
+        launch = await client.call_tool("managed", {})
+        await bootstrap_runtime(client, launch)
+        tasks[0].cancel("server shutdown")
+        with anyio.fail_after(1):
+            await manager_closed.wait()
+            await tasks[0]
+        assert len(cancellations) == 1
+        assert str(cancellations[0]) == "server shutdown"
+        assert root.comm is None
+        assert child.comm is None
+        assert all(stream.closed for stream in streams)
+        if cleanup_error is None:
+            await server.aclose()
+        else:
+            with pytest.raises(BaseExceptionGroup) as caught:
+                await server.aclose()
+            assert leaf_error_messages(caught.value) == [str(cleanup_error)]

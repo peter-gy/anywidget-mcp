@@ -62,4 +62,4 @@ def test_state_cleanup_failure_retains_nonweak_protocol_claim() -> None:
         second = WidgetSession("second", third_root, lambda _widget: {})
     second.close()
 
-    assert child.unobserve_attempts == 3
+    assert child.observers == []

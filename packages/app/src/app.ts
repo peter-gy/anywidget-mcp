@@ -21,7 +21,7 @@ import {
 	DEFAULT_LOADING_MESSAGE,
 	loadingMessageForTool,
 	loadingMessageFromArguments,
-	loadingMessageFromResult,
+	loadingMessageFromPayload,
 	toolResultError,
 } from "./status";
 import { ToolCallQueue } from "./tool-calls";
@@ -146,17 +146,15 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 		async (signal) => {
 			let runtimeCreationStarted = false;
 			try {
-				const materialized = await loadWidgetRuntime(
-					launch,
-					(name, args) => calls.callNow(name, args, signal),
-					bootstrapOperationId,
+				const materialized = await calls.transaction(
+					(call) => loadWidgetRuntime(launch, call, bootstrapOperationId, signal),
 					signal,
 				);
 				signal.throwIfAborted();
 				// Disposal starts with the bootstrap capability, then switches to the
 				// established session ID once bootstrap materialization succeeds.
 				sessionHandle = requiredString(materialized.payload.instanceId, "instance ID");
-				loadingMessage = loadingMessageFromResult(materialized.result) ?? loadingMessage;
+				loadingMessage = loadingMessageFromPayload(materialized.payload) ?? loadingMessage;
 				showLoadingStatus();
 				root.replaceChildren();
 				root.hidden = true;

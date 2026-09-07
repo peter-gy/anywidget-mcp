@@ -11,7 +11,7 @@ from typing import Any, Generic, TypeVar, cast
 
 from anywidget import AnyWidget
 
-from ._projection_json import bounded_mapping, canonical_json
+from ._projection_json import DEFAULT_MAX_BYTES, bounded_mapping, canonical_json
 
 WidgetT = TypeVar("WidgetT", bound=AnyWidget)
 StateProjector = Callable[[Any], Mapping[str, object]]
@@ -26,19 +26,34 @@ class StateProjection(Generic[WidgetT]):
         watch: Root trait names that invalidate the projection. ``None`` observes
             every trait in the enrolled widget graph. An empty sequence computes
             the projection once during launch.
+        max_bytes: Maximum compact UTF-8 JSON bytes for the complete projection,
+            including every widget in a sequence. Defaults to 8000. ``None``
+            preserves trusted finite input in full, subject to JSON conversion
+            and Python recursion limits. Integers must be at least 2 bytes,
+            the encoded size of an empty JSON mapping.
     """
 
     project: Callable[[WidgetT], Mapping[str, object]]
     watch: tuple[str, ...] | None
+    max_bytes: int | None
 
     def __init__(
         self,
         project: Callable[[WidgetT], Mapping[str, object]],
         *,
         watch: str | Sequence[str] | None = None,
+        max_bytes: int | None = DEFAULT_MAX_BYTES,
     ) -> None:
         if not callable(project):
             raise TypeError("StateProjection project must be callable")
+        if max_bytes is not None and (
+            isinstance(max_bytes, bool)
+            or not isinstance(max_bytes, int)
+            or max_bytes < 2
+        ):
+            raise ValueError(
+                "StateProjection max_bytes must be an integer of at least 2 or None"
+            )
         if watch is None:
             normalized_watch = None
         elif isinstance(watch, str):
@@ -51,6 +66,7 @@ class StateProjection(Generic[WidgetT]):
             raise TypeError("StateProjection watch must contain trait names")
         object.__setattr__(self, "project", project)
         object.__setattr__(self, "watch", normalized_watch)
+        object.__setattr__(self, "max_bytes", max_bytes)
 
 
 StateSpec = tuple[str, ...] | StateProjector | StateProjection[Any] | None
@@ -126,6 +142,9 @@ class StateContext:
         else:
             self._projection_roots = (root,)
             self._grouped = False
+        self._max_bytes = (
+            state.max_bytes if isinstance(state, StateProjection) else DEFAULT_MAX_BYTES
+        )
         self._lock = threading.RLock()
         self._dirty_generation = 1 if state is not None else 0
         self._projected_generation = 0
@@ -382,7 +401,7 @@ class StateContext:
                         "The widget state projection must return a mapping, "
                         f"got {type(projected).__name__}"
                     )
-                state = bounded_mapping(projected)
+                state = bounded_mapping(projected, self._max_bytes)
                 state_json = canonical_json(state)
             finally:
                 self._remove_projection_guards(projection_guards)

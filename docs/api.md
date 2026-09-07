@@ -1,7 +1,7 @@
 # API reference
 
 The Python package exports registration, composition, state projection, and
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview?utm_source=anywidget-mcp) resource
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview) resource
 types from `anywidget_mcp`.
 
 ## `serve()`
@@ -20,11 +20,11 @@ serve(
     host="127.0.0.1",
     port=8000,
     log_level="INFO",
-    **fastmcp_options,
+    **mcp_options,
 ) -> None
 ```
 
-Registers one [AnyWidget](https://anywidget.dev/?utm_source=anywidget-mcp) class or factory and runs its
+Registers one [AnyWidget](https://anywidget.dev/) class or factory and runs its
 MCP server until the transport exits.
 
 - `target` accepts an `AnyWidget` subclass or a factory that returns an
@@ -34,14 +34,14 @@ MCP server until the transport exits.
 - `annotations` and `icons` accept MCP tool metadata values.
 - `transport` accepts `"streamable-http"` or `"stdio"`.
 - `host`, `port`, and `log_level` configure streamable HTTP.
-- `fastmcp_options` are forwarded to `AnyWidgetMCP`.
+- `mcp_options` are forwarded to `AnyWidgetMCP`.
 
 Registration errors propagate before the transport starts. Widget sessions
 close when the transport exits or raises.
 
 ## `AnyWidgetMCP`
 
-```python
+```text
 AnyWidgetMCP(
     name=None,
     *,
@@ -51,11 +51,12 @@ AnyWidgetMCP(
     prefers_border=True,
     cors_origins=(),
     session_idle_timeout=900.0,
-    **fastmcp_options,
+    **mcp_options,
 )
 ```
 
-Extends `mcp.server.fastmcp.FastMCP` with an MCP App resource, widget tools, and
+Extends the Python SDK
+[`MCPServer`](https://github.com/modelcontextprotocol/python-sdk/tree/v2.1.1) with an MCP App resource, widget tools, and
 session ownership.
 
 - `app_uri` identifies the HTML resource attached to registered widget tools.
@@ -63,9 +64,10 @@ session ownership.
 - `permissions` accepts an `AppPermissions` mapping.
 - `prefers_border` sets the app resource's host border preference.
 - `cors_origins` lists browser origins allowed to call the HTTP endpoint.
-- `session_idle_timeout` sets the idle lifetime in seconds. It must be positive
-  and finite.
-- `fastmcp_options` are forwarded to `FastMCP`.
+- `session_idle_timeout` sets the idle lifetime from launch onward, in seconds.
+  It defaults to `900.0` and accepts a positive finite number or `None`. With
+  `None`, explicit disposal or server shutdown owns session cleanup.
+- `mcp_options` are forwarded to `MCPServer`.
 
 The streamable HTTP app owns widget sessions for its Starlette application
 lifespan. MCP connection rotation keeps existing widget sessions addressable
@@ -92,7 +94,7 @@ Registers an AnyWidget class or factory as an MCP App tool. Pass `target`
 directly or omit it to use `widget()` as a decorator.
 
 The method returns the registered target unchanged. Explicit target parameters
-define widget fields in the MCP input schema. FastMCP removes its injected
+define widget fields in the MCP input schema. MCPServer removes its injected
 `Context` parameter from that schema. Registration adds an optional
 `loading_message` string when the target has no parameter with that name. It defaults to
 `"Initializing {tool title}…"` when that text passes the status bounds, with
@@ -114,8 +116,8 @@ result. An async factory may resolve to any of these forms.
 A sequence renders its widgets in order through one MCP App result. The same
 `state` specification applies to each widget. With state projection enabled,
 the aggregate projection has a `widgets` field. It contains an ordered state
-list within projection limits, including for a one-item sequence. Collection
-and byte limits encode a larger list as a sequence summary. The summary sets
+list within the projection byte budget, including for a one-item sequence.
+An oversized list becomes a sequence summary. The summary sets
 `type` to `"sequence"` and includes `length`. It may also include bounded
 `items`, an `omitted` count, and `jsonBytes`. Set `state=None` to disable the
 aggregate projection.
@@ -124,17 +126,41 @@ Registration raises `TypeError` for an invalid target, signature, or `state`
 option. It raises `ValueError` for a reserved or duplicate tool name. Invocation
 returns a tool error when the target cannot create or open its widget result.
 
+### `AnyWidgetMCP.run()` and `streamable_http_app()`
+
+```python
+mcp.run(transport="streamable-http", host="127.0.0.1", port=8010)
+```
+
+`run()` blocks until the transport exits. It defaults to `"stdio"`, following
+`MCPServer`. Pass `"streamable-http"` for an HTTP endpoint. HTTP settings belong
+to the transport call:
+
+```python
+app = mcp.streamable_http_app(
+    streamable_http_path="/mcp",
+    stateless_http=True,
+    json_response=True,
+)
+```
+
+`streamable_http_app()` returns a Starlette application for an ASGI server.
+Its application lifespan owns widget sessions. Configure `cors_origins` on
+`AnyWidgetMCP` before creating the app. See [Deployment](./deployment) for
+transport and access policy.
+
 ### `AnyWidgetMCP.aclose()`
 
 ```python
 await mcp.aclose()
 ```
 
-Closes every live widget session in the active server lifespan.
+Closes every live widget session and rejects new widget calls until a new
+server lifespan starts.
 
 ## `attach()`
 
-```python
+```text
 attach(
     mcp,
     *,
@@ -147,12 +173,13 @@ attach(
 ```
 
 Adds the MCP App resource, widget registration, session tools, and cleanup to an
-existing `FastMCP` server. The returned `WidgetTools` provides `widget()` with
+existing `MCPServer` server. The returned `WidgetTools` provides `widget()` with
 the same registration contract and streamable HTTP session ownership as
-`AnyWidgetMCP.widget()`. Call `attach()` before creating the server's
+`AnyWidgetMCP.widget()`. `session_idle_timeout` has the same contract as
+`AnyWidgetMCP`. Call `attach()` before creating the server's
 `streamable_http_app()` so the application lifespan owns widget sessions.
 
-`attach()` raises `TypeError` when `mcp` is not a `FastMCP` server. It raises
+`attach()` raises `TypeError` when `mcp` is not a `MCPServer` server. It raises
 `ValueError` when widget tools are already attached, a reserved tool name is in
 use, `app_uri` is invalid, or the streamable HTTP app already exists.
 
@@ -162,11 +189,12 @@ use, `app_uri` is invalid, or the streamable HTTP app already exists.
 await widgets.aclose()
 ```
 
-Closes every live widget session in the active server lifespan.
+Closes every live widget session and rejects new widget calls until a new
+server lifespan starts.
 
 ## `create_anywidget()`
 
-```python
+```text
 create_anywidget(
     code: str,
     *,
@@ -200,8 +228,8 @@ propagating.
 
 ## `StateProjection`
 
-```python
-StateProjection(project, *, watch=None)
+```text
+StateProjection(project, *, watch=None, max_bytes=8000)
 ```
 
 Defines a read-only model-visible mapping and its invalidation source.
@@ -212,10 +240,15 @@ Defines a read-only model-visible mapping and its invalidation source.
 - `watch="value"` observes one root trait.
 - `watch=("value", "selection")` observes selected root traits.
 - `watch=()` computes the mapping once when the session opens.
+- `max_bytes` budgets the complete projection as compact UTF-8 JSON, including
+  every widget in a sequence. It accepts an integer of at least `2` or `None`.
+  Values that fit retain their full shape. Oversized values become summaries.
+  `None` preserves trusted finite input subject to JSON conversion and Python
+  recursion limits. Match the budget to the host and model context capacity.
 
 Construction raises `TypeError` when `project` is not callable or `watch` does
-not contain trait names. Opening a widget session raises `ValueError` when a
-named root trait is absent. For a sequence result, `watch` and named state traits
+not contain trait names. An invalid `max_bytes` raises `ValueError`. Opening a
+widget session raises `ValueError` when a named root trait is absent. For a sequence result, `watch` and named state traits
 must exist on every returned widget.
 
 ## App resource types

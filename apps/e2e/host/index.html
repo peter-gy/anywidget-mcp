@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>AnyWidget MCP test host</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<style>
+			body {
+				font: 16px system-ui;
+				margin: 24px;
+			}
+			label,
+			output {
+				display: block;
+				margin: 12px 0;
+			}
+			textarea {
+				display: block;
+				width: 100%;
+			}
+			iframe {
+				width: 100%;
+				min-height: 260px;
+				border: 1px solid #ccc;
+			}
+			output {
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>AnyWidget MCP test host</h1>
+		<label
+			>Widget tool
+			<select id="tool"></select
+		></label>
+		<label>Tool arguments <textarea id="arguments">{}</textarea></label>
+		<button id="open" disabled>Open widget</button>
+		<button id="read" disabled>Read Python state</button>
+		<button id="close" disabled>Close widget</button>
+		<output aria-label="Host status" id="status">Connecting</output>
+		<div id="view"></div>
+		<output aria-label="Model context" id="context"></output>
+		<output aria-label="Python state" id="state"></output>
+		<output aria-label="Asset requests" id="assets">0</output>
+		<output aria-label="Largest tool request bytes" id="request-bytes">0</output>
+		<output aria-label="Largest tool result bytes" id="result-bytes">0</output>
+		<output aria-label="Largest raw attachment bytes" id="raw-bytes">0</output>
+		<output aria-label="Lost read responses" id="lost-reads">0</output>
+		<output aria-label="Disposed sessions" id="disposed">0</output>
+		<script type="module" src="/main.ts"></script>
+	</body>
+</html>

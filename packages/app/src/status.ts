@@ -11,9 +11,7 @@ export function loadingMessageFromArguments(args: ToolArguments | undefined): st
 	return normalizeLoadingMessage(args?.loading_message);
 }
 
-export function loadingMessageFromResult(result: CallToolResult): string | undefined {
-	if (!isRecord(result._meta)) return undefined;
-	const payload = result._meta.anywidget;
+export function loadingMessageFromPayload<Value>(payload: Value): string | undefined {
 	if (!isRecord(payload)) return undefined;
 	return normalizeLoadingMessage(payload.loadingMessage);
 }

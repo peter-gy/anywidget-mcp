@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, TypeVar, cast, get_type_hints
 
 from anywidget import AnyWidget
-from mcp.server.fastmcp.tools import Tool
+from mcp.server.mcpserver.tools import Tool
 from mcp.types import CallToolResult, Icon, ToolAnnotations
 from pydantic import Field
 
@@ -34,11 +34,13 @@ TargetT = TypeVar("TargetT", bound=Callable[..., Any])
 SESSION_TOOL_NAMES = frozenset(
     {
         "anywidget_bootstrap",
-        "anywidget_assets",
+        "anywidget_read",
+        "anywidget_write",
         "anywidget_comm",
         "anywidget_poll",
         "anywidget_state",
         "anywidget_dispose",
+        "anywidget_cancel",
     }
 )
 LOADING_MESSAGE_ARGUMENT = "loading_message"

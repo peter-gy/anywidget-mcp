@@ -1,423 +1,171 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
-import {
-	AssetMemoryCache,
-	AssetStore,
-	clearAssetMemoryCache,
-	widgetAssetId,
-	type AssetKind,
-} from "../src/assets";
-import { isString, type RuntimeRecord } from "../src/runtime-value";
-import type { QueuedToolCall } from "../src/tool-calls";
-import { fixtureStrings } from "./runtime-test-support";
+import { hydrateSources, resolveSources } from "../src/assets";
+import { AttachmentStore } from "../src/attachments";
+import { fixtureBlob, readResult } from "./attachment-test-support";
 
-interface FixtureAsset {
-	id: string;
-	kind: AssetKind;
-	text: string;
-	byteLength: number;
-}
-
-async function fixtureAsset(kind: AssetKind, text: string): Promise<FixtureAsset> {
-	return {
-		id: await widgetAssetId(kind, text),
-		kind,
-		text,
-		byteLength: new TextEncoder().encode(text).byteLength,
-	};
-}
-
-function manifest(...assets: FixtureAsset[]): RuntimeRecord {
-	return Object.fromEntries(
-		assets.map((asset) => [asset.id, { kind: asset.kind, byteLength: asset.byteLength }]),
-	);
-}
-
-function assetResult(...assets: FixtureAsset[]): CallToolResult {
-	return {
-		content: [],
-		_meta: {
-			anywidget: {
-				protocolVersion: 1,
-				assetContents: Object.fromEntries(
-					assets.map((asset) => [
-						asset.id,
-						{
-							kind: asset.kind,
-							byteLength: asset.byteLength,
-							text: asset.text,
-						},
-					]),
-				),
+beforeEach(() => {
+	let pending = Promise.resolve();
+	vi.stubGlobal("navigator", {
+		locks: {
+			request: (_name: string, _options: LockOptions, callback: () => Promise<void>) => {
+				const result = pending.then(callback);
+				pending = result.catch(() => undefined);
+				return result;
 			},
 		},
-	};
-}
+	});
+});
 
-function cacheKey(assetId: string): string {
-	return `https://anywidget-mcp.invalid/assets/${encodeURIComponent(assetId)}`;
-}
-
-interface InstalledCache {
-	cache: Pick<Cache, "match" | "put" | "delete">;
-	stored: Map<string, Response>;
-}
-
-function installCache(initial: Map<string, string> = new Map()): InstalledCache {
-	const stored = new Map<string, Response>(
-		Array.from(initial, ([key, value]) => [key, new Response(value)]),
-	);
-	const key = (request: RequestInfo | URL): string => {
-		if (isString(request)) return request;
-		if (request instanceof URL) return request.href;
-		return request.url;
-	};
+function installCache() {
+	const stored = new Map<string, Response>();
 	const cache = {
-		match: vi.fn(async (request: RequestInfo | URL) => stored.get(key(request))?.clone()),
-		put: vi.fn(async (request: RequestInfo | URL, response: Response) => {
-			stored.set(key(request), response.clone());
+		match: vi.fn(async (key: string | Request) =>
+			stored.get(key instanceof Request ? key.url : key)?.clone(),
+		),
+		keys: vi.fn(async () => Array.from(stored.keys(), (key) => new Request(key))),
+		put: vi.fn(async (key: string, value: Response) => {
+			stored.set(key, value.clone());
 		}),
-		delete: vi.fn(async (request: RequestInfo | URL) => stored.delete(key(request))),
+		delete: vi.fn(async (key: string | Request) =>
+			stored.delete(key instanceof Request ? key.url : key),
+		),
 	};
-	vi.stubGlobal("caches", {
-		open: vi.fn(async () => cache),
-	});
-	return { cache, stored };
+	vi.stubGlobal("caches", { open: vi.fn(async () => cache) });
+	return { stored, cache };
 }
 
-describe("content-addressed widget assets", () => {
-	beforeEach(() => {
-		clearAssetMemoryCache();
-	});
+afterEach(() => vi.unstubAllGlobals());
 
-	afterEach(() => {
-		clearAssetMemoryCache();
-		vi.unstubAllGlobals();
-		vi.restoreAllMocks();
-	});
-
-	test("derives deterministic kind-scoped IDs from exact UTF-8 source", async () => {
-		await expect(widgetAssetId("esm", "export default {}")).resolves.toBe(
-			"esm:sha256:c27f60920940fbed65b9dc65b34a4ae43e526eb878522771ec56c3a54d7196bf",
-		);
-		await expect(widgetAssetId("css", "export default {}")).resolves.toMatch(
-			/^css:sha256:[0-9a-f]{64}$/,
-		);
-		await expect(widgetAssetId("css", "export default {}")).resolves.not.toBe(
-			await widgetAssetId("esm", "export default {}"),
-		);
-		await expect(widgetAssetId("esm", "café")).resolves.not.toBe(
-			await widgetAssetId("esm", "cafe\u0301"),
-		);
-	});
-
-	test("bounds memory entries by UTF-8 byte length and evicts the least recent", () => {
-		const cache = new AssetMemoryCache(5);
-		cache.set("first", "aaa", 3);
-		cache.set("second", "bb", 2);
-		expect(cache.get("first")).toBe("aaa");
-
-		cache.set("third", "cc", 2);
-		expect(cache.get("second")).toBeUndefined();
-		expect(cache.get("first")).toBe("aaa");
-		expect(cache.get("third")).toBe("cc");
-
-		cache.set("oversized", "123456", 6);
-		expect(cache.get("oversized")).toBeUndefined();
-	});
-
-	test("deduplicates references and fetches all cache misses in one batch", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		const css = await fixtureAsset("css", ".widget { color: rebeccapurple; }");
-		const call = vi.fn<QueuedToolCall>(async () => assetResult(esm, css));
-
-		const resolved = await new AssetStore("session-1").resolve(
-			manifest(esm, css),
-			[{ _esm: esm.id, _css: css.id }, { _esm: esm.id }, { _esm: esm.id, _css: css.id }],
+describe("content-addressed sources", () => {
+	test("decodes multibyte UTF-8 after chunk assembly and reuses identical ESM and CSS bytes", async () => {
+		const source = " ".repeat(65535) + "λ✓ café";
+		const blob = await fixtureBlob(source);
+		const call = vi.fn(async (_name, args) => readResult(blob.bytes, args));
+		const sources = await resolveSources(
+			[{ _esm: blob.ref, _css: blob.ref }],
+			new AttachmentStore("s"),
 			call,
 		);
-
-		expect(call).toHaveBeenCalledTimes(1);
-		expect(call).toHaveBeenCalledWith("anywidget_assets", {
-			instance_id: "session-1",
-			asset_ids: [esm.id, css.id],
+		expect(hydrateSources({}, { _esm: blob.ref, _css: blob.ref }, sources)).toEqual({
+			_esm: source,
+			_css: source,
 		});
-		expect(resolved).toEqual(
-			new Map([
-				[esm.id, esm.text],
-				[css.id, css.text],
-			]),
+		expect(call.mock.calls.map(([, args]) => args.offset)).toEqual([0, 65536]);
+	});
+
+	test("persists verified source bytes across sessions while widget data stays session-local", async () => {
+		const { cache } = installCache();
+		const source = await fixtureBlob("export default {};");
+		const data = await fixtureBlob(new Uint8Array([1, 2, 3]));
+		const call = vi.fn(async (_name, args) =>
+			readResult(args.blob_id === source.ref.id ? source.bytes : data.bytes, args),
 		);
+		const first = new AttachmentStore("first");
+		await resolveSources([{ _esm: source.ref }], first, call);
+		await first.read(data.ref, call);
+		await vi.waitFor(() => expect(cache.put).toHaveBeenCalledOnce());
+		const second = new AttachmentStore("second");
+		await resolveSources([{ _esm: source.ref }], second, call);
+		await second.read(data.ref, call);
+		expect(call.mock.calls.map(([, args]) => args.instance_id)).toEqual([
+			"first",
+			"first",
+			"second",
+		]);
 	});
 
-	test("retries a thrown asset transport failure with the same request", async () => {
-		vi.useFakeTimers();
-		try {
-			const esm = await fixtureAsset("esm", "export default { render() {} }");
-			const call = vi
-				.fn<QueuedToolCall>()
-				.mockRejectedValueOnce(new Error("response lost"))
-				.mockResolvedValue(assetResult(esm));
-
-			const resolution = new AssetStore("session-1").resolve(
-				manifest(esm),
-				[{ _esm: esm.id }],
-				call,
-			);
-			await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
-			await vi.advanceTimersByTimeAsync(100);
-
-			await expect(resolution).resolves.toEqual(new Map([[esm.id, esm.text]]));
-			expect(call).toHaveBeenCalledTimes(2);
-			expect(call.mock.calls[1]?.[1]).toBe(call.mock.calls[0]?.[1]);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	test("returns an asset tool error without retrying it", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		const call = vi.fn<QueuedToolCall>().mockResolvedValue({
-			content: [{ type: "text", text: "asset access denied" }],
-			isError: true,
-		});
-
-		await expect(
-			new AssetStore("session-1").resolve(manifest(esm), [{ _esm: esm.id }], call),
-		).rejects.toThrow("asset access denied");
-		expect(call).toHaveBeenCalledOnce();
-	});
-
-	test("stops asset transport retries when resolution is aborted", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		const call = vi.fn<QueuedToolCall>().mockRejectedValue(new Error("offline"));
-		const controller = new AbortController();
-		const resolution = new AssetStore("session-1").resolve(
-			manifest(esm),
-			[{ _esm: esm.id }],
-			call,
-			controller.signal,
-		);
-		await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
-
-		controller.abort(new DOMException("superseded", "AbortError"));
-
-		await expect(resolution).rejects.toMatchObject({ name: "AbortError" });
-		expect(call).toHaveBeenCalledOnce();
-	});
-
-	test("chunks more than 128 cache misses into bounded fetch requests", async () => {
-		const assets = await Promise.all(
-			Array.from({ length: 129 }, (_, index) =>
-				fixtureAsset("esm", `export default { render() { return ${index}; } }`),
-			),
-		);
-		const byId = new Map(assets.map((asset) => [asset.id, asset]));
-		let activeCalls = 0;
-		let maxActiveCalls = 0;
-		const call = vi.fn<QueuedToolCall>(async (_name, args) => {
-			activeCalls += 1;
-			maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
-			await Promise.resolve();
-			try {
-				const assetIds = args.asset_ids;
-				if (!Array.isArray(assetIds)) throw new Error("missing asset IDs");
-				return assetResult(
-					...assetIds.map((assetId) => {
-						const asset = byId.get(String(assetId));
-						if (!asset) throw new Error(`unknown fixture asset ${String(assetId)}`);
-						return asset;
-					}),
-				);
-			} finally {
-				activeCalls -= 1;
-			}
-		});
-
-		const resolved = await new AssetStore("session-1").resolve(
-			manifest(...assets),
-			assets.map((asset) => ({ _esm: asset.id })),
-			call,
-		);
-
-		const batches = call.mock.calls.map(([_name, args]) => fixtureStrings(args.asset_ids));
-		expect(batches.map((batch) => batch.length)).toEqual([128, 1]);
-		expect(maxActiveCalls).toBe(1);
-		expect(new Set(batches.flat())).toEqual(new Set(assets.map((asset) => asset.id)));
-		expect(resolved.size).toBe(129);
-		for (const asset of assets) expect(resolved.get(asset.id)).toBe(asset.text);
-	});
-
-	test("reuses verified memory entries across widget sessions", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		const firstCall = vi.fn<QueuedToolCall>(async () => assetResult(esm));
-		const secondCall = vi.fn<QueuedToolCall>(async () => {
-			throw new Error("memory hit should not call the server");
-		});
-
-		await new AssetStore("session-1").resolve(manifest(esm), [{ _esm: esm.id }], firstCall);
-		const resolved = await new AssetStore("session-2").resolve(
-			manifest(esm),
-			[{ _esm: esm.id }],
-			secondCall,
-		);
-
-		expect(secondCall).not.toHaveBeenCalled();
-		expect(resolved.get(esm.id)).toBe(esm.text);
-	});
-
-	test("persists verified assets and reuses them after the memory cache is cleared", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
+	test("verifies cached source bytes before rendering", async () => {
 		const { cache, stored } = installCache();
-		const firstCall = vi.fn<QueuedToolCall>(async () => assetResult(esm));
-
-		await new AssetStore("session-1").resolve(manifest(esm), [{ _esm: esm.id }], firstCall);
-		await vi.waitFor(() => expect(stored.has(cacheKey(esm.id))).toBe(true));
-		clearAssetMemoryCache();
-
-		const secondCall = vi.fn<QueuedToolCall>(async () => {
-			throw new Error("persistent hit should not call the server");
-		});
-		const resolved = await new AssetStore("session-2").resolve(
-			manifest(esm),
-			[{ _esm: esm.id }],
-			secondCall,
+		const source = await fixtureBlob("export default {};");
+		stored.set(
+			`https://anywidget-mcp.invalid/sources/${encodeURIComponent(source.ref.id)}`,
+			new Response("x".repeat(source.bytes.length)),
 		);
-
-		expect(secondCall).not.toHaveBeenCalled();
-		expect(cache.match).toHaveBeenCalledWith(cacheKey(esm.id));
-		expect(resolved.get(esm.id)).toBe(esm.text);
+		const call = vi.fn(async (_name, args) => readResult(source.bytes, args));
+		const resolved = await resolveSources([{ _esm: source.ref }], new AttachmentStore("s"), call);
+		expect(resolved.get(source.ref.id)).toBe("export default {};");
+		expect(cache.delete).toHaveBeenCalledWith(
+			`https://anywidget-mcp.invalid/sources/${encodeURIComponent(source.ref.id)}`,
+		);
+		expect(call).toHaveBeenCalledOnce();
 	});
 
-	test("deletes corrupt persistent content and falls back to the session fetch", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		const { cache } = installCache(new Map([[cacheKey(esm.id), "corrupt source"]]));
-		const call = vi.fn<QueuedToolCall>(async () => assetResult(esm));
-
-		const resolved = await new AssetStore("session-1").resolve(
-			manifest(esm),
-			[{ _esm: esm.id }],
-			call,
+	test("continues through unavailable persistent storage", async () => {
+		vi.stubGlobal("caches", { open: vi.fn().mockRejectedValue(new Error("denied")) });
+		const source = await fixtureBlob("source");
+		const resolved = await resolveSources(
+			[{ _esm: source.ref }],
+			new AttachmentStore("s"),
+			async (_name, args) => readResult(source.bytes, args),
 		);
-
-		expect(cache.delete).toHaveBeenCalledWith(cacheKey(esm.id));
-		expect(call).toHaveBeenCalledWith("anywidget_assets", {
-			instance_id: "session-1",
-			asset_ids: [esm.id],
-		});
-		expect(resolved.get(esm.id)).toBe(esm.text);
-	});
-
-	test("falls back to the session fetch when Cache Storage is unavailable", async () => {
-		const esm = await fixtureAsset("esm", "export default { render() {} }");
-		vi.stubGlobal("caches", {
-			open: vi.fn(async () => Promise.reject(new Error("opaque origin"))),
-		});
-		const call = vi.fn<QueuedToolCall>(async () => assetResult(esm));
-
-		const resolved = await new AssetStore("session-1").resolve(
-			manifest(esm),
-			[{ _esm: esm.id }],
-			call,
-		);
-
-		expect(call).toHaveBeenCalledWith("anywidget_assets", {
-			instance_id: "session-1",
-			asset_ids: [esm.id],
-		});
-		expect(resolved.get(esm.id)).toBe(esm.text);
-	});
-
-	test("rejects malformed, missing, unreferenced, and kind-mismatched manifests before fetching", async () => {
-		const esm = await fixtureAsset("esm", "export default {}");
-		const css = await fixtureAsset("css", ".widget {}");
-		const unusedCall = vi.fn<QueuedToolCall>();
-
-		await expect(
-			new AssetStore("session").resolve(
-				{ "esm:sha256:short": { kind: "esm", byteLength: 1 } },
-				[],
-				unusedCall,
-			),
-		).rejects.toThrow("Invalid widget asset manifest entry esm:sha256:short");
-		await expect(
-			new AssetStore("session").resolve(
-				{ [esm.id]: { kind: "css", byteLength: esm.byteLength } },
-				[{ _esm: esm.id }],
-				unusedCall,
-			),
-		).rejects.toThrow(`Invalid widget asset manifest entry ${esm.id}`);
-		await expect(
-			new AssetStore("session").resolve({}, [{ _esm: esm.id }], unusedCall),
-		).rejects.toThrow(`Missing manifest entry for widget asset ${esm.id}`);
-		await expect(new AssetStore("session").resolve(manifest(esm), [], unusedCall)).rejects.toThrow(
-			`Widget asset manifest contains unreferenced asset ${esm.id}`,
-		);
-		await expect(
-			new AssetStore("session").resolve(manifest(css), [{ _esm: css.id }], unusedCall),
-		).rejects.toThrow(`Widget asset ${css.id} has the wrong source kind for _esm`);
-		expect(unusedCall).not.toHaveBeenCalled();
-	});
-
-	test("rejects asset responses with missing, unexpected, or malformed contents", async () => {
-		const esm = await fixtureAsset("esm", "export default {}");
-		const extra = await fixtureAsset("esm", "export default { render() {} }");
-		const store = new AssetStore("session");
-
-		await expect(
-			store.resolve(manifest(esm), [{ _esm: esm.id }], async () => ({
-				content: [],
-				_meta: { anywidget: { protocolVersion: 2, assetContents: {} } },
-			})),
-		).rejects.toThrow("Widget asset response uses an incompatible protocol version");
-		await expect(
-			store.resolve(manifest(esm), [{ _esm: esm.id }], async () => ({
-				content: [],
-				_meta: { anywidget: { protocolVersion: 1, assetContents: {} } },
-			})),
-		).rejects.toThrow(`Widget asset response is missing ${esm.id}`);
-		await expect(
-			store.resolve(manifest(esm), [{ _esm: esm.id }], async () => assetResult(esm, extra)),
-		).rejects.toThrow(`Widget asset response contains unexpected asset ${extra.id}`);
-		await expect(
-			store.resolve(manifest(esm), [{ _esm: esm.id }], async () => ({
-				content: [],
-				_meta: {
-					anywidget: {
-						protocolVersion: 1,
-						assetContents: {
-							[esm.id]: { kind: "esm", byteLength: esm.byteLength, text: 7 },
-						},
-					},
-				},
-			})),
-		).rejects.toThrow(`Invalid widget asset content ${esm.id}`);
+		expect(resolved.get(source.ref.id)).toBe("source");
 	});
 
 	test.each([
-		["kind", { kind: "css" }],
-		["byte length", { byteLength: 1 }],
-		["digest", { text: "export default []" }],
-	])("rejects fetched content with a mismatched %s", async (_label, override) => {
-		const esm = await fixtureAsset("esm", "export default {}");
-		const content = {
-			kind: esm.kind,
-			byteLength: esm.byteLength,
-			text: esm.text,
-			...override,
-		};
-
-		await expect(
-			new AssetStore("session").resolve(manifest(esm), [{ _esm: esm.id }], async () => ({
-				content: [],
-				_meta: {
-					anywidget: {
-						protocolVersion: 1,
-						assetContents: { [esm.id]: content },
-					},
-				},
-			})),
-		).rejects.toThrow(`Widget asset response failed verification for ${esm.id}`);
+		[{ _esm: "inline" }, "Invalid widget attachment reference"],
+		[{ script: {} }, "Unknown widget source reference script"],
+		["bad", "Widget source references must be an object"],
+	])("rejects malformed source references %j", async (refs, message) => {
+		await expect(resolveSources([refs], new AttachmentStore("s"), vi.fn())).rejects.toThrow(
+			String(message),
+		);
 	});
+
+	test("requires content-addressed source traits", () => {
+		expect(() => hydrateSources({ _esm: "inline" }, {}, new Map())).toThrow(
+			"Widget source _esm must use a content-addressed reference",
+		);
+	});
+});
+
+test("evicts its oldest source after browser quota rejection and retries storage", async () => {
+	const { stored, cache } = installCache();
+	const foreign = "https://another-app.invalid/entry";
+	const oldKey = "https://anywidget-mcp.invalid/sources/old";
+	const recentKey = "https://anywidget-mcp.invalid/sources/recent";
+	stored.set(foreign, new Response("unrelated"));
+	stored.set(oldKey, new Response("old"));
+	stored.set(recentKey, new Response("recent"));
+	cache.put.mockRejectedValueOnce(new DOMException("Storage quota reached", "QuotaExceededError"));
+	const source = await fixtureBlob("export default {};");
+	await resolveSources([{ _esm: source.ref }], new AttachmentStore("s"), async (_name, args) =>
+		readResult(source.bytes, args),
+	);
+	await vi.waitFor(() => expect(cache.put).toHaveBeenCalledTimes(2));
+	expect(stored.has(oldKey)).toBe(false);
+	expect(stored.has(recentKey)).toBe(true);
+	expect(stored.has(foreign)).toBe(true);
+	const response = stored.get(
+		`https://anywidget-mcp.invalid/sources/${encodeURIComponent(source.ref.id)}`,
+	);
+	expect(await response?.text()).toBe("export default {};");
+});
+
+test("loads sources using session attachments when cross-document cache locking is unavailable", async () => {
+	vi.stubGlobal("navigator", {});
+	const open = vi.fn();
+	vi.stubGlobal("caches", { open });
+	const source = await fixtureBlob("export default {};");
+	const call = vi.fn(async (_name, args) => readResult(source.bytes, args));
+	const sources = await resolveSources([{ _esm: source.ref }], new AttachmentStore("s"), call);
+	expect(sources.get(source.ref.id)).toBe("export default {};");
+	expect(open).not.toHaveBeenCalled();
+});
+
+test("loads a source when browser storage remains full after its cache is emptied", async () => {
+	const { cache, stored } = installCache();
+	const foreign = "https://another-app.invalid/entry";
+	stored.set(foreign, new Response("unrelated"));
+	stored.set("https://anywidget-mcp.invalid/sources/old", new Response("old"));
+	cache.put.mockRejectedValue(new DOMException("Storage quota reached", "QuotaExceededError"));
+	const source = await fixtureBlob("export default {};");
+	const sources = await resolveSources(
+		[{ _esm: source.ref }],
+		new AttachmentStore("s"),
+		async (_name, args) => readResult(source.bytes, args),
+	);
+	await vi.waitFor(() => expect(cache.put).toHaveBeenCalledTimes(2));
+	expect(sources.get(source.ref.id)).toBe("export default {};");
+	expect(Array.from(stored.keys())).toEqual([foreign]);
 });

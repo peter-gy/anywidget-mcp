@@ -10,8 +10,7 @@ export interface ModelContextSnapshot {
 
 const MAX_UPDATE_RETRIES = 2;
 
-export type ContextApp = Pick<App, "getHostCapabilities" | "updateModelContext"> &
-	Partial<Pick<App, "getHostVersion">>;
+export type ContextApp = Pick<App, "getHostCapabilities" | "updateModelContext">;
 type ContextRequest = ReturnType<ContextApp["updateModelContext"]>;
 
 interface ContextCoordinator {
@@ -115,19 +114,7 @@ export class ModelContextSync {
 			if (this.disposed) return;
 			const capability = this.app.getHostCapabilities()?.updateModelContext;
 			const state = { tool: snapshot.tool, state: snapshot.state };
-			if (!capability) {
-				// Inspector 12.0.3 implements this request but omits the capability
-				// from its initialization response.
-				if (this.app.getHostVersion?.()?.name !== "mcp-use-inspector") return;
-				await this.sendUpdate(
-					{
-						content: [{ type: "text", text: modelContextText(snapshot) }],
-						structuredContent: state,
-					},
-					snapshot,
-				);
-				return;
-			}
+			if (!capability) return;
 
 			if (capability.structuredContent) {
 				await this.sendUpdate({ structuredContent: state }, snapshot);

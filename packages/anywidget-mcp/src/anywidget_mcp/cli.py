@@ -10,7 +10,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .server import AnyWidgetMCP, WidgetTargetDescription, describe_widget_target
+from ._targets import WidgetTargetDescription, describe_widget_target
+from .server import AnyWidgetMCP
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -36,8 +37,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     server = AnyWidgetMCP(
         server_name,
-        host=arguments.host,
-        port=arguments.port,
         log_level=arguments.log_level,
     )
     try:
@@ -46,9 +45,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     except (TypeError, ValueError) as error:
         parser.error(str(error))
     try:
-        server.run(
-            transport=arguments.transport,
-        )
+        if arguments.transport == "stdio":
+            server.run(transport="stdio")
+        else:
+            server.run(
+                transport="streamable-http",
+                host=arguments.host,
+                port=arguments.port,
+            )
     except KeyboardInterrupt:
         return
 

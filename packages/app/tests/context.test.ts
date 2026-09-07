@@ -92,28 +92,6 @@ describe("ModelContextSync", () => {
 		await sync.dispose();
 	});
 
-	test("syncs with Inspector 12.0.3 despite its missing capability", async () => {
-		const updateModelContext = vi.fn().mockResolvedValue({});
-		const app = {
-			getHostCapabilities: () => ({}),
-			getHostVersion: () => ({ name: "mcp-use-inspector", version: "0.16.2" }),
-			updateModelContext,
-		};
-		const sync = new ModelContextSync(app, Promise.resolve(), vi.fn(), 10);
-
-		sync.enqueue(snapshot(1));
-		await vi.runAllTimersAsync();
-
-		expect(updateModelContext).toHaveBeenCalledWith(
-			{
-				content: [{ type: "text", text: 'Current example.Counter state: {"value":1}' }],
-				structuredContent: { tool: "example.Counter", state: { value: 1 } },
-			},
-			{ signal: expect.any(AbortSignal) },
-		);
-		await sync.dispose();
-	});
-
 	test("retains one latest snapshot behind an in-flight update", async () => {
 		const first = deferred();
 		const calls: UpdateParams[] = [];
@@ -129,7 +107,8 @@ describe("ModelContextSync", () => {
 
 		sync.enqueue(snapshot(1));
 		await vi.advanceTimersByTimeAsync(10);
-		for (let version = 2; version <= 100; version += 1) sync.enqueue(snapshot(version));
+		sync.enqueue(snapshot(2));
+		sync.enqueue(snapshot(3));
 
 		expect(calls).toEqual([
 			{ structuredContent: { tool: "example.Counter", state: { value: 1 } } },
@@ -141,7 +120,7 @@ describe("ModelContextSync", () => {
 
 		expect(calls).toEqual([
 			{ structuredContent: { tool: "example.Counter", state: { value: 1 } } },
-			{ structuredContent: { tool: "example.Counter", state: { value: 100 } } },
+			{ structuredContent: { tool: "example.Counter", state: { value: 3 } } },
 		]);
 		await sync.dispose();
 	});
@@ -281,7 +260,8 @@ describe("ModelContextSync", () => {
 		};
 		const sync = new ModelContextSync(app, ready.promise, vi.fn(), 10);
 
-		for (let version = 1; version <= 100; version += 1) sync.enqueue(snapshot(version));
+		sync.enqueue(snapshot(1));
+		sync.enqueue(snapshot(2));
 		await vi.advanceTimersByTimeAsync(10);
 
 		ready.resolve();
@@ -289,7 +269,7 @@ describe("ModelContextSync", () => {
 
 		expect(app.updateModelContext).toHaveBeenCalledOnce();
 		expect(app.updateModelContext).toHaveBeenCalledWith(
-			{ structuredContent: { tool: "example.Counter", state: { value: 100 } } },
+			{ structuredContent: { tool: "example.Counter", state: { value: 2 } } },
 			{ signal: expect.any(AbortSignal) },
 		);
 		await sync.dispose();

@@ -4,7 +4,7 @@ This distribution includes compiled browser code from the packages listed here.
 The license files supplied by each package follow its name and version.
 
 ===============================================================================
-@modelcontextprotocol/ext-apps 1.7.4
+@modelcontextprotocol/ext-apps 1.7.5
 ===============================================================================
 
 --- LICENSE ---
@@ -226,7 +226,7 @@ Documentation in this project (excluding specifications) is licensed under
 CC-BY-4.0. See https://creativecommons.org/licenses/by/4.0/legalcode for
 the full license text.
 ===============================================================================
-@modelcontextprotocol/sdk 1.29.0
+@modelcontextprotocol/sdk 1.30.0
 ===============================================================================
 
 --- LICENSE ---
@@ -253,7 +253,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ===============================================================================
-es-module-lexer 2.3.1
+es-module-lexer 2.3.2
 ===============================================================================
 
 --- LICENSE ---

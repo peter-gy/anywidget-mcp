@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -23,12 +23,13 @@ classifiers = [
 	"Typing :: Typed",
 ]
 dependencies = [
-	"anyio>=4.5",
-	"anywidget>=0.11.0",
-	"mcp>=1.28.1,<2",
-	"pydantic>=2.11,<3",
-	"starlette>=0.27",
-	"traitlets>=5.15.1",
+	"anyio==4.15.1",
+	"anywidget==0.11.0",
+	"mcp==2.1.1",
+	"pydantic==2.13.5",
+	"starlette==1.6.0",
+	"traitlets==5.16.1",
+	"typing-extensions==4.16.0",
 ]
 
 [project.urls]
@@ -40,7 +41,7 @@ Repository = "https://github.com/peter-gy/anywidget-mcp"
 anywidget-mcp = "anywidget_mcp.cli:main"
 
 [dependency-groups]
-dev = ["hatchling"]
+dev = ["hatchling==1.32.0"]
 
 [tool.hatch.build]
 only-packages = true

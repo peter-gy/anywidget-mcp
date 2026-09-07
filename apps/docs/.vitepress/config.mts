@@ -51,6 +51,7 @@ export default defineConfig({
 	],
 	lastUpdated: true,
 	srcDir: "../../docs",
+	sitemap: { hostname: siteUrl },
 	vite: { publicDir },
 	themeConfig: {
 		logo: {
@@ -65,29 +66,35 @@ export default defineConfig({
 		},
 		nav: [
 			{ text: "Getting started", link: "/getting-started" },
-			{
-				text: "Guides",
-				items: [
-					{ text: "Share state with the model", link: "/state" },
-					{ text: "Pass input to widgets", link: "/factories" },
-					{ text: "Deployment", link: "/deployment" },
-				],
-			},
-			{ text: "How it works", link: "/how-it-works" },
+			{ text: "Guides", link: "/authoring" },
 			{ text: "API reference", link: "/api" },
 		],
 		search: { provider: "local" },
 		sidebar: [
 			{
-				text: "anywidget-mcp",
+				text: "Start",
 				items: [
 					{ text: "Overview", link: "/" },
 					{ text: "Getting started", link: "/getting-started" },
-					{ text: "Share state with the model", link: "/state" },
-					{ text: "Pass input to widgets", link: "/factories" },
-					{ text: "Deployment", link: "/deployment" },
 					{ text: "How it works", link: "/how-it-works" },
+				],
+			},
+			{
+				text: "Build",
+				items: [
+					{ text: "Write a widget", link: "/authoring" },
+					{ text: "Pass input to widgets", link: "/factories" },
+					{ text: "Share state with the model", link: "/state" },
+					{ text: "Work with large widgets", link: "/large-widgets" },
+					{ text: "Combine widgets and tools", link: "/composition" },
+					{ text: "Create widgets from source", link: "/generated-widgets" },
+				],
+			},
+			{
+				text: "Reference",
+				items: [
 					{ text: "API reference", link: "/api" },
+					{ text: "Deployment", link: "/deployment" },
 				],
 			},
 		],

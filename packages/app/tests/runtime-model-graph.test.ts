@@ -18,6 +18,82 @@ import {
 } from "./runtime-test-support";
 
 describe("WidgetRuntime launch and model graph", () => {
+	test("publishes the latest nested context after the complete graph transaction", async () => {
+		vi.useFakeTimers();
+		const initializing = deferred<void>();
+		const runNested = deferred<void>();
+		const nestedComplete = deferred<void>();
+		const finishInitialize = deferred<void>();
+		const updateModelContext = vi.fn().mockResolvedValue({});
+		const calls = fakeQueue(
+			async (_name, args) => ({
+				content: [],
+				_meta: {
+					anywidget:
+						args.operation_id === 1
+							? {
+									models: { child: { state: { _esm: "export default {}" } } },
+									context: { version: 2, tool: "probe", state: { value: 1 } },
+								}
+							: { context: { version: 3, tool: "probe", state: { value: 2 } } },
+				},
+			}),
+			async () => ({ content: [] }),
+		);
+		const runtime = new WidgetRuntime(
+			{
+				instanceId: "instance-1",
+				rootModelId: "root",
+				models: { root: { state: { _esm: "export default {}" } } },
+			},
+			calls,
+			{
+				getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
+				updateModelContext,
+			},
+			Promise.resolve(),
+			(owner, model) => ({
+				async initialize() {
+					if (model.modelId !== "child") return;
+					initializing.resolve(undefined);
+					await runNested.promise;
+					await owner.send("child", { method: "custom" }, []);
+					nestedComplete.resolve(undefined);
+					await finishInitialize.promise;
+				},
+				async render() {},
+				async getExports() {
+					return {};
+				},
+				async dispose() {},
+			}),
+		);
+		const transaction = runtime.send("root", { method: "custom" }, []);
+		try {
+			await initializing.promise;
+			await vi.runOnlyPendingTimersAsync();
+			expect(updateModelContext).not.toHaveBeenCalled();
+			runNested.resolve(undefined);
+			await nestedComplete.promise;
+			await vi.runOnlyPendingTimersAsync();
+			expect(updateModelContext).not.toHaveBeenCalled();
+			finishInitialize.resolve(undefined);
+			await transaction;
+			await vi.runOnlyPendingTimersAsync();
+
+			expect(updateModelContext).toHaveBeenCalledExactlyOnceWith(
+				{ structuredContent: { tool: "probe", state: { value: 2 } } },
+				{ signal: expect.any(AbortSignal) },
+			);
+		} finally {
+			runNested.resolve(undefined);
+			finishInitialize.resolve(undefined);
+			await transaction.catch(() => undefined);
+			await runtime.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	test("aborts a stalled mount before render and disposes its server session once", async () => {
 		const initializing = deferred<void>();
 		const release = deferred<void>();
@@ -291,7 +367,7 @@ describe("WidgetRuntime launch and model graph", () => {
 				});
 		});
 
-		await runtime.send(rootId, { method: "update", state: {} }, [], "operation-1");
+		await runtime.send(rootId, { method: "update", state: {} }, []);
 		await resolvedWidget;
 
 		expect(events.indexOf("message:parent")).toBeLessThan(events.indexOf(`initialize:${newId}`));
@@ -306,7 +382,8 @@ describe("WidgetRuntime launch and model graph", () => {
 				model_id: rootId,
 				data: { method: "update", state: {} },
 				buffers: [],
-				operation_id: "operation-1",
+				operation_id: 1,
+				acknowledged_operation_id: 0,
 			},
 			expect.any(AbortSignal),
 		);
@@ -333,7 +410,7 @@ describe("WidgetRuntime launch and model graph", () => {
 					pollAcknowledgments.push(fixtureStrings(request.arguments?.acknowledged_model_ids));
 					return { content: [] };
 				}
-				if (request.arguments?.operation_id === "outer-operation") {
+				if (request.arguments?.operation_id === 1) {
 					return outerResult.promise;
 				}
 				const data = fixtureRecord(request.arguments?.data);
@@ -392,7 +469,7 @@ describe("WidgetRuntime launch and model graph", () => {
 				},
 			);
 			await runtime.mount(document.createElement("div"));
-			const outer = runtime.send(rootId, { method: "update", state: {} }, [], "outer-operation");
+			const outer = runtime.send(rootId, { method: "update", state: {} }, []);
 
 			await vi.advanceTimersByTimeAsync(500);
 			expect(pollAcknowledgments).toEqual([]);
@@ -471,12 +548,7 @@ describe("WidgetRuntime launch and model graph", () => {
 				}),
 			);
 
-			const sending = runtime.send(
-				"root-model",
-				{ method: "update", state: {} },
-				[],
-				"remove-child",
-			);
+			const sending = runtime.send("root-model", { method: "update", state: {} }, []);
 			const rejected = expect(sending).rejects.toThrow(
 				"Timed out while disposing anywidget binding",
 			);
@@ -558,9 +630,9 @@ describe("WidgetRuntime launch and model graph", () => {
 			}),
 		);
 
-		await expect(
-			runtime.send(rootId, { method: "update", state: {} }, [], "operation-1"),
-		).rejects.toThrow("initialize failed");
+		await expect(runtime.send(rootId, { method: "update", state: {} }, [])).rejects.toThrow(
+			"initialize failed",
+		);
 
 		expect(() => runtime.model(firstId)).toThrow("Unknown anywidget model");
 		expect(() => runtime.model(failedId)).toThrow("Unknown anywidget model");

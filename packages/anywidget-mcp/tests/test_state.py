@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from typing import Any, overload
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from typing import Any, cast, overload
 
 import pytest
 from anywidget import AnyWidget
@@ -41,7 +41,7 @@ class ObservationWidget(StateWidget):
     def observe(
         self,
         handler: Callable[..., Any],
-        names: Sentinel | str | Iterable[Sentinel | str] = All,
+        names: Sentinel | str | Collection[Sentinel | str] = All,
         type: Sentinel | str = "change",
     ) -> None:
         super().observe(handler, names=names, type=type)
@@ -55,7 +55,7 @@ class ObservationWidget(StateWidget):
     def unobserve(
         self,
         handler: Callable[..., Any],
-        names: Sentinel | str | Iterable[Sentinel | str] = All,
+        names: Sentinel | str | Collection[Sentinel | str] = All,
         type: Sentinel | str = "change",
     ) -> None:
         super().unobserve(handler, names=names, type=type)
@@ -85,7 +85,7 @@ class RegistrationMutationWidget(StateWidget):
     def observe(
         self,
         handler: Callable[..., Any],
-        names: Sentinel | str | Iterable[Sentinel | str] = All,
+        names: Sentinel | str | Collection[Sentinel | str] = All,
         type: Sentinel | str = "change",
     ) -> None:
         if getattr(self, "mutate_during_state_observe", False) and isinstance(
@@ -324,10 +324,9 @@ def test_callable_projection_summarizes_recursive_and_oversized_values() -> None
         lambda _widget: {
             "recursive": recursive,
             "binary": [b"abc"],
-            "large": "x" * 20_000,
-            "many": list(range(10_000)),
             "memoryview": view,
             "ratio": float("inf"),
+            "large": "x" * 20_000,
         },
     )
 
@@ -343,30 +342,18 @@ def test_callable_projection_summarizes_recursive_and_oversized_values() -> None
     assert update.state["large"] == {
         "type": "string",
         "characters": 20_000,
-        "preview": "x" * 240,
+        "truncated": True,
+        "preview": "x" * len(update.state["large"]["preview"]),
     }
-    many = update.state["many"]
-    assert many["type"] == "sequence"
-    assert many["length"] == 10_000
-    assert many["omitted"] == 9_950
-    assert many["items"][:3] == [0, 1, 2]
     assert update.state["memoryview"] == {"type": "binary", "bytes": 12}
     assert update.state["ratio"] == {"type": "float", "value": "inf"}
 
 
-def test_callable_projection_bounds_collection_reads_and_large_integers() -> None:
+@pytest.mark.parametrize("collection", [CountingMapping, CountingSequence])
+def test_callable_projection_bounds_collection_reads(collection: Any) -> None:
     widget = StateWidget()
-    mapping = CountingMapping(10_000)
-    sequence = CountingSequence(10_000)
-    context = StateContext(
-        widget,
-        [widget],
-        lambda _widget: {
-            "integer": 10**10_000,
-            "mapping": mapping,
-            "sequence": sequence,
-        },
-    )
+    values = collection(10_000)
+    context = StateContext(widget, [widget], lambda _widget: {"values": values})
 
     try:
         update = context.take()
@@ -375,20 +362,18 @@ def test_callable_projection_bounds_collection_reads_and_large_integers() -> Non
         widget.close()
 
     assert update is not None
-    assert update.state["integer"] == {
-        "type": "integer",
-        "bits": 33_220,
-        "sign": "positive",
-    }
-    assert 0 < mapping.reads < mapping.length
-    assert 0 < sequence.reads < sequence.length
-    assert update.state["mapping"]["_summary"] == {
-        "type": "mapping",
-        "entries": 10_000,
-        "omitted": 9_950,
-    }
-    assert update.state["sequence"]["length"] == 10_000
-    assert update.state["sequence"]["omitted"] == 9_950
+    assert 0 < values.reads < values.length
+    assert len(json.dumps(update.state, separators=(",", ":")).encode()) <= 8_000
+    projected = update.state["values"]
+    if isinstance(values, Mapping):
+        summary = projected["_summary"]
+        assert summary["entries"] == 10_000
+        assert summary["omitted"] == 10_000 - (len(projected) - 1)
+        assert projected["0"] == 0
+    else:
+        assert projected["length"] == 10_000
+        assert projected["omitted"] == 10_000 - len(projected["items"])
+        assert projected["items"][:3] == [0, 1, 2]
 
 
 def test_projection_summarizes_integers_outside_json_safe_range() -> None:
@@ -400,6 +385,7 @@ def test_projection_summarizes_integers_outside_json_safe_range() -> None:
             "max_safe": (1 << 53) - 1,
             "positive": 1 << 53,
             "negative": -(1 << 53),
+            "large": 10**10_000,
         },
     )
 
@@ -411,6 +397,7 @@ def test_projection_summarizes_integers_outside_json_safe_range() -> None:
 
     assert update is not None
     assert update.state == {
+        "large": {"type": "integer", "bits": 33_220, "sign": "positive"},
         "max_safe": (1 << 53) - 1,
         "negative": {"type": "integer", "bits": 54, "sign": "negative"},
         "positive": {"type": "integer", "bits": 54, "sign": "positive"},
@@ -433,9 +420,15 @@ def test_top_level_projection_mapping_reads_are_bounded() -> None:
     summaries = [
         value
         for value in update.state.values()
-        if isinstance(value, dict) and value.get("type") == "projection"
+        if isinstance(value, dict) and value.get("type") == "mapping"
     ]
-    assert summaries == [{"type": "projection", "omitted": 9_950, "traits": ["50"]}]
+    assert summaries == [
+        {
+            "type": "mapping",
+            "entries": 10_000,
+            "omitted": 10_000 - (len(update.state) - 1),
+        }
+    ]
 
 
 def test_projection_has_one_aggregate_traversal_budget() -> None:
@@ -458,14 +451,8 @@ def test_projection_has_one_aggregate_traversal_budget() -> None:
         widget.close()
 
     assert update is not None
-    assert reads[0] + tail.reads <= 2_000
-    assert len(json.dumps(update.state).encode()) < 10_000
-    assert update.state["tail"] == {
-        "type": "sequence",
-        "items": [],
-        "omitted": 1,
-        "lengthAtLeast": 1,
-    }
+    assert reads[0] + tail.reads <= 8_000
+    assert len(json.dumps(update.state, separators=(",", ":")).encode()) <= 8_000
 
 
 def test_callable_projection_observes_dynamically_added_widgets() -> None:
@@ -763,10 +750,223 @@ def test_aggregate_projection_is_bounded_after_omission_summary() -> None:
 
     assert update is not None
     encoded = json.dumps(update.state, separators=(",", ":")).encode()
-    assert len(encoded) < 10_000
+    assert len(encoded) <= 8_000
     summaries = [
         value
         for value in update.state.values()
-        if isinstance(value, dict) and value.get("type") == "projection"
+        if isinstance(value, dict) and value.get("type") == "mapping"
     ]
     assert summaries and summaries[0]["omitted"] > 0
+
+
+@pytest.mark.parametrize(
+    "projected",
+    [
+        {"rows": list(range(200))},
+        {"text": "x" * 4_000},
+        {"k" * 1_000: "value"},
+        {str(index): index for index in range(200)},
+    ],
+)
+def test_state_projection_preserves_complete_values_within_its_byte_budget(
+    projected: dict[str, Any],
+) -> None:
+    widget = StateWidget()
+    session = WidgetSession(
+        "instance", widget, StateProjection(lambda _widget: projected)
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        assert update.state == projected
+    finally:
+        session.close()
+
+
+def test_state_projection_preserves_nested_json_values() -> None:
+    projected: Any = "leaf"
+    for _ in range(20):
+        projected = cast(Any, {"child": [projected]})
+    widget = StateWidget()
+    session = WidgetSession(
+        "instance", widget, StateProjection(lambda _widget: projected)
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        assert update.state == projected
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("max_bytes", [500, 16_000, None])
+def test_state_projection_budget_changes_context_and_preserves_widget_data(
+    max_bytes: int | None,
+) -> None:
+    widget = StateWidget(label="x" * 12_000)
+    session = WidgetSession(
+        "instance",
+        widget,
+        StateProjection(lambda current: {"label": current.label}, max_bytes=max_bytes),
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        if max_bytes == 500:
+            assert update.state == {
+                "label": {
+                    "type": "string",
+                    "characters": 12_000,
+                    "truncated": True,
+                    "preview": "x" * 424,
+                }
+            }
+        else:
+            assert update.state == {"label": "x" * 12_000}
+        assert widget.label == "x" * 12_000
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("max_bytes", [2, 20, 80, 200, 800, 8_000])
+def test_state_projection_includes_summaries_in_the_encoded_byte_budget(
+    max_bytes: int,
+) -> None:
+    widget = StateWidget()
+    session = WidgetSession(
+        "instance",
+        widget,
+        StateProjection(
+            lambda _widget: {f"é{index}\n": ["💡" * 100] * 10 for index in range(100)},
+            max_bytes=max_bytes,
+        ),
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        encoded = json.dumps(
+            update.state, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        assert len(encoded) <= max_bytes
+        assert json.loads(encoded) == update.state
+    finally:
+        session.close()
+
+
+def test_state_projection_preserves_a_value_that_exactly_fits_its_budget() -> None:
+    projected = {"é\n": "💡" * 100, "items": list(range(200))}
+    max_bytes = len(
+        json.dumps(projected, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    widget = StateWidget()
+    session = WidgetSession(
+        "instance",
+        widget,
+        StateProjection(lambda _widget: projected, max_bytes=max_bytes),
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        assert update.state == projected
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("max_bytes", [0, 1, -1, True, 1.5, "8000"])
+def test_state_projection_requires_a_byte_budget_that_fits_a_json_mapping(
+    max_bytes: Any,
+) -> None:
+    with pytest.raises(ValueError, match="integer of at least 2 or None"):
+        StateProjection(lambda _widget: {}, max_bytes=max_bytes)
+
+
+@pytest.mark.parametrize("duplicate_keys", [False, True])
+def test_state_projection_bounds_unknown_length_mapping_iteration(
+    duplicate_keys: bool,
+) -> None:
+    class InfiniteMapping(Mapping[str, int]):
+        reads = 0
+
+        def __iter__(self) -> Iterator[str]:
+            while True:
+                self.reads += 1
+                assert self.reads <= 500
+                yield "duplicate" if duplicate_keys else str(self.reads)
+
+        def __getitem__(self, key: str) -> int:
+            return 1
+
+        def __len__(self) -> int:
+            raise TypeError("length is unavailable")
+
+    projected = InfiniteMapping()
+    widget = StateWidget()
+    session = WidgetSession(
+        "instance", widget, StateProjection(lambda _widget: projected, max_bytes=500)
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        assert 0 < projected.reads <= 500
+        assert update.state["_summary"]["omitted"] > 0
+        assert len(json.dumps(update.state, separators=(",", ":")).encode()) <= 500
+    finally:
+        session.close()
+
+
+def test_state_projection_reports_the_python_recursion_boundary() -> None:
+    import sys
+
+    projected: Any = "leaf"
+    for _ in range(sys.getrecursionlimit()):
+        projected = cast(Any, {"child": projected})
+    widget = StateWidget()
+    session = WidgetSession(
+        "instance", widget, StateProjection(lambda _widget: projected, max_bytes=None)
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        assert update.state == {"type": "projection", "recursionLimited": True}
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("character", ["x", "💡", "\n", '"'])
+def test_state_projection_string_preview_uses_the_available_encoded_bytes(
+    character: str,
+) -> None:
+    widget = StateWidget(label=character * 20_000)
+    session = WidgetSession(
+        "instance",
+        widget,
+        StateProjection(lambda current: {"label": current.label}),
+    )
+    try:
+        update = session.take_projection()
+        assert update is not None
+        summary = update.state["label"]
+        preview = summary["preview"]
+        assert summary == {
+            "type": "string",
+            "characters": 20_000,
+            "truncated": True,
+            "preview": character * len(preview),
+        }
+        assert preview and widget.label.startswith(preview)
+        encoded = json.dumps(
+            update.state, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        assert len(encoded) <= 8_000
+        extended = {"label": {**summary, "preview": preview + character}}
+        assert (
+            len(
+                json.dumps(extended, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            )
+            > 8_000
+        )
+        assert json.loads(encoded)["label"]["preview"] == preview
+    finally:
+        session.close()

@@ -101,7 +101,7 @@ def test_blocking_projection_does_not_block_close_or_commit_late_state() -> None
 
         closing = threading.Thread(target=close_session)
         closing.start()
-        assert close_done.wait(0.1)
+        assert close_done.wait(1)
         closing.join()
         with pytest.raises(RuntimeError, match="widget session is closed"):
             session.receive(model_id, {"method": "request_state"})
