@@ -1,0 +1,21 @@
+packages/anywidget-mcp/pyproject.toml
+  s_714d3a9b445793::t_066ac2fd328647 7
+uv.lock
+  ai_agent 86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "77b0fc079a58f0d36c76d7612bc56c1168ecaebf",
+  "prompts": {},
+  "sessions": {
+    "s_714d3a9b445793": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07d8e-4aa5-7061-91e4-a891c8865299",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
