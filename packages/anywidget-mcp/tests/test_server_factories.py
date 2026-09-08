@@ -15,7 +15,8 @@ from traitlets import Bytes
 
 import anywidget_mcp._runtime as runtime_module
 from anywidget_mcp._attachments import Attachments
-from anywidget_mcp import AnyWidgetMCP, StateProjection
+from anywidget_mcp import StateProjection
+from anywidget_mcp.server import AnyWidgetMCP
 from anywidget_mcp._factory import FactoryOwner
 from anywidget_mcp._runtime import SessionRuntime
 from anywidget_mcp._state import DEFAULT_STATE

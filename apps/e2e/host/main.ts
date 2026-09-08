@@ -188,7 +188,8 @@ read.addEventListener("click", () => {
 		.catch(report);
 });
 
-await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", location.href)));
+const endpoint = new URLSearchParams(location.search).has("webmcp") ? "/webmcp/mcp" : "/mcp";
+await client.connect(new StreamableHTTPClientTransport(new URL(endpoint, location.href)));
 const listing = await client.listTools();
 for (const entry of listing.tools) {
 	const uri = getToolUiResourceUri(entry);

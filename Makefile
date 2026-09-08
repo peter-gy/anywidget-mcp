@@ -7,9 +7,9 @@ check:
 	$(VP) run -r test
 	$(VP) run -r build
 	uv lock --check
-	uv run ruff format --check packages/anywidget-mcp scripts apps/e2e/server.py
-	uv run ruff check packages/anywidget-mcp scripts apps/e2e/server.py
-	uv run ty check packages/anywidget-mcp scripts apps/e2e/server.py
+	uv run ruff format --check packages/anywidget-mcp scripts apps/e2e
+	uv run ruff check packages/anywidget-mcp scripts apps/e2e
+	uv run ty check packages/anywidget-mcp scripts apps/e2e
 	uv run pyrefly check --min-severity warn
 	uv run pytest -q packages/anywidget-mcp/tests
 	pnpm --filter @anywidget-mcp/e2e e2e
@@ -36,4 +36,4 @@ package-artifacts:
 	mkdir -p dist/from-sdist
 	uv build --wheel "$$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)" --out-dir dist/from-sdist
 	uv run --no-project --with "$$(find dist/from-sdist -name '*.whl' -print -quit)" python -c 'from importlib.resources import files; import anywidget_mcp; assert files("anywidget_mcp").joinpath("static/index.html").read_bytes().startswith(b"<!doctype html>")'
-	uv run --no-project --with "$$(find dist/from-sdist -name '*.whl' -print -quit)" anywidget-mcp --help >/dev/null
+	uv run --no-project --with "$$(find dist/from-sdist -name '*.whl' -print -quit)[server]" anywidget-mcp --help >/dev/null

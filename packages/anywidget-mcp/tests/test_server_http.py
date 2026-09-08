@@ -4,7 +4,7 @@ import pytest
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.testclient import TestClient
 
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 
 
 @pytest.mark.parametrize(

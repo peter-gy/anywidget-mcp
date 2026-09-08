@@ -20,7 +20,7 @@ The dataset stays in Python while the browser requests what the view needs.
 Install the packages in your server environment:
 
 ```sh
-uv pip install anywidget-mcp 'embedding-atlas==0.24.0'
+uv pip install 'anywidget-mcp[server]' 'embedding-atlas==0.24.0'
 ```
 
 Atlas 0.24 uses [WebGPU](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API)
@@ -40,7 +40,8 @@ from contextlib import contextmanager
 import duckdb
 from embedding_atlas.widget import EmbeddingAtlasWidget
 
-from anywidget_mcp import AnyWidgetMCP, StateProjection
+from anywidget_mcp import StateProjection
+from anywidget_mcp.server import AnyWidgetMCP
 
 mcp = AnyWidgetMCP(
     "Dataset tools",

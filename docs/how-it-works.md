@@ -8,7 +8,7 @@ values selected by the tool's `state` option.
 ## Tool, widget, and model-visible state
 
 ```python
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from wigglystuff import ColorPicker
 
 mcp = AnyWidgetMCP("Color tools")

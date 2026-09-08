@@ -64,7 +64,7 @@ You can repeat the public installation check with:
 ```sh
 uv run --no-cache --no-project --isolated \
   --default-index https://pypi.org/simple \
-  --with 'anywidget-mcp==0.0.3' \
+  --with 'anywidget-mcp[server]==0.0.3' \
   python scripts/verify_release.py 0.0.3
 ```
 

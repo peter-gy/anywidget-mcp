@@ -8,7 +8,7 @@ state between Python and the browser.
 Install the package in your Python environment:
 
 ```sh
-uv pip install anywidget-mcp
+uv pip install 'anywidget-mcp[server]'
 ```
 
 ## Create a counter
@@ -69,7 +69,7 @@ rendering, initialization, and model methods.
 ## Run from Python
 
 ```python
-from anywidget_mcp import serve
+from anywidget_mcp.server import serve
 from counter import Counter
 
 serve(Counter, state="value")

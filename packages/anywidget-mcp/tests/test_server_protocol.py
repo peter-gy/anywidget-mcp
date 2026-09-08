@@ -6,7 +6,7 @@ import pytest
 from anywidget import AnyWidget
 from mcp.types import TextContent
 
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from anywidget_mcp._bridge import SessionSnapshot, WidgetSession
 
 from ._server_support import (

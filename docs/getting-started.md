@@ -14,7 +14,7 @@ Serve `ColorPicker` from [Wigglystuff](https://koaning.github.io/wigglystuff/),
 a collection of AnyWidgets:
 
 ```sh
-uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
+uvx --from 'anywidget-mcp[server]' --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
 The command keeps running and exposes the `color_picker` tool at

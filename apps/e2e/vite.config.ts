@@ -6,6 +6,12 @@ export default defineConfig({
 		host: "127.0.0.1",
 		port: 4173,
 		strictPort: true,
-		proxy: { "/mcp": "http://127.0.0.1:8766" },
+		proxy: {
+			"/mcp": "http://127.0.0.1:8766",
+			"/webmcp": {
+				target: "http://127.0.0.1:8767",
+				rewrite: (path) => path.replace(/^\/webmcp/, ""),
+			},
+		},
 	},
 });

@@ -26,6 +26,17 @@ from ._widget_tools import (
     WidgetTools,
 )
 
+__all__ = [
+    "APP_MIME_TYPE",
+    "APP_RESOURCE_URI",
+    "AnyWidgetMCP",
+    "AppCSP",
+    "AppPermissions",
+    "WidgetTools",
+    "attach",
+    "serve",
+]
+
 Transport = Literal["streamable-http", "stdio"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 

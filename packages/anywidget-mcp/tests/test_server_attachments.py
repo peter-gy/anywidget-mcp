@@ -13,7 +13,7 @@ from traitlets import Any as TraitAny
 from traitlets import Bytes, Unicode, observe
 
 import anywidget_mcp._attachments as attachment_module
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 
 from ._server_support import (
     bootstrap_id,

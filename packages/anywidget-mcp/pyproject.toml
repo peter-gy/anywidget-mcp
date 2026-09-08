@@ -1,17 +1,17 @@
 [build-system]
-requires = ["hatchling==1.32.0"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "anywidget-mcp"
 version = "0.1.1"
-description = "Expose AnyWidget interfaces as interactive MCP Apps"
+description = "Expose AnyWidget interfaces through MCP Apps and WebMCP"
 readme = "README.md"
 authors = [{ name = "Péter Ferenc Gyarmati", email = "dev.petergy@gmail.com" }]
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES"]
 requires-python = ">=3.11"
-keywords = ["anywidget", "mcp", "model-context-protocol"]
+keywords = ["anywidget", "mcp", "model-context-protocol", "webmcp"]
 classifiers = [
 	"Development Status :: 3 - Alpha",
 	"Intended Audience :: Developers",
@@ -22,15 +22,7 @@ classifiers = [
 	"Programming Language :: Python :: 3.14",
 	"Typing :: Typed",
 ]
-dependencies = [
-	"anyio==4.15.1",
-	"anywidget==0.11.0",
-	"mcp==2.1.1",
-	"pydantic==2.13.5",
-	"starlette==1.6.0",
-	"traitlets==5.16.1",
-	"typing-extensions==4.16.0",
-]
+dependencies = ["anywidget>=0.11", "ipywidgets>=8.1", "traitlets>=5.14"]
 
 [project.urls]
 Documentation = "https://peter-gy.github.io/anywidget-mcp/"
@@ -40,8 +32,11 @@ Repository = "https://github.com/peter-gy/anywidget-mcp"
 [project.scripts]
 anywidget-mcp = "anywidget_mcp.cli:main"
 
+[project.optional-dependencies]
+server = ["anyio>=4", "mcp>=2", "pydantic>=2.10", "starlette>=1.6", "typing-extensions>=4.6"]
+
 [dependency-groups]
-dev = ["hatchling==1.32.0"]
+dev = ["hatchling>=1.27"]
 
 [tool.hatch.build]
 only-packages = true

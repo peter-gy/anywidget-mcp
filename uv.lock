@@ -2,11 +2,9 @@ version = 1
 revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.14'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version < '3.14' and sys_platform == 'win32'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32')",
+    "(python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
 ]
 
 [options]
@@ -20,13 +18,14 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
-    { name = "marimo", extras = ["recommended"], specifier = "==0.24.0" },
-    { name = "pyrefly", specifier = "==1.2.0" },
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "ruff", specifier = "==0.16.6" },
-    { name = "twine", specifier = "==7.0.0" },
-    { name = "ty", specifier = "==0.0.78" },
-    { name = "wigglystuff", specifier = "==0.5.32" },
+    { name = "anywidget-mcp", extras = ["server"], editable = "packages/anywidget-mcp" },
+    { name = "marimo", extras = ["recommended"], specifier = ">=0.24.0" },
+    { name = "pyrefly", specifier = ">=1.2.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.16.6" },
+    { name = "twine", specifier = ">=7.0.0" },
+    { name = "ty", specifier = ">=0.0.78" },
+    { name = "wigglystuff", specifier = ">=0.5.32" },
 ]
 
 [[package]]
@@ -86,12 +85,17 @@ name = "anywidget-mcp"
 version = "0.1.1"
 source = { editable = "packages/anywidget-mcp" }
 dependencies = [
-    { name = "anyio" },
     { name = "anywidget" },
+    { name = "ipywidgets" },
+    { name = "traitlets" },
+]
+
+[package.optional-dependencies]
+server = [
+    { name = "anyio" },
     { name = "mcp" },
     { name = "pydantic" },
     { name = "starlette" },
-    { name = "traitlets" },
     { name = "typing-extensions" },
 ]
 
@@ -102,17 +106,19 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anyio", specifier = "==4.15.1" },
-    { name = "anywidget", specifier = "==0.11.0" },
-    { name = "mcp", specifier = "==2.1.1" },
-    { name = "pydantic", specifier = "==2.13.5" },
-    { name = "starlette", specifier = "==1.6.0" },
-    { name = "traitlets", specifier = "==5.16.1" },
-    { name = "typing-extensions", specifier = "==4.16.0" },
+    { name = "anyio", marker = "extra == 'server'", specifier = ">=4" },
+    { name = "anywidget", specifier = ">=0.11" },
+    { name = "ipywidgets", specifier = ">=8.1" },
+    { name = "mcp", marker = "extra == 'server'", specifier = ">=2" },
+    { name = "pydantic", marker = "extra == 'server'", specifier = ">=2.10" },
+    { name = "starlette", marker = "extra == 'server'", specifier = ">=1.6" },
+    { name = "traitlets", specifier = ">=5.14" },
+    { name = "typing-extensions", marker = "extra == 'server'", specifier = ">=4.6" },
 ]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "hatchling", specifier = "==1.32.0" }]
+dev = [{ name = "hatchling", specifier = ">=1.27" }]
 
 [[package]]
 name = "asttokens"

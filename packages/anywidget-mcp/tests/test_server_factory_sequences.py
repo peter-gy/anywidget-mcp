@@ -8,7 +8,7 @@ import anyio
 import pytest
 from mcp.types import TextContent
 
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from anywidget_mcp._factory import FactoryOwner
 from anywidget_mcp._runtime import SessionRuntime
 from anywidget_mcp._state import DEFAULT_STATE

@@ -1,8 +1,39 @@
 # API reference
 
-The Python package exports registration, composition, state projection, and
+The Python package exports registration, composition, and
 [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) resource
-types from `anywidget_mcp`.
+types from `anywidget_mcp.server`. Import `StateProjection`, `create_anywidget`,
+and the `webmcp` feature module from `anywidget_mcp`.
+
+## `webmcp.enable()`
+
+```python
+from anywidget_mcp import webmcp
+
+webmcp.enable()
+```
+
+Enables WebMCP tools for current and future `anywidget.AnyWidget` instances in
+this Python session. Rendered widgets register read and update tools through
+their existing host connection. Repeated calls leave the enabled session
+unchanged. Returns `None`.
+
+Startup failures restore host hooks and widget serialization before propagating
+the error. Browser tools require WebMCP support and host permission. See
+[Expose widgets with WebMCP](./webmcp) for state exposure and validation.
+
+## `webmcp.disable()`
+
+Restores current widgets and stops enabling WebMCP for future instances. Widgets
+remain open and interactive. Repeated calls are harmless. Returns `None`.
+
+Cleanup attempts every widget. Host delivery failures raise an `ExceptionGroup`
+after cleanup, with the Python session disabled.
+
+## `webmcp.is_enabled()`
+
+Returns `True` when WebMCP is enabled in this Python session, otherwise `False`.
+Browser tool availability also depends on rendering and host permissions.
 
 ## `serve()`
 
@@ -223,10 +254,11 @@ anywidget-mcp serve anywidget_mcp:create_anywidget
 JavaScript loads in the app iframe. Run this factory in a sandbox with scoped
 filesystem, network, credential, and process access.
 
-Compilation, class selection, execution, and construction failures raise the
-Python SDK's `ToolError`. Its message includes the original exception type,
-the generated source line when available, and up to 1,000 characters of error
-detail. MCP clients receive the same diagnostic, such as
+Compilation, class selection, execution, and construction failures raise
+`WidgetCreationError`, a `ValueError` subclass exported from `anywidget_mcp`.
+Its message includes the original exception type, the generated source line
+when available, and up to 1,000 characters of error detail. MCP clients receive
+the same diagnostic, such as
 `TypeError at line 6: Child.__init__() missing 1 required positional argument: 'value'`.
 Correct the source or `classnames` and call the tool again. Construction failures
 close previously constructed widget graphs before reporting the error.

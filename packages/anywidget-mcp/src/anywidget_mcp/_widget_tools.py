@@ -18,6 +18,7 @@ from mcp.types import CallToolResult, Icon, TextContent, ToolAnnotations
 from pydantic import AnyUrl, Field
 
 from ._attachments import BlobRef, CHUNK_BYTES, PROTOCOL_VERSION, validate_ref
+from ._dynamic import WidgetCreationError
 from ._projection_json import canonical_json
 from ._runtime import (
     CommReplay,
@@ -228,14 +229,17 @@ class WidgetTools:
                 arguments: dict[str, Any],
                 loading_message: str,
             ) -> CallToolResult:
-                return await self._require_runtime().open(
-                    candidate,
-                    arguments,
-                    normalized_state,
-                    tool_name=tool_name,
-                    tool_title=tool_title,
-                    loading_message=loading_message,
-                )
+                try:
+                    return await self._require_runtime().open(
+                        candidate,
+                        arguments,
+                        normalized_state,
+                        tool_name=tool_name,
+                        tool_title=tool_title,
+                        loading_message=loading_message,
+                    )
+                except WidgetCreationError as error:
+                    raise ToolError(str(error)) from error
 
             launch = compiled.bind(invoke)
             self._mcp.add_tool(

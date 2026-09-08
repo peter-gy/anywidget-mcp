@@ -5,6 +5,39 @@ an interactive app. Python owns widget state, graph identity, and session
 resources. The browser owns rendering and host integration. A versioned
 protocol carries ordered operations and immutable attachments between them.
 
+The base package also instruments widgets owned by notebook hosts through
+`webmcp.enable()`. The `server` extra adds MCP registration, transport, and
+session ownership through `anywidget_mcp.server`.
+
+## WebMCP instrumentation
+
+`webmcp.py` intercepts the ipywidgets construction dispatcher before the host's
+callback captures initial state. It clones each AnyWidget's `_esm` trait and
+wraps its `to_json` serializer. Python source values, host comms, and widget
+ownership remain with their existing owners. `_webmcp_schema.py` derives public
+trait descriptions and writable inputs.
+
+The synchronized `_webmcp` metadata carries instance identity and tool schemas.
+Identical widget sources retain identical serialized `_esm` bytes across
+instances, so the MCP App can reuse its verified source cache.
+
+`packages/app/src/webmcp.ts` wraps the original widget definition and registers
+browser tools for rendered views. It shares source loading with the MCP App
+through `widget-definition.ts` and `module-loader.ts`. The standalone
+`static/webmcp.js` asset is composed separately from `static/index.html`.
+
+WebMCP requests use native AnyWidget custom messages with the
+`anywidget-webmcp` kind and a request ID. Python reads state or applies an update,
+publishes canonical trait values, and sends `anywidget-webmcp-result` with the
+same ID. Replies contain bounded state or an error. The browser serializes its
+requests and resolves each tool after its Python reply. The adapter uses this
+same path when the current host is an MCP App.
+
+View cleanup releases browser registrations. Closing instrumentation restores
+serializers and detaches message callbacks while leaving host-owned widgets
+open. The native creation hook is process-wide, including widgets created by
+factories on other threads.
+
 ## Workspace boundaries
 
 ```text

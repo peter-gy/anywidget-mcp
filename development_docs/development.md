@@ -2,7 +2,8 @@
 
 ## Repository map
 
-- `packages/app/src/` contains the browser MCP App runtime.
+- `packages/app/src/` contains the browser MCP App runtime and host-independent
+  WebMCP instrumentation.
 - `packages/app/tests/` contains Vite+ tests for browser contracts.
 - `apps/e2e/` contains Playwright browser tests, the MCP App host, and the
   Python widget fixture.
@@ -68,7 +69,8 @@ uv run --package anywidget-mcp pyrefly check --min-severity warn
 uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
 ```
 
-The build provides the app resource read by the Python resource tests.
+The build provides the app resource and standalone WebMCP module read by the
+Python tests.
 
 Use one test module or test name while iterating, then return to `make check`.
 
@@ -120,15 +122,15 @@ make package
 The package gate performs these checks:
 
 1. Vite+ packs `@anywidget-mcp/app`.
-2. Vite+ composes the single-file HTML resource.
+2. Vite+ composes the single-file HTML resource and standalone WebMCP module.
 3. uv builds the sdist and wheel.
 4. Twine validates both artifacts.
 5. uv builds another wheel from the sdist.
 6. A fresh environment imports `anywidget_mcp`, reads the packaged HTML, and
    runs `anywidget-mcp --help`.
 
-The Hatch build hook reports the build command when the HTML resource is
-missing.
+The Hatch build hook requires both browser artifacts and reports their build
+command when either is missing.
 
 CI builds the browser packages once. The Python compatibility matrix, browser
 integration matrix, and distribution job consume that browser artifact.

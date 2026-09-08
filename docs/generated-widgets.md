@@ -65,7 +65,7 @@ top-level AnyWidget class. Use explicit names when source defines several
 widgets or aliases. Compilation, class selection, and construction errors return
 the exception type and generated source line when available. The model can use
 that diagnostic to correct the source and retry. Direct Python calls raise a
-[`ToolError`](./api#create-anywidget) with the same message.
+[`WidgetCreationError`](./api#create-anywidget) with the same message.
 
 Source can define helpers, imports, and several classes in the same module.
 The module remains registered until every returned widget is closed or

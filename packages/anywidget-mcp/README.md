@@ -18,6 +18,10 @@ current state. Connect through a host that supports
 [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview), the Model
 Context Protocol extension for interactive interfaces.
 
+It also exposes widgets already running in a notebook as
+[WebMCP](https://webmachinelearning.github.io/webmcp/) tools for browser agents,
+including notebooks running Python in WebAssembly.
+
 <p align="center">
   <img alt="Choose a color, then explore an interactive HEX-to-RGB explanation" src="https://peter-gy.github.io/anywidget-mcp/demos/anywidget-mcp-demo-00.gif" width="900">
 </p>
@@ -40,7 +44,7 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), a Python package
 runner:
 
 ```sh
-uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
+uvx --from 'anywidget-mcp[server]' --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
 Connect your MCP Apps host to `http://127.0.0.1:8010/mcp`, ask to pick a color,
@@ -52,11 +56,11 @@ walks through this in Inspector Chat.
 Install in the environment that owns your widgets:
 
 ```sh
-uv pip install anywidget-mcp wigglystuff
+uv pip install 'anywidget-mcp[server]' wigglystuff
 ```
 
 ```python
-from anywidget_mcp import serve
+from anywidget_mcp.server import serve
 from wigglystuff import ColorPicker
 
 serve(ColorPicker, state="color")
@@ -66,12 +70,32 @@ serve(ColorPicker, state="color")
 interactive. Use [`AnyWidgetMCP`](https://peter-gy.github.io/anywidget-mcp/composition)
 to register several tools or `attach()` to add widgets to an existing server.
 
+## Use a browser agent
+
+Install `anywidget-mcp` in your notebook environment, then enable WebMCP:
+
+```python
+from anywidget_mcp import webmcp
+
+webmcp.enable()
+```
+
+Rendered AnyWidgets expose read and update tools. Python validates updates and
+runs observers before returning state. The notebook host keeps rendering and
+synchronizing its widgets, including when Python runs in
+[Pyodide](https://pyodide.org/), a Python runtime for the browser.
+
+Requires a WebMCP-enabled browser. Call `webmcp.disable()` to restore
+widgets and stop instrumentation. [WebMCP](https://peter-gy.github.io/anywidget-mcp/webmcp)
+covers state exposure, host permissions, and composition with MCP Apps.
+
 ## Documentation
 
 [Getting started](https://peter-gy.github.io/anywidget-mcp/getting-started) ·
 [Write a widget](https://peter-gy.github.io/anywidget-mcp/authoring) ·
 [Pass input](https://peter-gy.github.io/anywidget-mcp/factories) ·
 [Share state](https://peter-gy.github.io/anywidget-mcp/state) ·
+[WebMCP](https://peter-gy.github.io/anywidget-mcp/webmcp) ·
 [API reference](https://peter-gy.github.io/anywidget-mcp/api) ·
 [Deployment](https://peter-gy.github.io/anywidget-mcp/deployment)
 

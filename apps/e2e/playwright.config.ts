@@ -23,6 +23,14 @@ export default defineConfig({
 	],
 	webServer: [
 		{
+			command: "uv run --locked --package anywidget-mcp python apps/e2e/webmcp_server.py",
+			cwd: "../..",
+			url: "http://127.0.0.1:8767/health",
+			timeout: 60_000,
+			reuseExistingServer: false,
+			gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
+		},
+		{
 			command: "uv run --locked --package anywidget-mcp python apps/e2e/server.py",
 			cwd: "../..",
 			url: "http://127.0.0.1:8766/health",

@@ -14,7 +14,7 @@ applies to other [AnyWidgets](https://anywidget.dev/).
 Register one trait by name:
 
 ```python
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from wigglystuff import ColorPicker
 
 mcp = AnyWidgetMCP("Color tools")
@@ -40,7 +40,7 @@ For derived state, provide a projection function. A projection turns the
 current widget into the mapping sent to the model:
 
 ```python
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from wigglystuff import SortableList
 
 mcp = AnyWidgetMCP("List tools")
@@ -64,7 +64,8 @@ building a projection returns a state-projection error to the app.
 `StateProjection` separates the mapping from the traits that can change it:
 
 ```python
-from anywidget_mcp import AnyWidgetMCP, StateProjection
+from anywidget_mcp import StateProjection
+from anywidget_mcp.server import AnyWidgetMCP
 from wigglystuff import SortableList
 
 

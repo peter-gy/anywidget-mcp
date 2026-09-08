@@ -9,7 +9,7 @@ from contextvars import ContextVar
 import anyio
 import pytest
 
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from anywidget_mcp._factory import FactoryOwner
 
 from ._server_support import (
