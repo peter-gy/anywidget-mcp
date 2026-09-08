@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import { abortable } from "./abort";
 import { AttachmentStore, deliveryPayload, requireProtocolVersion } from "./attachments";
 import {
 	WidgetBinding,
@@ -20,7 +21,6 @@ import {
 	type State,
 } from "./model";
 import {
-	abortable,
 	disposeServerSession,
 	randomId,
 	RUNTIME_LIFECYCLE_TIMEOUT_MS,
