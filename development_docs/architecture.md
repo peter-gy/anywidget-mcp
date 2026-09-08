@@ -68,8 +68,10 @@ titles, and descriptions. Python class paths remain runtime diagnostics.
 `_factory.py` normalizes direct, awaitable, synchronous context-managed, and
 asynchronous context-managed results. A non-empty sequence gets an internal
 `_WidgetGroup` root. The same state selection applies to each returned widget.
-Cleanup closes the enrolled graph before exiting the manager. Acquisition is
-cancellable, and the factory owns rollback before it returns or yields.
+Cleanup closes the enrolled graph before exiting the manager. Synchronous
+acquisition and manager methods run in workers, with independent capacity for
+manager exit. Cancellation joins running synchronous work before cleanup. Async
+managers retain their owner task, and factories own rollback before yielding.
 
 `_dynamic.py` executes generated Python in a fresh module and selects classes
 from the final namespace. The module remains registered until every returned
