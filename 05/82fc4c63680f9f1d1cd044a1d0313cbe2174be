@@ -1,0 +1,19 @@
+pyproject.toml
+  s_aac849587c128f::t_5970037daae8ed 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0582fc4c63680f9f1d1cd044a1d0313cbe2174be",
+  "prompts": {},
+  "sessions": {
+    "s_aac849587c128f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0818f-8ab6-7343-a743-0b065aeea223",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
