@@ -1,0 +1,25 @@
+pnpm-workspace.yaml
+  s_2119cb244f6f0f::t_3d6d357f79cb99 19
+apps/docs/package.json
+  s_2119cb244f6f0f::t_3d6d357f79cb99 15
+docs/index.md
+  s_2119cb244f6f0f::t_fa57046eced69f 3
+apps/docs/.vitepress/config.mts
+  s_2119cb244f6f0f::t_a1162b4fc8aa87 3-4,13-19,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "01b2c804a44f277ec4095bd0616e5297ea07cec4",
+  "prompts": {},
+  "sessions": {
+    "s_2119cb244f6f0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0823f-fe45-7f42-9dc5-2bff68c27528",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
