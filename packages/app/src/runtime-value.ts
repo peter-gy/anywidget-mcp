@@ -40,5 +40,6 @@ export function isBoolean<Value>(value: Value): value is Value & boolean {
 export function isCallable<Value>(
 	value: Value,
 ): value is Value & ((...args: WidgetValue[]) => WidgetValue) {
-	return value instanceof Function;
+	// eslint-disable-next-line anti-slop/no-runtime-typeof -- AFM hooks and factories can be functions from another JavaScript realm.
+	return typeof value === "function";
 }

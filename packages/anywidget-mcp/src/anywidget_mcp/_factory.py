@@ -20,7 +20,7 @@ import anyio
 from anywidget import AnyWidget
 from mcp.server.mcpserver.exceptions import ToolError
 
-from ._bridge import WidgetSession
+from ._spec.ports import OwnedSession
 from ._group import _WidgetGroup
 from ._widget_protocol import close_unclaimed_widget_graphs
 
@@ -163,7 +163,7 @@ class FactoryOwner:
         self.close_requested = anyio.Event()
         self.closed = anyio.Event()
         self.output: WidgetOutput | None = None
-        self.session: WidgetSession | None = None
+        self.session: OwnedSession | None = None
         self.error: BaseException | None = None
         self.cleanup_error: BaseException | None = None
         self._hold_cancellation: BaseException | None = None
@@ -314,7 +314,7 @@ class FactoryOwner:
             raise self.error
         raise RuntimeError("Widget factory closed before yielding a widget")
 
-    def assign_session(self, session: WidgetSession) -> None:
+    def assign_session(self, session: OwnedSession) -> None:
         self.session = session
 
     def leave_unowned_output_open(self) -> None:

@@ -13,6 +13,8 @@ import weakref
 from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 from anywidget import AnyWidget
 
+from ._spec import classify
+
 from ._widget_protocol import close_unclaimed_widget_graphs
 
 
@@ -230,8 +232,9 @@ def _resolve_widget_classes(
 
 
 def _is_widget_class(value: object) -> TypeGuard[type[AnyWidget]]:
-    return (
-        isinstance(value, type)
-        and issubclass(value, AnyWidget)
-        and value is not AnyWidget
-    )
+    if value is AnyWidget:
+        return False
+    try:
+        return classify(value) == "widget-class"
+    except TypeError:
+        return False

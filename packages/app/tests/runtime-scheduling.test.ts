@@ -297,7 +297,7 @@ describe("WidgetRuntime command scheduling", () => {
 						async initialize({ model: childModel, experimental }) {
 							initializeStarted.resolve(undefined);
 							await continueInitialize.promise;
-							const [result] = await experimental.invoke("initialize_child");
+							const [result] = await experimental.invoke<RuntimeValue>("initialize_child");
 							initialized.push(result);
 							childModel.on("msg:custom", (content) => {
 								if (isRecord(content) && content.source !== undefined) outerCustom.push(content);

@@ -1,4 +1,5 @@
 import { parse, type ExportSpecifier, type ImportSpecifier } from "es-module-lexer/js";
+import { abortable, withTimeout } from "./abort";
 import { isPlainObject } from "./runtime-value";
 
 export interface WidgetModule {
@@ -15,18 +16,28 @@ let nextModuleId = 0;
 
 export async function loadModule(source: string, signal?: AbortSignal): Promise<WidgetModule> {
 	signal?.throwIfAborted();
-	if (isRemoteModule(source)) {
-		const module = normalizeWidgetModule(await import(/* @vite-ignore */ source));
-		signal?.throwIfAborted();
-		return module;
+	const controller = new AbortController();
+	const lifetime = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+	try {
+		let loading: Promise<WidgetModule>;
+		if (isRemoteModule(source)) {
+			loading = import(/* @vite-ignore */ source).then(normalizeWidgetModule);
+		} else {
+			const [imports, exports] = parse(source);
+			// Script elements avoid dynamic-import failures in embedded hosts.
+			// Namespace re-exports require a module namespace and use dynamic import.
+			loading = requiresNamespaceImport(source, imports, exports)
+				? loadBlobModule(source, lifetime)
+				: loadScriptModule(source, lifetime);
+		}
+		return await withTimeout(
+			abortable(loading, lifetime),
+			10_000,
+			"Timed out loading anywidget module",
+		);
+	} finally {
+		controller.abort();
 	}
-	const [imports, exports] = parse(source);
-	// Inline scripts avoid blob dynamic-import failures in embedded hosts.
-	// Namespace re-exports require a module namespace and use the Blob fallback.
-	if (requiresNamespaceImport(source, imports, exports)) {
-		return loadBlobModule(source, signal);
-	}
-	return loadInlineModule(source, signal);
 }
 
 export function instrumentInlineModule(source: string, receiverName: string): InlineModule {
@@ -59,23 +70,26 @@ export function instrumentInlineModule(source: string, receiverName: string): In
 	return { code, sourceName };
 }
 
-async function loadBlobModule(source: string, signal?: AbortSignal): Promise<WidgetModule> {
+async function loadBlobModule(source: string, signal: AbortSignal): Promise<WidgetModule> {
 	const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
 	try {
-		const module = normalizeWidgetModule(await import(/* @vite-ignore */ url));
-		signal?.throwIfAborted();
+		const module = normalizeWidgetModule(await abortable(import(/* @vite-ignore */ url), signal));
+		signal.throwIfAborted();
 		return module;
 	} finally {
 		URL.revokeObjectURL(url);
 	}
 }
 
-async function loadInlineModule(source: string, signal?: AbortSignal): Promise<WidgetModule> {
+async function loadScriptModule(source: string, signal?: AbortSignal): Promise<WidgetModule> {
 	const receiverName = createReceiverName();
 	const module = instrumentInlineModule(source, receiverName);
 	const script = document.createElement("script");
+	const url = URL.createObjectURL(new Blob([module.code], { type: "text/javascript" }));
 	script.type = "module";
-	script.textContent = module.code;
+	// WebKit reports the script URL for evaluation errors and ignores sourceURL
+	// labels on inline modules. Each load needs its own error identity.
+	script.src = url;
 
 	return new Promise<WidgetModule>((resolve, reject) => {
 		let settled = false;
@@ -83,8 +97,8 @@ async function loadInlineModule(source: string, signal?: AbortSignal): Promise<W
 			signal?.removeEventListener("abort", abort);
 			window.removeEventListener("error", runtimeError);
 			script.removeEventListener("error", loadError);
-			script.removeEventListener("load", loaded);
 			script.remove();
+			URL.revokeObjectURL(url);
 			Reflect.deleteProperty(globalThis, receiverName);
 		};
 		const finish = (callback: () => void): void => {
@@ -101,10 +115,8 @@ async function loadInlineModule(source: string, signal?: AbortSignal): Promise<W
 			event.preventDefault();
 			finish(() => reject(new Error("Failed to execute anywidget module")));
 		};
-		const loaded = (): void =>
-			finish(() => reject(new Error("anywidget module did not expose its exports")));
 		const runtimeError = (event: ErrorEvent): void => {
-			if (!matchesModuleError(event, module.sourceName)) return;
+			if (!matchesModuleError(event, url, module.sourceName)) return;
 			event.preventDefault();
 			finish(() => reject(moduleError(event)));
 		};
@@ -117,7 +129,6 @@ async function loadInlineModule(source: string, signal?: AbortSignal): Promise<W
 		signal?.addEventListener("abort", abort, { once: true });
 		window.addEventListener("error", runtimeError);
 		script.addEventListener("error", loadError, { once: true });
-		script.addEventListener("load", loaded, { once: true });
 		if (signal?.aborted) {
 			abort();
 			return;
@@ -242,9 +253,12 @@ function isRemoteModule(value: string): boolean {
 	return value.startsWith("http://") || value.startsWith("https://");
 }
 
-function matchesModuleError(event: ErrorEvent, sourceName: string): boolean {
-	if (event.filename.includes(sourceName)) return true;
-	return event.error instanceof Error && event.error.stack?.includes(sourceName) === true;
+function matchesModuleError(event: ErrorEvent, url: string, sourceName: string): boolean {
+	return [url, sourceName].some(
+		(source) =>
+			event.filename.includes(source) ||
+			(event.error instanceof Error && event.error.stack?.includes(source) === true),
+	);
 }
 
 function moduleError(event: ErrorEvent): Error {

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
-from anywidget import AnyWidget
 from anywidget._descriptor import ReprMimeBundle
-from anywidget._util import put_buffers
 
 from ._comm import BridgeComm, WidgetMessage
-from ._widget_protocol import model_id, protocol_controller
+from ._models import bind_model
 
 
 def connect_models(
@@ -27,43 +25,23 @@ def connect_models(
     incremental outbound message queue.
     """
 
-    for widget in widgets:
-        current_model_id = model_id(widget, controllers)
-        controller = protocol_controller(widget, controllers)
-        if isinstance(widget, AnyWidget):
-            old_comm = widget.comm
-        else:
-            assert controller is not None
-            old_comm = controller._comm
-        incoming = getattr(old_comm, "_msg_callback", None)
-        if old_comm is not None:
-            old_comm.on_msg(None)
-            old_comm.close()
+    bindings = [bind_model(widget, controllers) for widget in widgets]
+    for binding in bindings:
+        current_model_id = binding.model_id
         comm = BridgeComm(
             current_model_id,
-            lambda message, source=widget: capture(source, message),
+            lambda message, source=binding.source: capture(source, message),
         )
-        if isinstance(widget, AnyWidget):
-            widget.comm = comm
-            comm.on_msg(_widget_message_handler(widget))
-        else:
-            assert controller is not None
-            cast(Any, controller)._comm = comm
-            comm.on_msg(incoming)
+        binding.connect(comm)
         comms[current_model_id] = comm
 
     models: dict[str, dict[str, Any]] = {}
-    for widget in widgets:
+    for binding in bindings:
         first_message = len(messages)
-        controller = protocol_controller(widget, controllers)
-        if isinstance(widget, AnyWidget):
-            widget.send_state()
-        else:
-            assert controller is not None
-            controller.send_state()
+        binding.send_state()
         emitted = messages[first_message:]
         del messages[first_message:]
-        current_model_id = model_id(widget, controllers)
+        current_model_id = binding.model_id
         initial = next(
             (
                 message
@@ -85,22 +63,3 @@ def connect_models(
             "buffers": list(initial.buffers),
         }
     return models
-
-
-def _widget_message_handler(widget: AnyWidget) -> Callable[[dict[str, Any]], None]:
-    if type(widget)._handle_msg is not AnyWidget._handle_msg:
-        return widget._handle_msg
-
-    def receive(message: dict[str, Any]) -> None:
-        data = message["content"]["data"]
-        if data.get("method") == "update" and "state" in data:
-            state = data["state"]
-            if "buffer_paths" in data:
-                put_buffers(state, data["buffer_paths"], message["buffers"])
-            # The notebook message handler swallows trait validation errors.
-            # MCP must report rejection before the browser accepts its echo.
-            widget.set_state(state)
-        else:
-            widget._handle_msg(message)
-
-    return receive

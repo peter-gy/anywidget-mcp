@@ -23,6 +23,7 @@ from ._server_support import (
     bootstrap_id,
     bootstrap_runtime,
     connected,
+    state_id,
 )
 
 
@@ -360,6 +361,14 @@ async def test_dispose_releases_widget_session() -> None:
         runtime = await bootstrap_runtime(client, launch)
         instance_id = runtime["instanceId"]
         first = await client.call_tool("anywidget_dispose", {"session_id": instance_id})
+        unavailable = await client.call_tool(
+            "anywidget_state", {"state_id": state_id(launch)}
+        )
+        assert unavailable.is_error is True
+        assert isinstance(unavailable.content[0], TextContent)
+        assert unavailable.content[0].text.endswith("Widget state is unavailable")
+        assert state_id(launch) not in unavailable.content[0].text
+
         second = await client.call_tool(
             "anywidget_dispose", {"session_id": instance_id}
         )

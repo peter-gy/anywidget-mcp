@@ -9,34 +9,82 @@ The base package also instruments widgets owned by notebook hosts through
 `webmcp.enable()`. The `server` extra adds MCP registration, transport, and
 session ownership through `anywidget_mcp.server`.
 
+## Shared widget specifications
+
+`_spec/` owns target classification, identity, resolved parameters, result hints,
+trait inspection, schemas, and capability mappings. MCP Apps and WebMCP consume
+these records through argument compiler ports. Live models implement the
+`ModelBinding` and `CommPort` contracts declared inward in `_spec/ports.py`.
+
+[Widget specifications](specifications.md) explains the intermediate
+representation, policy boundaries, extension points, and responsibility map.
+
 ## WebMCP instrumentation
 
-`webmcp.py` intercepts the ipywidgets construction dispatcher before the host's
-callback captures initial state. It clones each AnyWidget's `_esm` trait and
-wraps its `to_json` serializer. Python source values, host comms, and widget
-ownership remain with their existing owners. `_webmcp_schema.py` derives public
-trait descriptions and writable inputs.
+`webmcp.enable(widgets=..., discover=...)` configures one active displayable
+`Session` per notebook runtime. `_webmcp/session.py` owns registrations, discovery policy, creation
+requests, and the widgets created by those requests. Repeated calls patch target
+settings. `disable()` withdraws exposure, while `Session.close()` also closes
+its created widgets. Explicitly supplied instances retain their existing owners.
+
+`_webmcp/policy.py` resolves class, originating-function, and instance settings.
+It selects from shared `ModelSpec` records and snapshots configuration values.
+The shared JSON input compiler validates creation arguments. Instrumentation
+applies the selected capabilities to every descriptor, read, and update.
+
+`_webmcp/hooks.py` installs one ipywidgets construction dispatcher and routes
+new widgets to their runtime's session before the host captures initial state.
+Invocation ownership is task-local and ends when the creation call settles.
+`_webmcp/instrument.py` scans widgets owned by that runtime and applies the
+session policy to existing and future instances. It clones each selected AnyWidget's `_esm` trait and wraps its
+`to_json` serializer. Python source values and host comms remain with their
+existing owners.
+
+`_webmcp/host.py` captures a host with synchronous execution scope and disposal
+binding. The ipywidgets host binds session disposal to comm closure. The marimo host
+identifies its runtime context so independent notebook clients have independent
+sessions and discovery. It also binds it to the originating cell and supplies that cell's context
+while constructing widgets or publishing source. The shared engine owns
+registration, exposure policy, creation, replay, and cleanup. Host disposal
+restores Python serializers and withdraws metadata without publishing new source
+files into a cell being disposed.
 
 The synchronized `_webmcp` metadata carries instance identity and tool schemas.
 Identical widget sources retain identical serialized `_esm` bytes across
-instances, so the MCP App can reuse its verified source cache.
+instances, so the MCP App can reuse its verified source cache. The session also
+synchronizes its creation catalog, exposed model references, and created widgets.
 
-`packages/app/src/webmcp.ts` wraps the original widget definition and registers
-browser tools for rendered views. It shares source loading with the MCP App
-through `widget-definition.ts` and `module-loader.ts`. The standalone
-`static/webmcp.js` asset is composed separately from `static/index.html`.
+`packages/app/src/_webmcp/` wraps the original widget definition.
+`_webmcp/instance.ts` publishes its state tools, and `_webmcp/registry.ts` shares
+registrations across views in the same document. `_webmcp/session.ts` publishes
+creation tools and resolves existing models through the native host. Created
+widgets render through `host.getWidget(ref).render(...)`. Source loading is
+shared with the MCP App through `widget-definition.ts` and `module-loader.ts`.
+The standalone `static/webmcp.js` asset is composed separately from
+`static/index.html`.
 
 WebMCP requests use native AnyWidget custom messages with the
-`anywidget-webmcp` kind and a request ID. Python reads state or applies an update,
-publishes canonical trait values, and sends `anywidget-webmcp-result` with the
-same ID. Replies contain bounded state or an error. The browser serializes its
-requests and resolves each tool after its Python reply. The adapter uses this
-same path when the current host is an MCP App.
+`anywidget-webmcp` kind and a request ID. Python reads state, applies an update,
+or validates creation arguments and invokes their target. It publishes canonical
+trait values and sends `anywidget-webmcp-result` with the same ID. State is
+bounded by the shared projection serializer. Creation replies also identify the
+widget reference and its read and update tools. The browser waits for the new
+widget's rendering and registrations before resolving a creation call.
 
-View cleanup releases browser registrations. Closing instrumentation restores
-serializers and detaches message callbacks while leaving host-owned widgets
-open. The native creation hook is process-wide, including widgets created by
-factories on other threads.
+The session retains completed creation replies until it closes and tracks pending
+requests by ID and argument fingerprint. Repeated requests replay the response.
+Reusing an ID with different arguments fails. A new browser tool invocation has a new request ID
+and creates a new widget.
+
+View cleanup releases browser registrations. Disabling instrumentation restores
+serializers and detaches message callbacks while leaving widgets open. The
+adapter uses the host's model connection in notebooks and MCP Apps. The browser
+integration suite supplies a controlled WebMCP registry across Chromium,
+Firefox, and WebKit while exercising the packaged MCP App. Native Chromium tests
+exercise real WebMCP registration and execution in MCP Apps, JupyterLab, and
+marimo. They cover notebook-client isolation, owning-cell reruns, comm closure,
+and kernel shutdown. Browser `_webmcp/host.ts` withdraws tools when the native
+kernel connection or model comm closes while preserving rendered output.
 
 ## Workspace boundaries
 
@@ -64,8 +112,9 @@ shares it with Python, browser integration, and distribution checks.
 
 ## From a tool call to a view
 
-1. `_targets.py` derives the tool schema from a class or factory signature.
-   The MCP SDK injects `Context` after validating model-supplied arguments.
+1. `_spec.scan()` describes the class or factory. `_mcp/targets.py` compiles
+   its arguments with the MCP SDK and retains the native tool for registration.
+   The SDK injects `Context` after validating model-supplied arguments.
 2. `_factory.py` acquires a fresh widget or ordered widget sequence. A managed
    factory remains open for the widget session.
 3. `_runtime.py` owns the session lease, bootstrap capability, state handle,
@@ -94,9 +143,10 @@ lifespan with the widget runtime. The SDK owns one lifespan per HTTP application
 so MCP connection rotation preserves widget sessions. Transport options belong
 to `run()` and `streamable_http_app()`.
 
-Target compilation belongs in `_targets.py`. The CLI uses that same compiler for
-inspection and registration. Public labels come from registered tool names,
-titles, and descriptions. Python class paths remain runtime diagnostics.
+Target inspection belongs in `_spec/`. `_mcp/targets.py` owns MCP compilation
+and registration. CLI inspection and serving retain that compiled target.
+Public labels come from registered names, titles, and descriptions. Python class
+paths remain runtime diagnostics.
 
 `_factory.py` normalizes direct, awaitable, synchronous context-managed, and
 asynchronous context-managed results. A non-empty sequence gets an internal
@@ -117,10 +167,11 @@ separate from pending initialization records so emitted bulk values can be
 released.
 
 `_comm.py` implements the kernel-style comm envelope using captured raw buffers.
-`_model_connection.py` preserves native synchronization bindings when replacing
-comms. Ordinary updates use canonical widget state application and propagate
-validation failures to MCP. `_notifications.py` and `_detachment.py` coordinate
-notification batches, graph replacement, and acknowledged model removal.
+`_model_connection.py` connects through `_models.py` bindings and captures
+initial emissions. Ordinary updates use canonical widget state application and propagate
+validation failures to MCP. `_notifications.py` keeps native traitlets notification batches inside the
+session's snapshot boundary. `_detachment.py` coordinates graph replacement and
+acknowledged model removal.
 
 `_state.py` owns model-visible projections. Default and selected projections use
 last-notified trait values. Custom projectors run against consistent live values
@@ -181,7 +232,11 @@ It holds a transaction through uploads, response hydration, and complete graph
 application. A nested initializer command uses that transaction's active slot.
 
 `binding.ts` owns module/CSS loading, initialization, rendering, child views,
-source replacement, and cleanup. `BridgeModel` in `model.ts` owns frontend values,
+source replacement, and cleanup. `module-loader.ts` bounds source evaluation to
+10 seconds and releases its script elements, Blob URLs, and export callbacks on
+completion or cancellation. Module scripts have distinct Blob URLs so concurrent
+loads can attribute browser execution errors to their source.
+`BridgeModel` in `model.ts` owns frontend values,
 change events, custom messages, and pending state serialization. Each scoped model
 owns its subscription wrappers so ending one view preserves other views.
 Initialization and source reconciliation run until completion or lifecycle

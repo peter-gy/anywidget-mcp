@@ -1,3 +1,5 @@
+import type { AnyModel } from "@anywidget/types";
+
 import {
 	isBoolean,
 	isNumber,
@@ -10,7 +12,7 @@ import {
 } from "./runtime-value";
 
 export type JsonPath = Array<string | number>;
-export type EventHandler = (...args: WidgetValue[]) => void;
+export type EventHandler = Parameters<AnyModel["on"]>[1];
 export type State = RuntimeRecord;
 
 export interface ModelPayload {
@@ -26,21 +28,7 @@ export interface CommData {
 	[key: string]: RuntimeValue;
 }
 
-export interface AnyModel {
-	get(key: string): WidgetValue;
-	set(key: string, value: WidgetValue): void;
-	on(name: string, callback: EventHandler): void;
-	off(name?: string | null, callback?: EventHandler | null): void;
-	save_changes(): void;
-	send(
-		content: WidgetValue,
-		callbacks?: WidgetValue,
-		buffers?: Array<ArrayBuffer | ArrayBufferView>,
-	): void;
-	widget_manager: {
-		get_model(modelId: string): Promise<AnyModel>;
-	};
-}
+export type { AnyModel } from "@anywidget/types";
 
 export interface ModelRuntime {
 	model(modelId: string): BridgeModel;
@@ -61,7 +49,10 @@ interface PendingCustomMessage {
 
 export class BridgeModel implements AnyModel {
 	readonly widget_manager = {
-		get_model: async (modelId: string): Promise<AnyModel> => this.runtime.model(modelId),
+		get_model: async <T extends object>(modelId: string): Promise<AnyModel<T>> => {
+			// SAFETY: AFM callers choose their trait schema. The bridge retains the model identity.
+			return this.runtime.model(modelId) as AnyModel<T>;
+		},
 	};
 
 	readonly payload: ModelPayload;
@@ -258,7 +249,10 @@ export function eventNames(name: string): string[] {
 	return name.trim().split(/\s+/).filter(Boolean);
 }
 
-export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
+export function scopedModel<T extends object = State>(
+	model: BridgeModel,
+	signal: AbortSignal,
+): AnyModel<T> {
 	const handlers = new Map<string, Map<EventHandler, EventHandler>>();
 	let active = !signal.aborted;
 
@@ -283,12 +277,12 @@ export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
 	};
 
 	if (active) signal.addEventListener("abort", abort, { once: true });
-	return {
+	const scoped: AnyModel = {
 		get: (key) => (active ? model.get(key) : undefined),
 		set: (key, value) => {
 			if (active) model.set(key, value);
 		},
-		on(name, callback) {
+		on(name: string, callback: EventHandler) {
 			if (!active) return;
 			for (const eventName of eventNames(name)) {
 				if (!active) return;
@@ -331,18 +325,20 @@ export function scopedModel(model: BridgeModel, signal: AbortSignal): AnyModel {
 			if (active) model.send(content, callbacks, buffers);
 		},
 		widget_manager: {
-			async get_model(modelId) {
+			async get_model<ChildState extends object>(modelId: string): Promise<AnyModel<ChildState>> {
 				if (!active) {
 					throw signal.reason ?? new DOMException("Model scope is closed", "AbortError");
 				}
-				const child = await model.widget_manager.get_model(modelId);
+				const child = await model.widget_manager.get_model<ChildState>(modelId);
 				if (!active) {
 					throw signal.reason ?? new DOMException("Model scope is closed", "AbortError");
 				}
-				return child instanceof BridgeModel ? scopedModel(child, signal) : child;
+				return child instanceof BridgeModel ? scopedModel<ChildState>(child, signal) : child;
 			},
 		},
 	};
+	// SAFETY: AFM trait schemas are supplied by the widget author, not decoded by the host.
+	return scoped as AnyModel<T>;
 }
 
 export interface SerializedComm {

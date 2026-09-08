@@ -1,26 +1,19 @@
-"""Describe synchronized traits as WebMCP inputs."""
+"""Describe JSON-compatible trait values."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from typing import Any
 
 import traitlets as t
-from anywidget import AnyWidget
 
 
-def public_traits(widget: AnyWidget) -> dict[str, t.TraitType]:
-    return {
-        name: trait
-        for name, trait in widget.traits(sync=True).items()
-        if not name.startswith("_")
-        and name not in {"layout", "tabbable", "tooltip"}
-        and trait.metadata.get("webmcp") is not False
-    }
-
-
-def trait_schema(trait: t.TraitType) -> dict[str, Any] | None:
-    if any(trait.metadata.get(key) is not None for key in ("to_json", "from_json")):
+def trait_schema(
+    trait: t.TraitType, *, metadata: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
+    effective_metadata = trait.metadata if metadata is None else metadata
+    if any(effective_metadata.get(key) is not None for key in ("to_json", "from_json")):
         return None
     schema: dict[str, Any]
     if isinstance(trait, t.Enum):
@@ -63,6 +56,16 @@ def trait_schema(trait: t.TraitType) -> dict[str, Any] | None:
         ):
             return None
         schema = {"type": "object", "additionalProperties": value}
+        properties = {}
+        for key, child in (trait._per_key_traits or {}).items():
+            if not isinstance(key, str):
+                continue
+            child_schema = trait_schema(child)
+            if child_schema is None:
+                return None
+            properties[key] = child_schema
+        if properties:
+            schema["properties"] = properties
     elif isinstance(trait, t.Any):
         schema = {}
     elif isinstance(trait, t.Union):

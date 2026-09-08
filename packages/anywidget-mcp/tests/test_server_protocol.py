@@ -38,21 +38,6 @@ async def test_state_modes_control_initial_model_visibility() -> None:
     }
     assert selected_runtime["context"]["state"] == {"value": 4}
 
-    hidden = AnyWidgetMCP("hidden")
-
-    @hidden.widget(state=None)
-    def hidden_counter() -> CounterWidget:
-        return CounterWidget(value=5)
-
-    async with connected(hidden) as client:
-        hidden_result = await client.call_tool("hidden_counter", {})
-        hidden_runtime = await bootstrap_runtime(client, hidden_result)
-
-    assert hidden_result.structured_content == {"tool": "hidden_counter"}
-    assert isinstance(hidden_result.content[0], TextContent)
-    assert hidden_result.content[0].text == "Opened Hidden Counter."
-    assert "context" not in hidden_runtime
-
     custom = AnyWidgetMCP("custom")
 
     @custom.widget(state=lambda widget: {"answer": widget.doubled})
@@ -638,13 +623,22 @@ async def test_launch_snapshot_failure_closes_unregistered_session(
 
 
 @pytest.mark.anyio
-async def test_state_none_suppresses_live_context() -> None:
+async def test_state_none_omits_model_state_across_launch_and_updates() -> None:
     server = AnyWidgetMCP("test")
     server.widget(CounterWidget, state=None)
 
     async with connected(server) as client:
         launch = await client.call_tool("counter_widget", {})
         payload = await bootstrap_runtime(client, launch)
+        assert launch.structured_content == {"tool": "counter_widget"}
+        assert isinstance(launch.content[0], TextContent)
+        assert launch.content[0].text == "Opened Counter Widget."
+        assert "context" not in payload
+        unavailable = await client.call_tool("anywidget_state", {"state_id": "0" * 32})
+        assert unavailable.is_error is True
+        assert isinstance(unavailable.content[0], TextContent)
+        assert unavailable.content[0].text.endswith("Widget state is unavailable")
+
         result = await client.comm(
             {
                 "instance_id": payload["instanceId"],

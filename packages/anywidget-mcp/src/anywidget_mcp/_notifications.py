@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, cast
 
 from anywidget import AnyWidget
+from traitlets import HasTraits
 
 NOTIFICATION_WAIT_SECONDS = 3.0
 
@@ -15,8 +16,8 @@ NOTIFICATION_WAIT_SECONDS = 3.0
 class NotificationGate:
     """Coordinate session operations with complete trait notification chains.
 
-    The gate wraps assignable ``notify_change`` methods and tracks nested
-    callbacks by thread and source until the outermost callback finishes.
+    The gate wraps ``notify_change`` and tracks nested callbacks by thread and
+    source until the outermost callback finishes.
     """
 
     def __init__(
@@ -31,6 +32,7 @@ class NotificationGate:
         self._sources: dict[tuple[int, int], int] = {}
         self._active_changes: dict[tuple[int, int], list[object]] = {}
         self._originals: dict[int, Callable[[Any], Any]] = {}
+        self._native_classes: dict[int, tuple[type[HasTraits], bool]] = {}
 
     @property
     def has_pending_restores(self) -> bool:
@@ -120,6 +122,25 @@ class NotificationGate:
                             self.condition.notify_all()
 
             self._originals[identity] = original
+            if isinstance(widget, HasTraits):
+                # Traitlets batching restores notify_change from the class.
+                # Its native instance subclass keeps that dispatch isolated.
+                had_instance_callback = "notify_change" in vars(widget)
+                HasTraits.add_traits(widget)
+                native_class = type(widget)
+
+                def dispatch(
+                    _widget: HasTraits,
+                    change: Any,
+                    notify: Callable[[Any], None] = notify_change,
+                ) -> None:
+                    notify(change)
+
+                setattr(native_class, "notify_change", dispatch)
+                self._native_classes[identity] = (native_class, had_instance_callback)
+                if had_instance_callback:
+                    delattr(widget, "notify_change")
+                continue
             try:
                 setattr(widget, "notify_change", notify_change)
             except (AttributeError, TypeError):
@@ -142,5 +163,14 @@ class NotificationGate:
         identity = id(widget)
         original = self._originals.get(identity)
         if original is not None:
-            setattr(widget, "notify_change", original)
+            native = self._native_classes.get(identity)
+            if native is None:
+                setattr(widget, "notify_change", original)
+            else:
+                native_class, had_instance_callback = native
+                if had_instance_callback:
+                    setattr(widget, "notify_change", original)
+                # Later add_traits calls may have extended the instance class.
+                delattr(native_class, "notify_change")
+                self._native_classes.pop(identity, None)
             self._originals.pop(identity, None)

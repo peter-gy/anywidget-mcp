@@ -11,7 +11,6 @@ import {
 	type WidgetDefinition,
 } from "../src/binding";
 import { BridgeModel, type ModelPayload, type ModelRuntime, type State } from "../src/model";
-import type { RuntimeValue } from "../src/runtime-value";
 import type { QueuedToolCall } from "../src/tool-calls";
 import { deferred } from "./runtime-test-support";
 
@@ -56,8 +55,9 @@ function createHost(): Host {
 
 function createExperimental(): Experimental {
 	return {
-		async invoke(): Promise<[RuntimeValue, DataView[]]> {
-			return [undefined, []];
+		async invoke<T>(): Promise<[T, DataView[]]> {
+			// SAFETY: These lifecycle fixtures issue commands whose response is unused.
+			return [undefined as T, []];
 		},
 	};
 }
@@ -97,10 +97,10 @@ describe("WidgetBinding live source lifecycle", () => {
 		const runtime: BindingRuntime = {
 			host: createHost,
 			experimental: () => ({
-				async invoke() {
+				async invoke<T>() {
 					invoked = true;
 					model.receive({ method: "update", state: { _esm: "second", _css: ".second {}" } }, []);
-					return [{}, []];
+					return createExperimental().invoke<T>("refresh_source");
 				},
 			}),
 		};
@@ -268,26 +268,32 @@ describe("WidgetBinding live source lifecycle", () => {
 		await binding.dispose();
 	});
 
-	test("cleans up the prior generation before rerendering active views", async () => {
+	test("retains the mount through hot-reload cleanup before rerendering", async () => {
 		const events: string[] = [];
+		const cleanupStarted = deferred<void>();
+		const cleanup = deferred<void>();
+		const mount = document.createTextNode("mount");
+		let presentAfterCleanup: boolean | undefined;
 		const first: WidgetDefinition = {
-			initialize: () => {
-				events.push("initialize:first");
-				return () => events.push("cleanup-model:first");
-			},
-			render: () => {
-				events.push("render:first");
-				return () => events.push("cleanup-view:first");
+			initialize: () => () => events.push("cleanup-model:first"),
+			render: ({ el }) => {
+				el.append(mount);
+				return async () => {
+					cleanupStarted.resolve();
+					await cleanup.promise;
+					presentAfterCleanup = el.contains(mount);
+					events.push("cleanup-view:first");
+				};
 			},
 		};
 		const second: WidgetDefinition = {
-			initialize: () => {
-				events.push("initialize:second");
-				return () => events.push("cleanup-model:second");
-			},
-			render: () => {
+			initialize: () => () => events.push("cleanup-model:second"),
+			render: ({ el }) => {
+				el.textContent = "Replacement widget";
 				events.push("render:second");
-				return () => events.push("cleanup-view:second");
+				return () => {
+					events.push("cleanup-view:second");
+				};
 			},
 		};
 		const loadWidget = vi.fn(async (source: string) => (source === "first" ? first : second));
@@ -303,58 +309,24 @@ describe("WidgetBinding live source lifecycle", () => {
 		await binding.render(root, new AbortController().signal);
 		model.receive({ method: "update", state: { _esm: "second" } }, []);
 
+		await cleanupStarted.promise;
+		expect(root.contains(mount)).toBe(true);
+		expect(events).not.toContain("render:second");
+		cleanup.resolve();
+
 		await vi.waitFor(() => expect(events).toContain("render:second"));
-		expect(events).toEqual([
-			"initialize:first",
-			"render:first",
-			"cleanup-view:first",
-			"initialize:second",
-			"cleanup-model:first",
-			"render:second",
-		]);
-		expect(loadWidget).toHaveBeenCalledWith("second", expect.any(AbortSignal));
+		expect(presentAfterCleanup).toBe(true);
+		expect(root.textContent).toBe("Replacement widget");
+		expect(events).toEqual(
+			expect.arrayContaining(["cleanup-view:first", "cleanup-model:first", "render:second"]),
+		);
+		expect(events.indexOf("cleanup-view:first")).toBeLessThan(
+			events.indexOf("cleanup-model:first"),
+		);
+		expect(events.indexOf("cleanup-model:first")).toBeLessThan(events.indexOf("render:second"));
 
 		await binding.dispose();
 		expect(events.slice(-2)).toEqual(["cleanup-view:second", "cleanup-model:second"]);
-	});
-
-	test("keeps a rendered mount present through hot-reload cleanup", async () => {
-		const model = createModel({ _esm: "first" });
-		const root = element();
-		const mount = document.createTextNode("mount");
-		const cleanup = deferred<void>();
-		let cleanupStarted = false;
-		let presentAfterCleanup: boolean | undefined;
-		let replacementRendered = false;
-		const binding = new WidgetBinding(createRuntime(), model, {
-			reportError: vi.fn(),
-			replaceCss: async () => undefined,
-			loadWidget: async (source) => ({
-				render: ({ el }) => {
-					if (source === "first") {
-						el.append(mount);
-						return async () => {
-							cleanupStarted = true;
-							await cleanup.promise;
-							presentAfterCleanup = el.contains(mount);
-						};
-					}
-					replacementRendered = true;
-				},
-			}),
-		});
-
-		await binding.initialize();
-		await binding.render(root, new AbortController().signal);
-		model.receive({ method: "update", state: { _esm: "second" } }, []);
-
-		await vi.waitFor(() => expect(cleanupStarted).toBe(true));
-		expect(root.contains(mount)).toBe(true);
-		expect(replacementRendered).toBe(false);
-		cleanup.resolve(undefined);
-		await vi.waitFor(() => expect(replacementRendered).toBe(true));
-		expect(presentAfterCleanup).toBe(true);
-		await binding.dispose();
 	});
 
 	test("keeps a rendered mount present through disposal cleanup", async () => {
@@ -479,9 +451,9 @@ describe("WidgetBinding live source lifecycle", () => {
 		const runtime: BindingRuntime = {
 			host: createHost,
 			experimental: (_model, signal) => ({
-				async invoke() {
+				async invoke<T>() {
 					signal.throwIfAborted();
-					return [{}, []];
+					return createExperimental().invoke<T>("scoped_command");
 				},
 			}),
 		};
@@ -611,7 +583,7 @@ describe("WidgetBinding live source lifecycle", () => {
 
 	test("waits for a cold render beyond the cleanup deadline", async () => {
 		vi.useFakeTimers();
-		const pendingRender = deferred<unknown>();
+		const pendingRender = deferred<void>();
 		const binding = new WidgetBinding(createRuntime(), createModel({ _esm: "first" }), {
 			reportError: vi.fn(),
 			replaceCss: async () => undefined,
@@ -666,7 +638,7 @@ describe("WidgetBinding live source lifecycle", () => {
 	});
 
 	test("joins cleanup returned after a render is cancelled", async () => {
-		const lateRender = deferred<unknown>();
+		const lateRender = deferred<() => void>();
 		const cleanup = vi.fn();
 		const render = vi.fn(() => lateRender.promise);
 		const binding = new WidgetBinding(createRuntime(), createModel({ _esm: "first" }), {

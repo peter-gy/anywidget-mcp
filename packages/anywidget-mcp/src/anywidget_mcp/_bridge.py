@@ -14,6 +14,7 @@ from anywidget._descriptor import ReprMimeBundle
 from ._comm import BridgeComm, WidgetMessage
 from ._detachment import DetachedModels
 from ._model_connection import connect_models
+from ._models import bind_model
 from ._notifications import NotificationGate
 from ._session_types import SessionSnapshot, empty_snapshot as _empty_snapshot
 from ._attachments import Attachments
@@ -30,17 +31,12 @@ from ._widget_protocol import (
     WidgetClaimCleanupError,
     WidgetInUseError,
     claim_widgets as _claim_widgets,
-    close_widget as _close_widget,
     collect_nested_widgets as _collect_nested_widgets,
     collect_widgets as _collect_widgets,
     contains_widget_ref as _contains_widget_ref,
     finalize_claim as _finalize_claim,
-    model_id as _model_id,
-    observe as _observe,
     replace_widget_refs as _replace_widget_refs,
     safe_claim_for as _safe_claim_for,
-    synced_trait_names as _synced_trait_names,
-    unobserve as _unobserve,
 )
 
 _MAX_PROJECTION_REFRESH_RETRIES = 8
@@ -289,7 +285,9 @@ class WidgetSession:
             if not names:
                 continue
             try:
-                _unobserve(widget, self._sync_widget_graph, names)
+                bind_model(widget, self._protocol_controllers).unobserve(
+                    self._sync_widget_graph, names
+                )
             except Exception as error:
                 errors.append(error)
             else:
@@ -305,7 +303,7 @@ class WidgetSession:
             if identity not in self._widget_close_pending:
                 continue
             try:
-                _close_widget(widget, self._protocol_controllers)
+                bind_model(widget, self._protocol_controllers).close()
             except Exception as error:
                 errors.append(error)
             else:
@@ -536,6 +534,14 @@ class WidgetSession:
             )
             if not source_is_notifying and not self._graph_sync_suspended:
                 self._sync_widget_graph(None)
+                context = self._state_context
+                state = serialized.get("state")
+                if (
+                    context is not None
+                    and serialized.get("method") == "update"
+                    and isinstance(state, Mapping)
+                ):
+                    context.commit_values(source, tuple(state))
 
     def _connect_models(
         self,
@@ -556,16 +562,22 @@ class WidgetSession:
 
     def _observe_widget_graph(self, widgets: list[object]) -> None:
         for widget in widgets:
-            names = _synced_trait_names(widget)
+            binding = bind_model(widget, self._protocol_controllers)
+            description = binding.describe()
+            names = tuple(
+                name
+                for name in description.synchronized_names
+                if name in description.capabilities.observe
+            )
             if not names:
                 continue
             identity = id(widget)
             self._graph_observers[identity] = names
             try:
-                _observe(widget, self._sync_widget_graph, names)
+                binding.observe(self._sync_widget_graph, names)
             except BaseException as error:
                 try:
-                    _unobserve(widget, self._sync_widget_graph, names)
+                    binding.unobserve(self._sync_widget_graph, names)
                 except Exception as cleanup_error:
                     raise BaseExceptionGroup(
                         "Failed to install and remove a widget graph observer",
@@ -596,11 +608,11 @@ class WidgetSession:
                     if id(widget) not in reachable_by_identity
                 ]
                 added_model_ids = {
-                    id(widget): _model_id(widget, self._protocol_controllers)
+                    id(widget): bind_model(widget, self._protocol_controllers).model_id
                     for widget in added
                 }
                 removed_model_ids = {
-                    id(widget): _model_id(widget, self._protocol_controllers)
+                    id(widget): bind_model(widget, self._protocol_controllers).model_id
                     for widget in removed
                 }
             except Exception as error:
@@ -725,7 +737,9 @@ class WidgetSession:
             names = self._graph_observers.get(identity, ())
             if names:
                 try:
-                    _unobserve(widget, self._sync_widget_graph, names)
+                    bind_model(widget, self._protocol_controllers).unobserve(
+                        self._sync_widget_graph, names
+                    )
                 except Exception as error:
                     errors.append(error)
                 else:
@@ -738,7 +752,7 @@ class WidgetSession:
                 message for message in self._messages if message.model_id != model_id
             ]
             try:
-                _close_widget(widget, self._protocol_controllers)
+                bind_model(widget, self._protocol_controllers).close()
             except Exception as error:
                 errors.append(error)
             else:
@@ -791,7 +805,9 @@ class WidgetSession:
                 if not names:
                     continue
                 try:
-                    _unobserve(widget, self._sync_widget_graph, names)
+                    bind_model(widget, self._protocol_controllers).unobserve(
+                        self._sync_widget_graph, names
+                    )
                 except Exception as error:
                     cleanup_errors.append(error)
                 else:
@@ -801,7 +817,9 @@ class WidgetSession:
             restoration_errors: list[Exception] = []
             for widget, names in unobserved:
                 try:
-                    _observe(widget, self._sync_widget_graph, names)
+                    bind_model(widget, self._protocol_controllers).observe(
+                        self._sync_widget_graph, names
+                    )
                 except Exception as error:
                     restoration_errors.append(error)
             if context is not None:
@@ -882,7 +900,7 @@ class WidgetSession:
             raise RuntimeError("Nested widget change metadata is invalid")
 
         rejected_refs = {f"anywidget:{model_id}" for model_id in rejected_model_ids}
-        owner_model_id = _model_id(owner, self._protocol_controllers)
+        owner_model_id = bind_model(owner, self._protocol_controllers).model_id
         missing = object()
         rejected_value: object = missing
         try:

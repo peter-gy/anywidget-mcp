@@ -6,6 +6,7 @@ from typing import Any
 from exceptiongroup import ExceptionGroup
 import anywidget
 import pytest
+import traitlets
 from anywidget._descriptor import MimeBundleDescriptor
 
 import anywidget_mcp._notifications as notifications
@@ -160,7 +161,7 @@ def test_current_projection_releases_notifications_while_projecting() -> None:
         session.close()
 
 
-def test_snapshot_times_out_for_stalled_notification(
+def test_snapshot_waits_for_notifications_after_browser_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(notifications, "NOTIFICATION_WAIT_SECONDS", 0.01)
@@ -173,8 +174,9 @@ def test_snapshot_times_out_for_stalled_notification(
         notification_started.set()
         resume_notification.wait()
 
-    widget.observe(stall_notification, names="value")
     session = WidgetSession("instance", widget)
+    session.receive(widget.model_id, {"method": "update", "state": {"value": 1}})
+    widget.observe(stall_notification, names="value")
 
     def mutate() -> None:
         try:
@@ -221,7 +223,92 @@ def test_snapshot_rejects_active_notification_thread() -> None:
         session.close()
 
 
-def test_close_cleans_up_after_stalled_notification(
+def test_native_trait_batches_validate_before_notifying_and_roll_back() -> None:
+    class RangeWidget(ProjectionWidget):
+        @traitlets.validate("a", "b")
+        def validate_range(self, proposal: traitlets.Bunch) -> int:
+            if self.a > self.b:
+                raise traitlets.TraitError("a must be at most b")
+            return proposal.value
+
+    widget = RangeWidget()
+    observed: list[tuple[int, int]] = []
+    widget.observe(
+        lambda _change: observed.append((widget.a, widget.b)), names=("a", "b")
+    )
+    session = WidgetSession("instance", widget)
+    try:
+        session.launch_snapshot()
+        with widget.hold_trait_notifications():
+            widget.a = 1
+            widget.a = 2
+            widget.b = 2
+
+        assert observed == [(2, 2), (2, 2)]
+        projection = session.current_projection()
+        assert projection is not None
+        assert projection.state == {"a": 2, "b": 2}
+        session.snapshot()
+        observed.clear()
+
+        with pytest.raises(traitlets.TraitError, match="a must be at most b"):
+            with widget.hold_trait_notifications():
+                widget.a = 3
+
+        assert (widget.a, widget.b) == (2, 2)
+        assert observed == []
+        assert session.snapshot().messages == []
+    finally:
+        session.close()
+
+
+def test_notification_lifecycle_preserves_peer_widgets_and_added_traits() -> None:
+    widget = ChildWidget()
+    peer = ChildWidget()
+    peer_values: list[int] = []
+    peer.observe(lambda change: peer_values.append(change.new), names="value")
+    session = WidgetSession("instance", widget)
+    try:
+        peer.value = 1
+        widget.add_traits(extra=traitlets.Int())
+        widget.set_trait("extra", 4)
+        session.receive(widget.model_id, {"method": "update", "state": {"value": 2}})
+    finally:
+        session.close()
+
+    try:
+        assert getattr(widget, "extra") == 4
+        widget.set_trait("extra", 5)
+        assert getattr(widget, "extra") == 5
+        peer.value = 3
+        assert peer_values == [1, 3]
+    finally:
+        peer.close()
+
+
+def test_notification_lifecycle_restores_instance_callback() -> None:
+    widget = ChildWidget()
+    original = getattr(widget, "notify_change")
+    observed: list[int] = []
+
+    def notify_change(change: traitlets.Bunch) -> None:
+        if change.name == "value":
+            observed.append(change.new)
+        original(change)
+
+    setattr(widget, "notify_change", notify_change)
+    session = WidgetSession("instance", widget)
+    try:
+        session.receive(widget.model_id, {"method": "update", "state": {"value": 1}})
+        widget.value = 2
+    finally:
+        session.close()
+
+    widget.value = 3
+    assert observed == [1, 2, 3]
+
+
+def test_close_cleans_up_stalled_notification_after_browser_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(notifications, "NOTIFICATION_WAIT_SECONDS", 0.01)
@@ -242,8 +329,9 @@ def test_close_cleans_up_after_stalled_notification(
         notification_started.set()
         resume_notification.wait()
 
-    widget.observe(stall_notification, names="value")
     session = WidgetSession("instance", widget)
+    session.receive(widget.model_id, {"method": "update", "state": {"value": 1}})
+    widget.observe(stall_notification, names="value")
     comm = widget.comm
 
     def mutate() -> None:

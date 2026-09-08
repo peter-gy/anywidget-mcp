@@ -6,15 +6,28 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { runInNewContext } from "node:vm";
 
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { instrumentInlineModule, loadModule, type WidgetModule } from "../src/module-loader";
-import { isCallable, isString, type RuntimeValue } from "../src/runtime-value";
+import { WidgetRuntime } from "../src/runtime";
+import { fakeQueue } from "./runtime-test-support";
+import { isCallable, type RuntimeValue } from "../src/runtime-value";
 
 const executeFile = promisify(execFile);
 
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+	vi.spyOn(URL, "createObjectURL").mockImplementation(
+		() => `blob:https://widget.test/${randomUUID()}`,
+	);
+	vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.useRealTimers();
+});
 
 async function executeInlineModule(source: string, inspect: string): Promise<RuntimeValue> {
 	const receiverName = `__anywidget_mcp_test_${randomUUID().replaceAll("-", "")}`;
@@ -33,21 +46,19 @@ async function executeInlineModule(source: string, inspect: string): Promise<Run
 	}
 }
 
-function receiverFrom(script: HTMLScriptElement): (module: WidgetModule) => void {
-	const receiverName = receiverNameFrom(script);
+function receiverFrom(_script: HTMLScriptElement): (module: WidgetModule) => void {
+	const receiverName = receiverNameFrom();
 	const receiver: RuntimeValue = Object.getOwnPropertyDescriptor(globalThis, receiverName)?.value;
 	if (!isCallable(receiver)) throw new Error("Module receiver is not registered");
 	return receiver;
 }
 
-function receiverNameFrom(script: HTMLScriptElement): string {
-	const match = /globalThis\[("[^"\\]*(?:\\.[^"\\]*)*")\]/.exec(script.textContent ?? "");
-	if (!match) throw new Error("Missing module receiver");
-	const encodedName = match[1];
-	if (encodedName === undefined) throw new Error("Missing encoded module receiver");
-	const receiverName: RuntimeValue = JSON.parse(encodedName);
-	if (!isString(receiverName)) throw new Error("Invalid module receiver name");
-	return receiverName;
+function receiverNameFrom(): string {
+	const names = Object.getOwnPropertyNames(globalThis).filter((name) =>
+		name.startsWith("__anywidget_mcp_module_"),
+	);
+	if (names.length !== 1 || names[0] === undefined) throw new Error("Expected one pending module");
+	return names[0];
 }
 
 function scriptFrom(nodes: ReadonlyArray<Node | string>): HTMLScriptElement {
@@ -66,7 +77,64 @@ function receiverValue(receiverName: string | undefined): RuntimeValue {
 	return Object.getOwnPropertyDescriptor(globalThis, receiverName)?.value;
 }
 
+async function renderModule(module: WidgetModule): Promise<string | null> {
+	vi.spyOn(document.head, "append").mockImplementation((...nodes) => {
+		const script = scriptFrom(nodes);
+		queueMicrotask(() => receiverFrom(script)(module));
+	});
+	const runtime = new WidgetRuntime(
+		{
+			instanceId: "widget",
+			rootModelId: "root",
+			models: { root: { state: { _esm: "export default {};" } } },
+		},
+		fakeQueue(
+			async () => ({ content: [] }),
+			async () => ({ content: [] }),
+		),
+		{ getHostCapabilities: () => ({}), updateModelContext: vi.fn() },
+		Promise.resolve(),
+	);
+	try {
+		const element = document.createElement("div");
+		await runtime.mount(element);
+		return element.textContent;
+	} finally {
+		await runtime.dispose();
+	}
+}
+
 describe("inline anywidget modules", () => {
+	test("renders a definition returned by a foreign-realm factory", async () => {
+		const exported = runInNewContext(`() => ({
+			label: "Initialized widget",
+			initialize() { this.initialized = true; },
+			render({ el }) {
+				if (!this.initialized) throw new Error("Render requires initialization");
+				el.textContent = this.label;
+			}
+		})`);
+		expect(await renderModule({ default: exported })).toBe("Initialized widget");
+	});
+
+	test("resolves a class render getter after its initializer completes", async () => {
+		class Definition {
+			initialized = false;
+			get initialize() {
+				return function (this: Definition) {
+					this.initialized = true;
+				};
+			}
+			get render() {
+				if (!this.initialized) throw new Error("Render requires initialization");
+				return function (this: Definition, { el }: { el: HTMLElement }) {
+					el.textContent = this.initialized ? "Initialized widget" : "Pending widget";
+				};
+			}
+		}
+		expect(await renderModule({ default: new Definition() })).toBe("Initialized widget");
+	});
+
 	test("captures a default expression", async () => {
 		const value = await executeInlineModule(
 			`export default { marker: "expression" };`,
@@ -180,31 +248,13 @@ describe("inline module script lifecycle", () => {
 		expect(append).toHaveBeenCalledOnce();
 	});
 
-	test("resolves the module and removes its script", async () => {
-		let script: HTMLScriptElement | undefined;
-		let receiverName: string | undefined;
-		const append = document.head.append.bind(document.head);
-		vi.spyOn(document.head, "append").mockImplementation((...nodes) => {
-			script = scriptFrom(nodes);
-			receiverName = receiverNameFrom(script);
-			append(...nodes);
-			queueMicrotask(() => receiverFrom(requiredScript(script))({ default: { marker: true } }));
-		});
-
-		await expect(loadModule(`export default { marker: true };`)).resolves.toEqual({
-			default: { marker: true },
-		});
-		expect(script?.isConnected).toBe(false);
-		expect(receiverValue(receiverName)).toBeUndefined();
-	});
-
 	test("rejects execution errors and removes its script", async () => {
 		let script: HTMLScriptElement | undefined;
 		let receiverName: string | undefined;
 		const append = document.head.append.bind(document.head);
 		vi.spyOn(document.head, "append").mockImplementation((...nodes) => {
 			script = scriptFrom(nodes);
-			receiverName = receiverNameFrom(script);
+			receiverName = receiverNameFrom();
 			append(...nodes);
 			queueMicrotask(() => script?.dispatchEvent(new Event("error", { cancelable: true })));
 		});
@@ -223,7 +273,7 @@ describe("inline module script lifecycle", () => {
 		const append = document.head.append.bind(document.head);
 		vi.spyOn(document.head, "append").mockImplementation((...nodes) => {
 			script = scriptFrom(nodes);
-			receiverName = receiverNameFrom(script);
+			receiverName = receiverNameFrom();
 			append(...nodes);
 		});
 		const loading = loadModule(
@@ -236,5 +286,63 @@ describe("inline module script lifecycle", () => {
 		await expect(loading).rejects.toThrow("cancelled");
 		expect(script?.isConnected).toBe(false);
 		expect(receiverValue(receiverName)).toBeUndefined();
+	});
+
+	test("isolates evaluation errors while another module is loading", async () => {
+		const scripts: HTMLScriptElement[] = [];
+		vi.spyOn(document.head, "append").mockImplementation((...nodes) => {
+			scripts.push(scriptFrom(nodes));
+		});
+		const failed = loadModule('throw new Error("Module failed");');
+		const rejected = expect(failed).rejects.toThrow("Module failed");
+		const healthy = loadModule("export default {};");
+		const failedScript = requiredScript(scripts[0]);
+		const healthyScript = requiredScript(scripts[1]);
+		const error = new ErrorEvent("error", {
+			filename: failedScript.src,
+			error: new Error("Module failed"),
+			cancelable: true,
+		});
+		window.dispatchEvent(error);
+		await rejected;
+		expect(error.defaultPrevented).toBe(true);
+		receiverFrom(healthyScript)({ default: { marker: "healthy" } });
+		await expect(healthy).resolves.toEqual({ default: { marker: "healthy" } });
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith(failedScript.src);
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith(healthyScript.src);
+	});
+
+	test("waits for asynchronous evaluation and releases its script after delivery", async () => {
+		let script: HTMLScriptElement | undefined;
+		let receiverName: string | undefined;
+		const append = document.head.append.bind(document.head);
+		vi.spyOn(document.head, "append").mockImplementation((...nodes) => {
+			script = scriptFrom(nodes);
+			receiverName = receiverNameFrom();
+			append(...nodes);
+		});
+		const loading = loadModule("await preparation; export default {};");
+		const active = requiredScript(script);
+		active.dispatchEvent(new Event("load"));
+		receiverFrom(active)({ default: { marker: "prepared" } });
+		await expect(loading).resolves.toEqual({ default: { marker: "prepared" } });
+		expect(active.isConnected).toBe(false);
+		expect(receiverValue(receiverName)).toBeUndefined();
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith(active.src);
+	});
+
+	test("releases a stalled module after its evaluation timeout", async () => {
+		vi.useFakeTimers();
+		let script: HTMLScriptElement | undefined;
+		vi.spyOn(document.head, "append").mockImplementation((...nodes) => {
+			script = scriptFrom(nodes);
+		});
+		const loading = loadModule("await new Promise(() => {}); export default {};");
+		const rejected = expect(loading).rejects.toThrow("Timed out loading anywidget module");
+		const receiver = receiverNameFrom();
+		await vi.advanceTimersByTimeAsync(10_000);
+		await rejected;
+		expect(receiverValue(receiver)).toBeUndefined();
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith(requiredScript(script).src);
 	});
 });

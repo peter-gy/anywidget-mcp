@@ -153,6 +153,9 @@ importers:
         specifier: 2.3.2
         version: 2.3.2
     devDependencies:
+      '@anywidget/types':
+        specifier: 0.4.0
+        version: 0.4.0
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.1
@@ -243,6 +246,9 @@ packages:
   '@algolia/requester-node-http@5.57.0':
     resolution: {integrity: sha512-cWZc1dKb7wy9/wPpwMtL1y89gK2G7y2A47Coa7zwf1ydtIeJm4+S+XxoQ2b/ZRiQnrC1YHavLjYUPDCdnT7Khg==}
     engines: {node: '>= 14.0.0'}
+
+  '@anywidget/types@0.4.0':
+    resolution: {integrity: sha512-Qno/7V0lKHCMq3DJuSKKHMwilFKPSe8wFftL5xWmgaMCc938mNTtv+i19UrvDfpj9cQTnlPqyXy8t3JOgQ8laA==}
 
   '@asamuzakjp/css-color@5.1.11':
     resolution: {integrity: sha512-KVw6qIiCTUQhByfTd78h2yD1/00waTmm9uy/R7Ck/ctUyAPj+AEDLkQIdJW0T8+qGgj3j5bpNKK7Q3G+LedJWg==}
@@ -2648,6 +2654,8 @@ snapshots:
   '@algolia/requester-node-http@5.57.0':
     dependencies:
       '@algolia/client-common': 5.57.0
+
+  '@anywidget/types@0.4.0': {}
 
   '@asamuzakjp/css-color@5.1.11':
     dependencies:

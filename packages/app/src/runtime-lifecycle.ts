@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import { withTimeout } from "./abort";
 import type { ToolArguments, ToolCalls } from "./tool-calls";
 import { retryTransport } from "./transport";
 
@@ -34,24 +35,4 @@ export function toolErrorText(result: CallToolResult, fallback = "AnyWidget comm
 
 export function randomId(): string {
 	return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
-
-export function withTimeout<T>(
-	task: Promise<T>,
-	milliseconds: number,
-	message: string,
-): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		const timeout = globalThis.setTimeout(() => reject(new Error(message)), milliseconds);
-		void task.then(
-			(value) => {
-				globalThis.clearTimeout(timeout);
-				resolve(value);
-			},
-			(error) => {
-				globalThis.clearTimeout(timeout);
-				reject(error);
-			},
-		);
-	});
 }

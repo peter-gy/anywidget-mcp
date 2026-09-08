@@ -3,12 +3,13 @@ from __future__ import annotations
 import functools
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pytest
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.client import Client
 from mcp.types import Icon, TextContent, TextResourceContents, ToolAnnotations
+from pydantic import BaseModel, Field
 from traitlets import Int
 from wigglystuff import ColorPicker, Slider2D, SortableList
 
@@ -19,7 +20,7 @@ from anywidget_mcp.server import (
     WidgetTools,
     attach,
 )
-from anywidget_mcp._targets import describe_widget_target
+from anywidget_mcp._mcp.targets import prepare_target
 
 from ._server_support import (
     CounterWidget,
@@ -177,41 +178,6 @@ async def test_attach_rejects_an_invalid_app_uri_without_poisoning_retry() -> No
 
 
 @pytest.mark.anyio
-async def test_describe_widget_target_matches_registered_input_schema() -> None:
-    description = describe_widget_target(
-        ColorPicker,
-        name="choose_color",
-        title="Choose Color",
-        description="Select a hexadecimal color.",
-    )
-    mcp = MCPServer("test")
-    widgets = attach(mcp)
-    widgets.widget(
-        ColorPicker,
-        name="choose_color",
-        title="Choose Color",
-        description="Select a hexadecimal color.",
-    )
-    async with Client(
-        mcp,
-        raise_exceptions=True,
-    ) as client:
-        tool = next(
-            tool
-            for tool in (await client.list_tools()).tools
-            if tool.name == "choose_color"
-        )
-
-    assert description.target_name == "ColorPicker"
-    assert description.tool_name == "choose_color"
-    assert description.title == "Choose Color"
-    assert description.description == "Select a hexadecimal color."
-    assert description.kind == "widget-class"
-    assert description.input_schema == tool.input_schema
-    assert tool.description == description.description
-
-
-@pytest.mark.anyio
 async def test_widget_tool_owns_the_optional_loading_message() -> None:
     server = AnyWidgetMCP("test")
     received: list[int] = []
@@ -302,7 +268,9 @@ async def test_widget_loading_message_falls_back_for_invalid_display_text(
 
 @pytest.mark.parametrize("kind", ["callable", "partial"])
 @pytest.mark.anyio
-async def test_compiled_factory_schema_matches_registration(kind: str) -> None:
+async def test_callable_and_partial_factories_preserve_parameter_defaults(
+    kind: str,
+) -> None:
     def make_counter(value: int = 1) -> CounterWidget:
         return CounterWidget(value=value)
 
@@ -318,26 +286,25 @@ async def test_compiled_factory_schema_matches_registration(kind: str) -> None:
             value=2,
         )
     )
-    description = describe_widget_target(factory)
-    mcp = MCPServer("test")
-    widgets = attach(mcp)
-    widgets.widget(factory)
-    async with Client(
-        mcp,
-        raise_exceptions=True,
-    ) as client:
+    server = AnyWidgetMCP("test")
+    server.widget(factory, name="counter")
+    async with connected(server) as client:
         tool = next(
-            tool
-            for tool in (await client.list_tools()).tools
-            if tool.name == description.tool_name
+            tool for tool in (await client.list_tools()).tools if tool.name == "counter"
         )
+        result = await client.call_tool("counter", {})
 
-    assert description.input_schema == tool.input_schema
+    expected = 1 if kind == "callable" else 2
+    assert tool.input_schema["properties"]["value"] == {
+        "type": "integer",
+        "title": "Value",
+        "default": expected,
+    }
+    assert result.structured_content["state"]["value"] == expected
 
 
 @pytest.mark.anyio
-async def test_explicit_empty_description_matches_registration() -> None:
-    description = describe_widget_target(CounterWidget, description="")
+async def test_registration_preserves_explicit_empty_description() -> None:
     mcp = MCPServer("test")
     widgets = attach(mcp)
     widgets.widget(CounterWidget, description="")
@@ -351,7 +318,6 @@ async def test_explicit_empty_description_matches_registration() -> None:
             if tool.name == "counter_widget"
         )
 
-    assert description.description == ""
     assert tool.description == ""
 
 
@@ -360,7 +326,6 @@ async def test_compiled_factory_resolves_target_module_annotations() -> None:
     def row_counter(rows: RowValues) -> CounterWidget:
         return CounterWidget(value=len(rows))
 
-    description = describe_widget_target(row_counter)
     mcp = MCPServer("test")
     widgets = attach(mcp)
     widgets.widget(row_counter)
@@ -374,7 +339,6 @@ async def test_compiled_factory_resolves_target_module_annotations() -> None:
             if tool.name == "row_counter"
         )
 
-    assert description.input_schema == tool.input_schema
     assert tool.input_schema["properties"]["rows"] == {
         "items": {"type": "string"},
         "title": "Rows",
@@ -467,7 +431,12 @@ async def test_widget_decorator_exposes_factory_schema_and_app_metadata() -> Non
 @pytest.mark.anyio
 async def test_widget_classes_expose_filtered_constructor_schemas() -> None:
     server = AnyWidgetMCP("test")
-    server.widget(ColorPicker)
+    server.widget(
+        ColorPicker,
+        name="choose_color",
+        title="Choose Color",
+        description="Select a hexadecimal color.",
+    )
     server.widget(SortableList)
     server.widget(Slider2D)
 
@@ -478,8 +447,8 @@ async def test_widget_classes_expose_filtered_constructor_schemas() -> None:
         name
         for name, tool in tools.items()
         if tool.meta == {"ui": {"resourceUri": "ui://anywidget-mcp/app.html"}}
-    } == {"color_picker", "sortable_list", "slider_2d"}
-    assert "kwargs" not in tools["color_picker"].input_schema["properties"]
+    } == {"choose_color", "sortable_list", "slider_2d"}
+    assert "kwargs" not in tools["choose_color"].input_schema["properties"]
     assert tools["sortable_list"].input_schema["required"] == ["value"]
     assert tools["sortable_list"].input_schema["properties"]["value"] == {
         "items": {"type": "string"},
@@ -488,7 +457,8 @@ async def test_widget_classes_expose_filtered_constructor_schemas() -> None:
     }
     assert tools["slider_2d"].input_schema["properties"]["x_bounds"]["maxItems"] == 2
     assert tools["slider_2d"].input_schema["properties"]["x_bounds"]["minItems"] == 2
-    assert tools["color_picker"].title == "Color Picker"
+    assert tools["choose_color"].title == "Choose Color"
+    assert tools["choose_color"].description == "Select a hexadecimal color."
     assert tools["slider_2d"].title == "Slider 2D"
 
 
@@ -730,3 +700,72 @@ async def test_widget_reports_invalid_factory_return() -> None:
     assert (
         "Widget factory returned object, expected AnyWidget" in result.content[0].text
     )
+
+
+class CounterInput(BaseModel):
+    value: Annotated[int, Field(ge=1)]
+
+
+@pytest.mark.anyio
+async def test_widget_calls_receive_validated_python_arguments() -> None:
+    server = AnyWidgetMCP("test")
+    received: list[tuple[CounterInput, int, Context]] = []
+
+    @server.widget
+    def typed_counter(
+        settings: CounterInput,
+        ctx: Context,
+        scale: Annotated[int, Field(ge=1)] = 2,
+    ) -> CounterWidget:
+        received.append((settings, scale, ctx))
+        return CounterWidget(value=settings.value * scale)
+
+    async with connected(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        result = await client.call_tool("typed_counter", {"settings": '{"value":"3"}'})
+        invalid = await client.call_tool("typed_counter", {"settings": {"value": 0}})
+
+    assert tools["typed_counter"].input_schema["required"] == ["settings"]
+    assert result.structured_content["state"]["value"] == 6
+    assert invalid.is_error
+    assert len(received) == 1
+    settings, scale, context = received[0]
+    assert isinstance(settings, CounterInput)
+    assert settings.value == 3
+    assert scale == 2
+    assert isinstance(context, Context)
+
+
+@pytest.mark.anyio
+async def test_widget_factory_accepts_an_unresolved_return_annotation() -> None:
+    server = AnyWidgetMCP("test")
+
+    def counter(value: int = 5):
+        return CounterWidget(value=value)
+
+    counter.__annotations__["return"] = "ExternallyDefinedWidget"
+    server.widget(counter)
+    async with connected(server) as client:
+        result = await client.call_tool("counter", {})
+
+    assert result.structured_content["state"]["value"] == 5
+
+
+@pytest.mark.anyio
+async def test_compiled_targets_bind_independent_server_runtimes() -> None:
+    def counter(value: int) -> CounterWidget:
+        return CounterWidget(value=value)
+
+    compiled = prepare_target(counter)
+    first = AnyWidgetMCP("first")
+    second = AnyWidgetMCP("second")
+    first._register_widget(compiled)
+    second._register_widget(compiled)
+
+    async with connected(first) as client:
+        result = await client.call_tool("counter", {"value": 3})
+        assert result.structured_content["state"]["value"] == 3
+
+    async with connected(second) as client:
+        result = await client.call_tool("counter", {"value": 7})
+        assert result.structured_content["state"]["value"] == 7

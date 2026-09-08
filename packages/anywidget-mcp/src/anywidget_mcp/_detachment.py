@@ -10,7 +10,8 @@ from exceptiongroup import ExceptionGroup
 from anywidget._descriptor import ReprMimeBundle
 
 from ._comm import BridgeComm
-from ._widget_protocol import close_widget, finalize_claim
+from ._models import bind_model
+from ._widget_protocol import finalize_claim
 
 
 @dataclass
@@ -165,7 +166,7 @@ def _finalize(
                 detached_model.gate_restored = True
         if not detached_model.widget_closed:
             try:
-                close_widget(widget, controllers)
+                bind_model(widget, controllers).close()
             except Exception as error:
                 model_errors.append(error)
             else:

@@ -211,7 +211,7 @@ describe("BridgeModel events", () => {
 		expect(next).toHaveBeenCalledExactlyOnceWith({ index: 2 }, []);
 	});
 
-	test("keeps buffered widget messages behind transient command responses", () => {
+	test("isolates active and retired command replies from buffered widget messages", () => {
 		const harness = modelRuntime();
 		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
 		harness.attach(model);
@@ -234,24 +234,6 @@ describe("BridgeModel events", () => {
 			[],
 		);
 		removeResponseHandler();
-		model.on("msg:custom", (content) => received.push(content));
-
-		expect(responses).toEqual(["ready"]);
-		expect(received).toEqual([{ source: "outer" }]);
-	});
-
-	test("drops a reserved command response after its private handler is removed", () => {
-		const harness = modelRuntime();
-		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
-		harness.attach(model);
-		const responses: unknown[] = [];
-		const received: unknown[] = [];
-
-		model.receive({ method: "custom", content: { source: "before" } }, []);
-		const removeResponseHandler = model.onCommandResponse("command-1", (content) => {
-			responses.push(content.response);
-		});
-		removeResponseHandler();
 		model.receive(
 			{
 				method: "custom",
@@ -266,8 +248,8 @@ describe("BridgeModel events", () => {
 		model.on("msg:custom", (content) => received.push(content));
 		model.receive({ method: "custom", content: { source: "after" } }, []);
 
-		expect(responses).toEqual([]);
-		expect(received).toEqual([{ source: "before" }, { source: "after" }]);
+		expect(responses).toEqual(["ready"]);
+		expect(received).toEqual([{ source: "outer" }, { source: "after" }]);
 	});
 
 	test("retains startup messages for the first listener and drops unobserved live messages", () => {

@@ -1,6 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import { abortable } from "./abort";
+import { abortable, withTimeout } from "./abort";
 import { AttachmentStore, deliveryPayload, requireProtocolVersion } from "./attachments";
 import {
 	WidgetBinding,
@@ -8,6 +8,7 @@ import {
 	type ExperimentalInvokeOptions,
 	type Host,
 	type InitializeProtocolScope,
+	type ResolvedWidget,
 	type RuntimeBinding,
 } from "./binding";
 import { ModelContextSync, type ContextApp, type ModelContextSnapshot } from "./context";
@@ -25,7 +26,6 @@ import {
 	randomId,
 	RUNTIME_LIFECYCLE_TIMEOUT_MS,
 	toolErrorText,
-	withTimeout,
 } from "./runtime-lifecycle";
 import {
 	decodeBuffers,
@@ -293,17 +293,28 @@ export class WidgetRuntime {
 
 	host(signal: AbortSignal): Host {
 		return {
-			getModel: async (ref) => {
+			getModel: async <T extends object>(ref: string) => {
 				signal.throwIfAborted();
-				return scopedModel(this.model(parseWidgetRef(ref)), signal);
+				return scopedModel<T>(this.model(parseWidgetRef(ref)), signal);
 			},
-			getWidget: async (ref) => {
+			getWidget: async <T>(ref: string): Promise<ResolvedWidget<T>> => {
 				signal.throwIfAborted();
 				const binding = this.binding(parseWidgetRef(ref));
-				const exports = await binding.getExports();
+				const lookup = new AbortController();
+				let exports: object | undefined;
+				try {
+					exports = await withTimeout(
+						abortable(binding.getExports(), AbortSignal.any([signal, lookup.signal])),
+						10_000,
+						`Timed out waiting for widget ${ref} to initialize`,
+					);
+				} finally {
+					lookup.abort();
+				}
 				signal.throwIfAborted();
 				return {
-					exports,
+					// SAFETY: AFM consumers declare the interface of the child's opaque exports.
+					exports: exports as T,
 					render: async ({ el, signal: childSignal }) => {
 						const renderSignal = childSignal ? AbortSignal.any([signal, childSignal]) : signal;
 						renderSignal.throwIfAborted();
@@ -321,11 +332,11 @@ export class WidgetRuntime {
 		protocolScope?: InitializeProtocolScope,
 	): Experimental {
 		return {
-			invoke: (
+			invoke: <T>(
 				name: string,
 				message?: WidgetValue,
 				options: ExperimentalInvokeOptions = {},
-			): Promise<[RuntimeValue, DataView[]]> => {
+			): Promise<[T, DataView[]]> => {
 				const id = randomId();
 				const requestSignal = options.signal ?? AbortSignal.timeout(3000);
 				const signal = AbortSignal.any([scopeSignal, requestSignal]);
@@ -408,7 +419,8 @@ export class WidgetRuntime {
 					}
 				});
 				void result.catch(() => undefined);
-				return result;
+				// SAFETY: Command response types are an AFM caller contract over the validated wire result.
+				return result as Promise<[T, DataView[]]>;
 			},
 		};
 	}

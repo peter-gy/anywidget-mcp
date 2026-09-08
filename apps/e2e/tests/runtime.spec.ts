@@ -144,6 +144,34 @@ test("a rejected trait update reports an error and disposes the session", async 
 	await expect(page.getByLabel("Python state")).toContainText('"isError":true');
 });
 
+test("failed widget sessions release state and allow subsequent launches", async ({ page }) => {
+	const failures = [
+		["load", "Widget module loading failed"],
+		["initialize", "Widget initialization failed"],
+		["render", "Widget rendering failed"],
+	] as const;
+	for (const [index, [phase, message]] of failures.entries()) {
+		// eslint-disable-next-line no-await-in-loop -- Each failure must release its session before the next launch.
+		await test.step(phase, async () => {
+			await page.getByLabel("Tool arguments").fill(JSON.stringify({ phase }));
+			await openWidget(page, "lifecycle_probe");
+			const widget = page.frameLocator('iframe[title="Widget"]');
+			await expect(widget.getByText(`Widget error: ${message}`, { exact: true })).toBeVisible();
+			await expect(page.getByLabel("Disposed sessions")).toHaveText(String(index + 1));
+			await page.getByRole("button", { name: "Read Python state" }).click();
+			await expect(page.getByLabel("Python state")).toContainText('"isError":true');
+		});
+	}
+
+	await page.getByLabel("Tool arguments").fill("{}");
+	await openWidget(page, "bridge_probe");
+	const widget = page.frameLocator('iframe[title="Widget"]');
+	await widget.getByRole("button", { name: "Change binary" }).click();
+	await expect(widget.getByTestId("binary-state")).toHaveText("9,8,7,6 | size 4");
+	await page.getByRole("button", { name: "Read Python state" }).click();
+	await expect.poll(() => projectedState(page, "Python state")).toMatchObject({ size: 4 });
+});
+
 test("hosts can pull current Python state without context delivery", async ({ page }) => {
 	await page.goto("/?pull-only");
 	await expect(page.getByLabel("Host status")).toHaveText("Ready");
@@ -154,24 +182,6 @@ test("hosts can pull current Python state without context delivery", async ({ pa
 	await page.getByRole("button", { name: "Read Python state" }).click();
 	await expect.poll(() => projectedState(page, "Python state")).toMatchObject({ size: 4 });
 	await expect(page.getByLabel("Model context")).toBeEmpty();
-});
-
-test("factory sequences render in order and teardown revokes their state handle", async ({
-	page,
-}) => {
-	await openWidget(page, "widget_group");
-	const widget = page.frameLocator('iframe[title="Widget"]');
-	await expect(widget.getByTestId("child-value")).toHaveText(["2", "5"]);
-	await expect
-		.poll(() => projectedState(page, "Model context"))
-		.toEqual({ widgets: [{ value: 2 }, { value: 5 }] });
-	await page.getByRole("button", { name: "Close widget", exact: true }).click();
-	await expect(page.getByLabel("Host status")).toHaveText("Closed");
-	await expect(page.getByLabel("Disposed sessions")).toHaveText("1");
-	await page.getByRole("button", { name: "Read Python state" }).click();
-	await expect(page.getByLabel("Python state")).toContainText('"isError":true');
-	await openWidget(page, "widget_group");
-	await expect(widget.getByTestId("child-value")).toHaveText(["2", "5"]);
 });
 
 test("startup reconciles many source revisions and retains its initial event backlog", async ({

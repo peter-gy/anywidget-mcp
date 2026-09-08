@@ -80,14 +80,29 @@ from anywidget_mcp import webmcp
 webmcp.enable()
 ```
 
-Rendered AnyWidgets expose read and update tools. Python validates updates and
-runs observers before returning state. The notebook host keeps rendering and
-synchronizing its widgets, including when Python runs in
+Current and future AnyWidgets expose read and update tools. Python validates
+updates and runs observers before returning state. The notebook host keeps
+rendering and synchronizing its widgets, including when Python runs in
 [Pyodide](https://pyodide.org/), a Python runtime for the browser.
 
-Requires a WebMCP-enabled browser. Call `webmcp.disable()` to restore
-widgets and stop instrumentation. [WebMCP](https://peter-gy.github.io/anywidget-mcp/webmcp)
-covers state exposure, host permissions, and composition with MCP Apps.
+Pass installed widget classes or typed creation functions to offer tools that
+create new widgets. With `wigglystuff` installed:
+
+```python
+from wigglystuff import ColorPicker
+
+webmcp.enable(widgets=[ColorPicker], discover=False)
+```
+
+Display the returned session as the cell's final expression. Browser tool calls
+create widgets inside its output. `discover=False` includes supplied instances
+and widgets created through the session. Use a mapping in `widgets=` to configure
+private or read-only traits per class, function, or instance.
+
+Requires a WebMCP-enabled browser and a compatible AnyWidget 0.11+ frontend.
+`webmcp.disable()` withdraws tools and leaves widgets open.
+[WebMCP](https://peter-gy.github.io/anywidget-mcp/webmcp) covers creation signatures,
+state exposure, host permissions, and composition with MCP Apps.
 
 ## Documentation
 

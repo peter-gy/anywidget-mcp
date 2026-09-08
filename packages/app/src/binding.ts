@@ -1,30 +1,16 @@
-import { scopedModel, type AnyModel, type BridgeModel } from "./model";
+import type { AnyWidget, Experimental, Host } from "@anywidget/types";
+
+import { scopedModel, type BridgeModel } from "./model";
 import { loadWidget } from "./widget-definition";
 import { abortable } from "./abort";
-import {
-	isCallable,
-	isPlainObject,
-	isString,
-	type RuntimeValue,
-	type WidgetValue,
-} from "./runtime-value";
+import { isCallable, isString, type WidgetValue } from "./runtime-value";
 import type { QueuedToolCall } from "./tool-calls";
 
 type LifecycleValue = WidgetValue | void;
 type Cleanup = () => LifecycleValue;
 
-export interface Experimental {
-	invoke(
-		name: string,
-		message?: WidgetValue,
-		options?: ExperimentalInvokeOptions,
-	): Promise<[RuntimeValue, DataView[]]>;
-}
-
-export interface ExperimentalInvokeOptions {
-	buffers?: DataView[];
-	signal?: AbortSignal;
-}
+export type { Experimental, Host, ResolvedWidget } from "@anywidget/types";
+export type ExperimentalInvokeOptions = NonNullable<Parameters<Experimental["invoke"]>[2]>;
 
 export interface InitializeProtocolScope {
 	readonly call: QueuedToolCall;
@@ -33,30 +19,7 @@ export interface InitializeProtocolScope {
 	error?: unknown;
 }
 
-export interface Host {
-	getModel(ref: string): Promise<AnyModel>;
-	getWidget(ref: string): Promise<ResolvedWidget>;
-}
-
-export interface ResolvedWidget {
-	exports: object | undefined;
-	render(options: { el: HTMLElement; signal?: AbortSignal }): Promise<void>;
-}
-
-export interface WidgetDefinition {
-	initialize?(options: {
-		model: AnyModel;
-		signal: AbortSignal;
-		experimental: Experimental;
-	}): LifecycleValue;
-	render?(options: {
-		model: AnyModel;
-		el: HTMLElement;
-		signal: AbortSignal;
-		host: Host;
-		experimental: Experimental;
-	}): LifecycleValue;
-}
+export type WidgetDefinition = Exclude<AnyWidget, (...args: never[]) => object>;
 
 export interface BindingRuntime {
 	host(signal: AbortSignal): Host;
@@ -481,7 +444,9 @@ export class WidgetBinding implements RuntimeBinding {
 				controller,
 				signal,
 				definition,
-				exports: isPlainObject(result) ? result : undefined,
+				// AFM exports retain arbitrary objects, including instances and collections.
+				// eslint-disable-next-line anti-slop/no-runtime-typeof -- AFM discriminates initialize results by their JavaScript type.
+				exports: typeof result === "object" && result !== null ? result : undefined,
 				initializeCleanup: isCleanup(result) ? result : undefined,
 				renderTasks: new Set(),
 				cleanupTasks: new Set(),

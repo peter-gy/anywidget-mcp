@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ._targets import WidgetTargetDescription, describe_widget_target
+from ._mcp.targets import MCPWidgetTarget, prepare_target
 from .server import AnyWidgetMCP
 
 
@@ -21,10 +21,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if arguments.command == "inspect":
         try:
             target = _resolve_target(arguments.target)
-            description = describe_widget_target(target)
+            compiled = prepare_target(target)
         except (TypeError, ValueError) as error:
             parser.error(str(error))
-        _print_inspection(arguments.target, description, as_json=arguments.json)
+        _print_inspection(arguments.target, compiled, as_json=arguments.json)
         return
 
     try:
@@ -33,7 +33,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(str(error))
 
     server_name = (
-        f"{_target_name(targets[0])} MCP" if len(targets) == 1 else "AnyWidget MCP"
+        f"{targets[0].spec.identity.python_name} MCP"
+        if len(targets) == 1
+        else "AnyWidget MCP"
     )
     server = AnyWidgetMCP(
         server_name,
@@ -41,7 +43,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     try:
         for target in targets:
-            server.widget(target)
+            server._register_widget(target)
     except (TypeError, ValueError) as error:
         parser.error(str(error))
     try:
@@ -140,27 +142,27 @@ def _resolve_target(target: str) -> Any:
     return value
 
 
-def _prepare_targets(targets: Sequence[str]) -> list[Any]:
+def _prepare_targets(targets: Sequence[str]) -> list[MCPWidgetTarget]:
     """Resolve targets and reject model-facing tool name collisions."""
 
-    prepared: list[Any] = []
+    prepared: list[MCPWidgetTarget] = []
     tool_sources: dict[str, str] = {}
 
     for source in targets:
         try:
             target = _resolve_target(source)
-            description = describe_widget_target(target)
+            compiled = prepare_target(target)
         except (TypeError, ValueError) as error:
             raise ValueError(f"Widget target {source!r} is invalid: {error}") from error
-        previous_source = tool_sources.get(description.tool_name)
+        previous_source = tool_sources.get(compiled.spec.identity.name)
         if previous_source is not None:
             raise ValueError(
                 f"Targets {previous_source!r} and {source!r} both resolve to MCP "
-                f"tool {description.tool_name!r}. Use "
+                f"tool {compiled.spec.identity.name!r}. Use "
                 "AnyWidgetMCP.widget(..., name=...) to assign explicit names."
             )
-        tool_sources[description.tool_name] = source
-        prepared.append(target)
+        tool_sources[compiled.spec.identity.name] = source
+        prepared.append(compiled)
 
     return prepared
 
@@ -180,17 +182,17 @@ def _prioritize_working_directory() -> None:
 
 def _print_inspection(
     target: str,
-    description: WidgetTargetDescription,
+    compiled: MCPWidgetTarget,
     *,
     as_json: bool,
 ) -> None:
     payload = {
-        "description": description.description,
-        "inputSchema": description.input_schema,
-        "kind": description.kind,
+        "description": compiled.spec.identity.description,
+        "inputSchema": compiled.inputs.schema.to_dict(),
+        "kind": compiled.spec.kind,
         "target": target,
-        "title": description.title,
-        "toolName": description.tool_name,
+        "title": compiled.spec.identity.title,
+        "toolName": compiled.spec.identity.name,
     }
     if as_json:
         print(
@@ -209,10 +211,6 @@ def _print_inspection(
     print(
         json.dumps(payload["inputSchema"], ensure_ascii=False, indent=2, sort_keys=True)
     )
-
-
-def _target_name(target: object) -> str:
-    return str(getattr(target, "__name__", type(target).__name__))
 
 
 def _port(value: str) -> int:
