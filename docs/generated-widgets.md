@@ -62,11 +62,14 @@ the requested order and [render together](./composition#return-several-widgets-f
 
 Omit `classnames` to select the last final binding to a source-defined,
 top-level AnyWidget class. Use explicit names when source defines several
-widgets or aliases. Missing names, invalid bindings, and constructor errors
-fail the tool call.
+widgets or aliases. Compilation, class selection, and construction errors return
+the exception type and generated source line when available. The model can use
+that diagnostic to correct the source and retry. Direct Python calls raise a
+[`ToolError`](./api#create-anywidget) with the same message.
 
 Source can define helpers, imports, and several classes in the same module.
-The module remains registered while the returned widgets remain reachable, so
-methods retain their globals and Python can resolve their class annotations.
+The module remains registered until every returned widget is closed or
+garbage-collected, so Python can resolve module references while the widgets
+are live.
 
 The [API reference](./api#create-anywidget) lists arguments and errors.

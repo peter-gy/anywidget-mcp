@@ -72,8 +72,8 @@ Cleanup closes the enrolled graph before exiting the manager. Acquisition is
 cancellable, and the factory owns rollback before it returns or yields.
 
 `_dynamic.py` executes generated Python in a fresh module and selects classes
-from the final namespace. The module remains registered while its widgets remain
-reachable so live methods and class annotations retain their globals.
+from the final namespace. The module remains registered until every returned
+widget closes or is collected, preserving module lookup for live classes.
 
 `WidgetSession` in `_bridge.py` owns enrollment, rollback, snapshots, and graph
 cleanup. It follows widget references recursively through synchronized dicts,

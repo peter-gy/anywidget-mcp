@@ -223,11 +223,13 @@ anywidget-mcp serve anywidget_mcp:create_anywidget
 JavaScript loads in the app iframe. Run this factory in a sandbox with scoped
 filesystem, network, credential, and process access.
 
-Compilation and execution errors propagate from the supplied source. Missing
-names, invalid identifiers, and a missing fallback raise `ValueError`. A name
-bound to another kind of object raises `TypeError`.
-Constructor errors close widget instances that were already constructed before
-propagating.
+Compilation, class selection, execution, and construction failures raise the
+Python SDK's `ToolError`. Its message includes the original exception type,
+the generated source line when available, and up to 1,000 characters of error
+detail. MCP clients receive the same diagnostic, such as
+`TypeError at line 6: Child.__init__() missing 1 required positional argument: 'value'`.
+Correct the source or `classnames` and call the tool again. Construction failures
+close previously constructed widget graphs before reporting the error.
 
 ## `StateProjection`
 
