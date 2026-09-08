@@ -1,0 +1,22 @@
+apps/e2e/pyproject.toml
+  s_aac849587c128f::t_15ccea7fe49050 15
+  s_aac849587c128f::t_6a7590c8e94fce 16
+uv.lock
+  ai_agent 148,1004
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9ed26b9b1d1d4b3405f915f25614b63868bfd71a",
+  "prompts": {},
+  "sessions": {
+    "s_aac849587c128f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0818f-8ab6-7343-a743-0b065aeea223",
+        "model": "gpt-6-astra"
+      },
+      "human_author": null
+    }
+  }
+}
