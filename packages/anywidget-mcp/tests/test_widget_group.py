@@ -97,7 +97,7 @@ def test_group_state_projection_preserves_explicit_watch_semantics() -> None:
     first = GroupStateWidget(selected=1, detail="first")
     second = GroupStateWidget(selected=2, detail="second")
     group = _WidgetGroup((first, second))
-    state = StateProjection(
+    state = StateProjection[GroupStateWidget](
         lambda widget: {
             "selected": widget.selected,
             "detail": widget.detail,

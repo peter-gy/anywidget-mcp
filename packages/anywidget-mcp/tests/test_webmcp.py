@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import patch
 
 import anywidget
 import pytest
@@ -28,14 +29,13 @@ def descriptor(widget: anywidget.AnyWidget) -> dict[str, Any]:
 
 def request(widget: anywidget.AnyWidget, **arguments: Any) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
-    original_send = widget.comm.send
-    widget.comm.send = lambda data, **_: messages.append(data)
-    try:
+    assert widget.comm is not None
+    with patch.object(
+        widget.comm, "send", side_effect=lambda data, **_: messages.append(data)
+    ):
         widget._handle_custom_msg(
             {"kind": "anywidget-webmcp", "id": "request", **arguments}, []
         )
-    finally:
-        widget.comm.send = original_send
     return messages
 
 

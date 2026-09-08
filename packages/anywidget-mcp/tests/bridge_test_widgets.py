@@ -102,7 +102,8 @@ class HybridProtocolContainer(traitlets.HasTraits):
 class UnhashableWidget(anywidget.AnyWidget):
     _esm = "export default { render() {} }"
 
-    __hash__ = None
+    # Python uses None to mark a class as unhashable.
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
 
 
 class EqualWidget(anywidget.AnyWidget):

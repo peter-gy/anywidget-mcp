@@ -273,6 +273,7 @@ async def test_comm_error_replay_stays_within_transport_budget() -> None:
 
     async with connected(server) as client:
         runtime = await bootstrap_runtime(client, await client.call_tool("data", {}))
+        assert widget.comm is not None
         widget.comm.on_msg(fail)
         args = {
             "instance_id": runtime["instanceId"],

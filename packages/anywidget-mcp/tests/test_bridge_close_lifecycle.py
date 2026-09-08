@@ -8,6 +8,7 @@ import pytest
 from anywidget._descriptor import MimeBundleDescriptor
 
 from anywidget_mcp._bridge import WidgetInUseError, WidgetSession
+from anywidget_mcp._comm import BridgeComm
 from anywidget_mcp._state import StateContext
 
 from .bridge_test_widgets import (
@@ -80,7 +81,7 @@ def test_close_closes_comm_when_widget_fails_before_base_cleanup() -> None:
     with pytest.raises(ExceptionGroup, match="Failed to close widget session"):
         session.close()
 
-    assert comm is not None
+    assert isinstance(comm, BridgeComm)
     with pytest.raises(RuntimeError, match="widget session is closed"):
         comm.receive({"method": "request_state"})
     session.close()
