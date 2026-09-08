@@ -3,6 +3,7 @@ members = ["packages/anywidget-mcp", "apps/e2e"]
 
 [tool.uv]
 exclude-newer = "2 days"
+exclude-newer-package = { marimo = false }
 
 [tool.uv.sources]
 anywidget-mcp = { workspace = true }
