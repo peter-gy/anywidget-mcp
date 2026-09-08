@@ -49,7 +49,7 @@ AnyWidgetMCP(
     csp=None,
     permissions=None,
     prefers_border=True,
-    cors_origins=(),
+    cors_origins=None,
     session_idle_timeout=900.0,
     **mcp_options,
 )
@@ -64,6 +64,9 @@ session ownership.
 - `permissions` accepts an `AppPermissions` mapping.
 - `prefers_border` sets the app resource's host border preference.
 - `cors_origins` lists browser origins allowed to call the HTTP endpoint.
+  The default `None` allows HTTP origins with an explicit port on `localhost`,
+  `127.0.0.1`, and `[::1]` when the HTTP `host` is a loopback address.
+  A supplied list replaces that default. Pass `()` to disable cross-origin access.
 - `session_idle_timeout` sets the idle lifetime from launch onward, in seconds.
   It defaults to `900.0` and accepts a positive finite number or `None`. With
   `None`, explicit disposal or server shutdown owns session cleanup.
@@ -257,6 +260,17 @@ must exist on every returned widget.
 
 `AppCSP` is a typed mapping with optional `connectDomains`, `resourceDomains`,
 `frameDomains`, and `baseUriDomains` lists.
+
+`scriptDirectives` optionally requests `"'wasm-unsafe-eval'"` for WebAssembly
+compilation or `"'unsafe-eval'"` for JavaScript string evaluation. It accepts a
+list containing those exact strings. Other entries raise `ValueError`, and a
+non-list value raises `TypeError` when constructing the server or attaching
+widget tools. The default app policy requests neither directive.
+
+This field is a host extension supported by
+[mcp-use Inspector](https://github.com/mcp-use/mcp-use/tree/main/libraries/typescript/packages/inspector)
+20.3.7. Check the host's support before relying on it. The host controls the final
+[content security policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src).
 
 ### `AppPermissions`
 

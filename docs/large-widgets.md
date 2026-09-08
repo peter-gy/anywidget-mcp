@@ -27,8 +27,11 @@ Atlas 0.24 uses [WebGPU](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU
 for GPU rendering and requires its `shader-f16` capability. Its background
 workers run [WebAssembly](https://webassembly.org/), a browser binary execution
 format, and load embedded code from data URLs. Use an MCP Apps
-host that enables those browser capabilities, and declare the data URLs in the
-app policy:
+host that enables those browser capabilities. The app policy declares data URLs
+and requests WebAssembly compilation through `scriptDirectives`, a host extension
+supported by
+[mcp-use Inspector](https://github.com/mcp-use/mcp-use/tree/main/libraries/typescript/packages/inspector)
+20.3.7. Other hosts must provide equivalent WebAssembly permission:
 
 ```python
 from collections.abc import Generator
@@ -41,7 +44,11 @@ from anywidget_mcp import AnyWidgetMCP, StateProjection
 
 mcp = AnyWidgetMCP(
     "Dataset tools",
-    csp={"resourceDomains": ["data:"], "connectDomains": ["data:"]},
+    csp={
+        "resourceDomains": ["data:"],
+        "connectDomains": ["data:"],
+        "scriptDirectives": ["'wasm-unsafe-eval'"],
+    },
 )
 
 

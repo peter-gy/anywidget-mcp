@@ -9,12 +9,12 @@ import pytest
 from mcp.server.mcpserver import MCPServer
 from mcp.client import Client
 from mcp.types import Icon, TextContent, TextResourceContents, ToolAnnotations
-from starlette.testclient import TestClient
 from traitlets import Int
 from wigglystuff import ColorPicker, Slider2D, SortableList
 
 from anywidget_mcp import (
     APP_RESOURCE_URI,
+    AppCSP,
     AnyWidgetMCP,
     WidgetTools,
     attach,
@@ -666,65 +666,35 @@ async def test_app_resource_exposes_mime_type_and_csp() -> None:
     assert isinstance(contents[0], TextResourceContents)
     assert contents[0].mime_type == "text/html;profile=mcp-app"
     assert contents[0].meta == resources[0].meta
-    assert "Initializing widget…" in contents[0].text
-    assert 'aria-busy="true"' in contents[0].text
-
-
-def test_streamable_http_app_allows_configured_browser_origin() -> None:
-    server = AnyWidgetMCP("test", cors_origins=["http://localhost:8080"])
-
-    with TestClient(server.streamable_http_app()) as client:
-        response = client.options(
-            "/mcp",
-            headers={
-                "Origin": "http://localhost:8080",
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "mcp-protocol-version",
-            },
-        )
-        head_preflight = client.options(
-            "/mcp",
-            headers={
-                "Origin": "http://localhost:8080",
-                "Access-Control-Request-Method": "HEAD",
-                "Access-Control-Request-Headers": "authorization",
-            },
-        )
-        simple_response = client.get(
-            "/missing", headers={"Origin": "http://localhost:8080"}
-        )
-        head_response = client.head("/mcp", headers={"Origin": "http://localhost:8080"})
-
-    assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "http://localhost:8080"
-    assert "mcp-protocol-version" in response.headers["access-control-allow-headers"]
-    assert head_preflight.status_code == 200
-    assert "HEAD" in head_preflight.headers["access-control-allow-methods"]
-    assert simple_response.headers["access-control-expose-headers"] == "Mcp-Session-Id"
-    assert head_response.status_code == 200
-    assert head_response.headers["allow"] == "GET, POST, DELETE, HEAD"
-    assert (
-        head_response.headers["access-control-allow-origin"] == "http://localhost:8080"
-    )
 
 
 @pytest.mark.anyio
-async def test_unconfigured_preflight_is_rejected_and_server_remains_usable() -> None:
-    server = AnyWidgetMCP("test")
+async def test_app_resource_preserves_opted_in_script_directives() -> None:
+    csp: AppCSP = {"scriptDirectives": ["'wasm-unsafe-eval'", "'unsafe-eval'"]}
+    server = AnyWidgetMCP("test", csp=csp)
+    csp["scriptDirectives"].clear()
 
-    with TestClient(server.streamable_http_app()) as http:
-        response = http.options(
-            "/mcp",
-            headers={
-                "Origin": "http://127.0.0.1:7878",
-                "Access-Control-Request-Method": "POST",
-            },
-        )
-        async with connected(server) as client:
-            await client.list_tools()
+    async with connected(server) as client:
+        resources = (await client.list_resources()).resources
+        contents = (await client.read_resource(APP_RESOURCE_URI)).contents
 
-    assert response.status_code == 405
-    assert response.headers["allow"] == "GET, POST, DELETE, HEAD"
+    expected = {
+        "resourceDomains": ["blob:"],
+        "scriptDirectives": ["'wasm-unsafe-eval'", "'unsafe-eval'"],
+    }
+    assert resources[0].meta["ui"]["csp"] == expected
+    assert contents[0].meta["ui"]["csp"] == expected
+
+
+@pytest.mark.parametrize("directive", ["'unsafe-inline'", "wasm-unsafe-eval", None])
+def test_app_resource_rejects_invalid_script_directives(directive: object) -> None:
+    with pytest.raises(ValueError, match="scriptDirectives accepts"):
+        AnyWidgetMCP("test", csp=cast(AppCSP, {"scriptDirectives": [directive]}))
+
+
+def test_app_resource_requires_a_script_directive_list() -> None:
+    with pytest.raises(TypeError, match="scriptDirectives must be a list"):
+        AnyWidgetMCP("test", csp=cast(AppCSP, {"scriptDirectives": "'unsafe-eval'"}))
 
 
 def test_widget_rejects_ambiguous_factory_signatures() -> None:

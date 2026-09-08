@@ -13,7 +13,7 @@ from starlette.routing import Route
 from anywidget._descriptor import MimeBundleDescriptor
 from anywidget.experimental import command
 
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp import AnyWidgetMCP, create_anywidget
 
 
 def _large_leaf_module() -> str:
@@ -532,6 +532,7 @@ class ProjectionProbe(anywidget.AnyWidget):
 def create_server() -> AnyWidgetMCP:
     server = AnyWidgetMCP(
         "AnyWidget browser bridge fixture",
+        csp={"scriptDirectives": ["'wasm-unsafe-eval'"]},
         cors_origins=[
             "http://localhost:8080",
             "http://127.0.0.1:8080",
@@ -539,6 +540,7 @@ def create_server() -> AnyWidgetMCP:
             "http://127.0.0.1:8082",
         ],
     )
+    server.widget(create_anywidget)
 
     @server.widget(title="Browser bridge probe")
     def bridge_probe() -> BridgeProbe:
