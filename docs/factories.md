@@ -74,6 +74,9 @@ async def prepared_picker(
 ```
 
 Synchronous and asynchronous factories may return the widget directly.
+Synchronous calls run in worker threads so other widget sessions remain
+responsive during setup. Use an async factory for setup that needs the server's
+event loop.
 
 ## Hold resources for the session
 
@@ -110,9 +113,18 @@ async def explore_dataset(
 ```
 
 App disposal, idle expiry, `aclose()`, and server shutdown close the widget
-graph before the manager exits. Factory acquisition is cancellable. A manager
-that acquires a resource before its final pre-yield await must protect cleanup
-for that partial acquisition with `anyio.CancelScope(shield=True)`.
+graph before the manager exits. Synchronous manager entry and exit also run in
+worker threads. Synchronous invocation, entry, and exit share one copied
+[context](https://docs.python.org/3/library/contextvars.html), while their thread
+identities may differ. Async factories, returned awaitables, and async managers
+use the owner task's context. Changes made to context variables in a worker stay
+in the copied context. Put setup that must affect async task-local context in
+an async factory or manager. Async managers enter and exit on the same owner task.
+
+Cancellation interrupts async acquisition. A synchronous operation already
+running finishes before its returned widget graph and manager are cleaned up.
+A manager that acquires a resource before its final pre-yield await must protect
+cleanup for that partial acquisition with `anyio.CancelScope(shield=True)`.
 
 See [Model-visible state](./state) for projection choices and [API
 reference](./api) for registration options.
