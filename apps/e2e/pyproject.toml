@@ -12,3 +12,5 @@ dependencies = [
 
 [tool.uv.sources]
 anywidget-mcp = { workspace = true }
+# https://github.com/ipython/ipykernel/pull/1529 keeps shell requests readable after replies.
+ipykernel = { git = "https://github.com/ipython/ipykernel", rev = "c7422704a08ac6b0cad72ab6959c5574840979da" }

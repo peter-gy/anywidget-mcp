@@ -145,7 +145,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anywidget-mcp", extras = ["server"], editable = "packages/anywidget-mcp" },
-    { name = "ipykernel", specifier = "==7.3.0" },
+    { name = "ipykernel", git = "https://github.com/ipython/ipykernel?rev=c7422704a08ac6b0cad72ab6959c5574840979da" },
     { name = "jupyterlab", specifier = "==4.6.3" },
     { name = "marimo", specifier = "==0.24.0" },
     { name = "nbformat", specifier = "==5.11.1" },
@@ -1001,7 +1001,7 @@ wheels = [
 [[package]]
 name = "ipykernel"
 version = "7.3.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ipython/ipykernel?rev=c7422704a08ac6b0cad72ab6959c5574840979da#c7422704a08ac6b0cad72ab6959c5574840979da" }
 dependencies = [
     { name = "appnope", marker = "sys_platform == 'darwin'" },
     { name = "comm" },
@@ -1013,14 +1013,9 @@ dependencies = [
     { name = "matplotlib-inline" },
     { name = "nest-asyncio2" },
     { name = "packaging" },
-    { name = "psutil" },
     { name = "pyzmq" },
     { name = "tornado" },
     { name = "traitlets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/c4/e4a38f579de4225a561305666f7541cdabb30075def2aa1ac17bd73c1fb5/ipykernel-7.3.0.tar.gz", hash = "sha256:9acaaaf97d16355166e4085afe9d225bfbdf2b7ef520f9df3be8f2b248275e09", size = 184899, upload-time = "2026-06-10T08:41:25.481Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3d/02/77b271f5dc58bfbc0b577c877b2365d1ffea2afe66a80c13f2312820348c/ipykernel-7.3.0-py3-none-any.whl", hash = "sha256:897eb64da762549ef610698fca5e9675195ec6ac8ec7f19d81ce1ca20c876057", size = 120583, upload-time = "2026-06-10T08:41:23.648Z" },
 ]
 
 [[package]]
