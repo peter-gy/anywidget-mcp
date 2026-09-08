@@ -515,7 +515,22 @@ describe("WidgetRuntime command lifecycle", () => {
 	});
 
 	test("skips a command aborted during queue handoff", async () => {
-		const callServerTool = vi.fn().mockResolvedValue({ content: [] });
+		const callServerTool = vi.fn(async (request: ToolRequest): Promise<CallToolResult> => {
+			if (request.name === "anywidget_cancel") {
+				return {
+					content: [],
+					_meta: {
+						anywidget: {
+							protocolVersion: 3,
+							instanceId: "instance-1",
+							operationId: 1,
+							retired: true,
+						},
+					},
+				};
+			}
+			return { content: [] };
+		});
 		const calls = new ToolCallQueue({ callServerTool });
 		const runtime = new WidgetRuntime(
 			{
@@ -543,6 +558,10 @@ describe("WidgetRuntime command lifecycle", () => {
 		expect(
 			callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_comm"),
 		).toHaveLength(0);
+		await runtime.send("root-model", { method: "request_state" }, []);
+		expect(
+			callServerTool.mock.calls.filter(([request]) => request.name === "anywidget_comm"),
+		).toHaveLength(1);
 		await runtime.dispose();
 	});
 

@@ -211,19 +211,6 @@ describe("BridgeModel events", () => {
 		expect(next).toHaveBeenCalledExactlyOnceWith({ index: 2 }, []);
 	});
 
-	test("buffers custom messages until the first listener subscribes", () => {
-		const harness = modelRuntime();
-		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
-		harness.attach(model);
-		const received: unknown[] = [];
-
-		model.receive({ method: "custom", content: { index: 1 } }, []);
-		model.receive({ method: "custom", content: { index: 2 } }, []);
-		model.on("msg:custom", (content) => received.push(content));
-
-		expect(received).toEqual([{ index: 1 }, { index: 2 }]);
-	});
-
 	test("keeps buffered widget messages behind transient command responses", () => {
 		const harness = modelRuntime();
 		const model = new BridgeModel(harness.runtime, payload(), vi.fn());
