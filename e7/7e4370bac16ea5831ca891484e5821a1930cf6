@@ -1,0 +1,69 @@
+packages/anywidget-mcp/src/anywidget_mcp/_factory.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 18
+packages/anywidget-mcp/src/anywidget_mcp/_dynamic.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 13
+docs/index.md
+  s_3d3697fdd0664f::t_9484cd5622ff40 38
+packages/anywidget-mcp/src/anywidget_mcp/_widget_protocol.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 10
+packages/anywidget-mcp/tests/test_server_factories.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 9
+pyproject.toml
+  s_3d3697fdd0664f::t_9484cd5622ff40 13,43
+  s_3d3697fdd0664f::t_46e6f92e0b3247 28
+  s_3d3697fdd0664f::t_b13c25b5bf147a 31-33,35
+uv.lock
+  ai_agent 3,7-8,30-31,64,93,116,186-197,293-308,483,534-542,570-575,606-617,675,765-789,794-798,835-836,930-942,1031-1032,1106-1119,1186-1193,1230-1231,1279-1289,1432-1439,1721-1725,1773-1779,1847,1876-1889,2011-2013,2062,2067,2088-2090,2123-2131,2190-2199,2247-2252,2281-2282,2296-2312,2476-2600,2605-2609,2799-2802,2871-2877,2929-2982,3127,3143-3261,3266-3269,3430-3445,3450-3454
+packages/anywidget-mcp/src/anywidget_mcp/_runtime.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 18
+packages/anywidget-mcp/tests/test_bridge_lifecycle.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 6
+packages/anywidget-mcp/tests/test_webmcp.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 7
+packages/anywidget-mcp/pyproject.toml
+  s_3d3697fdd0664f::t_9484cd5622ff40 13,19,26
+packages/anywidget-mcp/src/anywidget_mcp/_state.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 12
+.github/workflows/ci.yml
+  s_3d3697fdd0664f::t_9484cd5622ff40 72,137-138,158,200-201,213
+packages/anywidget-mcp/src/anywidget_mcp/_attachments.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 14
+packages/anywidget-mcp/src/anywidget_mcp/_detachment.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 9
+development_docs/development.md
+  s_3d3697fdd0664f::t_9484cd5622ff40 78
+packages/anywidget-mcp/src/anywidget_mcp/webmcp.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 14
+packages/anywidget-mcp/tests/test_state.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 7
+packages/anywidget-mcp/tests/_server_support.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 11
+packages/anywidget-mcp/tests/test_bridge_detachment.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 4-5
+packages/anywidget-mcp/README.md
+  s_3d3697fdd0664f::t_9484cd5622ff40 43
+packages/anywidget-mcp/src/anywidget_mcp/_bridge.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 10
+README.md
+  s_3d3697fdd0664f::t_9484cd5622ff40 43
+packages/anywidget-mcp/tests/test_bridge_close_lifecycle.py
+  s_3d3697fdd0664f::t_9484cd5622ff40 7
+docs/getting-started.md
+  s_3d3697fdd0664f::t_9484cd5622ff40 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e77e4370bac16ea5831ca891484e5821a1930cf6",
+  "prompts": {},
+  "sessions": {
+    "s_3d3697fdd0664f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0813c-209e-7d11-9869-7393e18eed4a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
