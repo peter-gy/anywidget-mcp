@@ -1,0 +1,44 @@
+apps/e2e/tests/generated-widgets.spec.ts
+  s_a018fb1dde7849::t_b67302a2508603 27-29
+packages/anywidget-mcp/src/anywidget_mcp/server.py
+  s_a018fb1dde7849::t_6b60cef26db897 192
+  s_a018fb1dde7849::t_199d9627c03b56 110,115,184-187,190-191,193-195
+packages/anywidget-mcp/tests/test_server_http.py
+  s_a018fb1dde7849::t_e75fb1030f11b6 1-23,39-113,134-140,143,147-176
+  ai_agent 24-38,114-133,141-142,144-146
+development_docs/development.md
+  s_a018fb1dde7849::t_6b60cef26db897 188-193
+apps/e2e/server.py
+  s_a018fb1dde7849::t_a0d680385729c5 16,535,543
+docs/large-widgets.md
+  s_a018fb1dde7849::t_7da78713ac25f3 30-34,47-51
+packages/anywidget-mcp/src/anywidget_mcp/_widget_tools.py
+  s_a018fb1dde7849::t_7da78713ac25f3 717-718
+  s_a018fb1dde7849::t_57b2ba92626d35 12,56,712-716,719-724
+packages/anywidget-mcp/tests/test_server_registration.py
+  s_a018fb1dde7849::t_7da78713ac25f3 17,671-675,677-679,681-686,689-693,695-697
+docs/deployment.md
+  s_a018fb1dde7849::t_6b60cef26db897 107-117
+  s_a018fb1dde7849::t_7da78713ac25f3 96-102
+docs/api.md
+  s_a018fb1dde7849::t_7da78713ac25f3 264-269
+  s_a018fb1dde7849::t_6b60cef26db897 52,67-69
+apps/e2e/host/main.ts
+  s_a018fb1dde7849::t_a0d680385729c5 6,40-44,111,118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0f723fad5bd17dd19a70168cb844ac8c567adcea",
+  "prompts": {},
+  "sessions": {
+    "s_a018fb1dde7849": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07e2d-283a-7593-b1aa-2a5fda61c1f8",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
