@@ -206,11 +206,12 @@ Exercise the affected scenarios:
   one enrolled model while detached models disappear.
 - Invoke `hot_reload_probe`, then verify that CSS and ESM replacement fetch and
   apply their new source digests.
-- Launch a second probe and verify that it starts from fresh Python state while
-  previously verified source digests come from the browser cache.
-- Invoke `large_asset_probe` twice. Verify that both child models render, one
-  three-megabyte source digest appears in the cache, and the second launch
-  reuses it.
+- Launch a second probe and verify that it starts from fresh Python state.
+  Cached sources can reduce attachment reads when browser storage I/O completes
+  within the cache deadline.
+- Invoke `large_asset_probe` twice and verify that both child models render
+  from their shared three-megabyte source. Repeat with persistent storage denied
+  to check attachment delivery and rendering through the fallback path.
 - Inspect bridge calls and verify that each snapshot requests each missing
   attachment range through `anywidget_read`. Transfer retries keep the same
   range and data identity.
