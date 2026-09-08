@@ -4,7 +4,7 @@ import { defineConfig } from "vitepress";
 
 const repository = "https://github.com/peter-gy/anywidget-mcp";
 const siteUrl = "https://peter-gy.github.io/anywidget-mcp/";
-const description = "Run AnyWidgets as interactive MCP Apps.";
+const description = "Use AnyWidgets in MCP Apps and expose notebook widgets through WebMCP.";
 const socialImage = `${siteUrl}brand/anywidget-mcp-social-card-1200x630.png`;
 const basePath = process.env.BASE_PATH?.replace(/\/$/, "");
 const publicDir = fileURLToPath(new URL("../public", import.meta.url));
@@ -83,6 +83,7 @@ export default defineConfig({
 				text: "Build",
 				items: [
 					{ text: "Write a widget", link: "/authoring" },
+					{ text: "Expose widgets with WebMCP", link: "/webmcp" },
 					{ text: "Pass input to widgets", link: "/factories" },
 					{ text: "Share state with the model", link: "/state" },
 					{ text: "Work with large widgets", link: "/large-widgets" },

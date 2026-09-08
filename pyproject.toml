@@ -4,19 +4,23 @@ members = ["packages/anywidget-mcp"]
 [tool.uv]
 exclude-newer = "2 days"
 
+[tool.uv.sources]
+anywidget-mcp = { workspace = true }
+
 [dependency-groups]
 dev = [
-	"marimo[recommended]==0.24.0",
-	"pyrefly==1.2.0",
-	"pytest==9.1.1",
-	"ruff==0.16.6",
-	"twine==7.0.0",
-	"ty==0.0.78",
-	"wigglystuff==0.5.32",
+	"anywidget-mcp[server]",
+	"marimo[recommended]>=0.24.0",
+	"pyrefly>=1.2.0",
+	"pytest>=9.1.1",
+	"ruff>=0.16.6",
+	"twine>=7.0.0",
+	"ty>=0.0.78",
+	"wigglystuff>=0.5.32",
 ]
 
 [tool.pyrefly]
-project-includes = ["packages/anywidget-mcp", "scripts", "apps/e2e/server.py"]
+project-includes = ["packages/anywidget-mcp", "scripts", "apps/e2e"]
 search-path = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
 
 [tool.pytest.ini_options]

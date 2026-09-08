@@ -13,7 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import TextContent
 
 import anywidget_mcp._runtime as runtime_module
-from anywidget_mcp import AnyWidgetMCP, attach
+from anywidget_mcp.server import AnyWidgetMCP, attach
 from anywidget_mcp._runtime import SessionRuntime
 from anywidget_mcp._state import DEFAULT_STATE
 

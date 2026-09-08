@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: anywidget-mcp
-  text: Python widgets in AI conversations.
-  tagline: Interact with an AnyWidget, then let the model respond to its current state.
+  text: Python widgets for AI collaboration.
+  tagline: Use AnyWidgets in MCP conversations or expose live notebook widgets to browser agents.
   image:
     light: /brand/anywidget-mcp-mark.svg
     dark: /brand/anywidget-mcp-mark-inverse.svg
@@ -32,7 +32,7 @@ Context Protocol extension for interactive tool results.
 ## Start with a widget
 
 ```sh
-uvx --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
+uvx --from 'anywidget-mcp[server]' --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), a Python package
@@ -44,6 +44,7 @@ Chat and checks that the model reads your selection.
 | I want to…                                         | Start here                                        |
 | -------------------------------------------------- | ------------------------------------------------- |
 | Render my Python widget in a conversation          | [Write a widget](./authoring)                     |
+| Let a browser agent operate live notebook widgets  | [Expose widgets with WebMCP](./webmcp)            |
 | Let the model provide data or starting values      | [Pass input to widgets](./factories)              |
 | Choose what the model can read after interaction   | [Share state with the model](./state)             |
 | Expose several tools or open widgets together      | [Combine widgets and tools](./composition)        |

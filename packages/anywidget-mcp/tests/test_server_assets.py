@@ -4,7 +4,7 @@ import pytest
 from mcp.types import TextContent
 from wigglystuff import ColorPicker
 
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 
 from ._server_support import CounterWidget, bootstrap_runtime, connected, read_blob
 

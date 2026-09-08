@@ -13,7 +13,8 @@ from starlette.routing import Route
 from anywidget._descriptor import MimeBundleDescriptor
 from anywidget.experimental import command
 
-from anywidget_mcp import AnyWidgetMCP, create_anywidget
+from anywidget_mcp import create_anywidget
+from anywidget_mcp.server import AnyWidgetMCP
 
 
 def _large_leaf_module() -> str:

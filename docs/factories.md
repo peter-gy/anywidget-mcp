@@ -14,7 +14,7 @@ from any package, including widgets you author.
 Register the function with `@mcp.widget`:
 
 ```python
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from wigglystuff import ColorPicker
 
 mcp = AnyWidgetMCP("Color tools")

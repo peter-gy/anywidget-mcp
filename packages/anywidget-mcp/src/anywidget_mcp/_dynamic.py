@@ -11,9 +11,12 @@ import uuid
 import weakref
 
 from anywidget import AnyWidget
-from mcp.server.mcpserver.exceptions import ToolError
 
 from ._widget_protocol import close_unclaimed_widget_graphs
+
+
+class WidgetCreationError(ValueError):
+    """Report a bounded diagnostic from generated widget source."""
 
 
 class _GeneratedModuleLease:
@@ -93,8 +96,8 @@ def create_anywidget(
     ``model.send(content)`` and receive them in Python with
     ``self.on_msg(callback)``, where callback receives widget, content, buffers.
 
-    The code runs with the MCP server process permissions. Run this factory in
-    a sandbox with scoped filesystem, network, credential, and process access.
+    The code runs with the current Python process permissions. Execute untrusted
+    source in a sandbox with scoped filesystem, network, and credential access.
 
     The generated module remains in ``sys.modules`` until every returned widget
     is closed or garbage-collected, preserving module lookup for its live classes.
@@ -108,14 +111,14 @@ def create_anywidget(
         One widget for one selected class, otherwise an ordered widget sequence.
 
     Raises:
-        ToolError: Compilation, class selection, execution, or construction failed.
+        WidgetCreationError: Compilation, selection, execution, or construction failed.
             Includes the exception type, generated source line when available,
             and a bounded message. Correct the source or classnames and retry.
     """
     try:
         return _create_anywidget(code, classnames)
     except Exception as error:
-        raise ToolError(_generated_error(error)) from error
+        raise WidgetCreationError(_generated_error(error)) from error
 
 
 def _generated_error(error: Exception) -> str:

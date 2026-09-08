@@ -24,7 +24,7 @@ Python API when two targets derive the same tool name and assign explicit
 which registers tools and serves the MCP protocol:
 
 ```python
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from wigglystuff import ColorPicker, SortableList
 
 mcp = AnyWidgetMCP("Widget tools")
@@ -49,7 +49,7 @@ constructor parameters define the intended widget arguments.
 ```python
 from mcp.server.mcpserver import MCPServer
 
-from anywidget_mcp import attach
+from anywidget_mcp.server import attach
 from wigglystuff import ColorPicker
 
 mcp = MCPServer("Analysis tools")
@@ -73,7 +73,7 @@ from typing import Annotated
 
 import anywidget
 from pydantic import Field
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from wigglystuff import ColorPicker, SortableList
 
 

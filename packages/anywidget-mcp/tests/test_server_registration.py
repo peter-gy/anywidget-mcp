@@ -12,7 +12,7 @@ from mcp.types import Icon, TextContent, TextResourceContents, ToolAnnotations
 from traitlets import Int
 from wigglystuff import ColorPicker, Slider2D, SortableList
 
-from anywidget_mcp import (
+from anywidget_mcp.server import (
     APP_RESOURCE_URI,
     AppCSP,
     AnyWidgetMCP,

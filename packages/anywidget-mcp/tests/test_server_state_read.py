@@ -6,7 +6,7 @@ import pytest
 from mcp.types import TextContent
 
 import anywidget_mcp._runtime as runtime_module
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 
 from ._server_support import (
     CounterWidget,

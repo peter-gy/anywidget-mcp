@@ -39,7 +39,7 @@ anywidget-mcp serve my_widgets:ColorPicker --transport stdio
 The equivalent Python call is:
 
 ```python
-from anywidget_mcp import serve
+from anywidget_mcp.server import serve
 from my_widgets import ColorPicker
 
 serve(ColorPicker, transport="stdio")
@@ -66,7 +66,7 @@ options plus
 policy:
 
 ```python
-from anywidget_mcp import AnyWidgetMCP
+from anywidget_mcp.server import AnyWidgetMCP
 from my_widgets import MediaWidget
 
 mcp = AnyWidgetMCP(

@@ -140,7 +140,7 @@ jobs:
         run: >-
           uv run --no-cache --no-project --isolated
           --default-index https://pypi.org/simple
-          --with "anywidget-mcp==${GITHUB_REF_NAME#v}"
+          --with "anywidget-mcp[server]==${GITHUB_REF_NAME#v}"
           python scripts/verify_release.py "${GITHUB_REF_NAME#v}"
 
   release-notes:

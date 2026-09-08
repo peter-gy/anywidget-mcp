@@ -9,11 +9,11 @@ import weakref
 from typing import get_type_hints
 
 import anywidget
-from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent
 import pytest
 
-from anywidget_mcp import AnyWidgetMCP, create_anywidget
+from anywidget_mcp import WidgetCreationError, create_anywidget
+from anywidget_mcp.server import AnyWidgetMCP
 
 from ._server_support import bootstrap_runtime, connected, read_blob, state_id
 
@@ -72,7 +72,7 @@ class SecondWidget(anywidget.AnyWidget):
 
 def test_create_anywidget_requires_every_requested_classname() -> None:
     with pytest.raises(
-        ToolError,
+        WidgetCreationError,
         match=r"classnames\[1\] 'MissingWidget' was not found",
     ):
         create_anywidget(
@@ -83,7 +83,7 @@ def test_create_anywidget_requires_every_requested_classname() -> None:
 
 def test_create_anywidget_requires_requested_anywidget_classes() -> None:
     with pytest.raises(
-        ToolError,
+        WidgetCreationError,
         match=r"classnames\[0\] 'PlainPythonClass' must bind an AnyWidget subclass",
     ):
         create_anywidget(
@@ -94,7 +94,7 @@ def test_create_anywidget_requires_requested_anywidget_classes() -> None:
 
 def test_create_anywidget_requires_a_generated_widget_class() -> None:
     with pytest.raises(
-        ToolError,
+        WidgetCreationError,
         match="code must define at least one top-level AnyWidget subclass when classnames is omitted",
     ):
         create_anywidget("class PlainPythonClass: pass")
@@ -112,7 +112,7 @@ class RogueWidget(anywidget.AnyWidget):
 """
 
     with pytest.raises(
-        ToolError,
+        WidgetCreationError,
         match="Generated class RogueWidget constructed object, expected AnyWidget",
     ):
         create_anywidget(code)
@@ -242,14 +242,14 @@ class BrokenWidget(anywidget.AnyWidget):
         raise RuntimeError("construction failed")
 """
 
-    with pytest.raises(ToolError, match="construction failed"):
+    with pytest.raises(WidgetCreationError, match="construction failed"):
         create_anywidget(code, classnames=["FirstWidget", "BrokenWidget"])
 
     assert events == ["child closed", "first closed"]
 
 
 def test_generated_error_message_is_bounded() -> None:
-    with pytest.raises(ToolError) as error:
+    with pytest.raises(WidgetCreationError) as error:
         create_anywidget('raise RuntimeError("x" * 10000)')
 
     message = str(error.value)

@@ -4,7 +4,8 @@ import sys
 from importlib.metadata import distribution
 from importlib.resources import files
 
-from anywidget_mcp import AnyWidgetMCP, attach, create_anywidget, serve
+from anywidget_mcp import create_anywidget
+from anywidget_mcp.server import AnyWidgetMCP, attach, serve
 
 
 def verify_release(expected_version: str) -> None:

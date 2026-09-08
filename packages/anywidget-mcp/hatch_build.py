@@ -22,8 +22,9 @@ class CustomBuildHook(BuildHookInterface):
                         del force_include[source]
 
         artifact = Path(self.root, "src", "anywidget_mcp", "static", "index.html")
+        webmcp = artifact.with_name("webmcp.js")
         notices = Path(self.root, "THIRD_PARTY_NOTICES")
-        if not artifact.is_file() or not notices.is_file():
+        if not artifact.is_file() or not webmcp.is_file() or not notices.is_file():
             raise RuntimeError(
                 "Build @anywidget-mcp/python before packaging: "
                 "the browser artifact or third-party notices are missing"
