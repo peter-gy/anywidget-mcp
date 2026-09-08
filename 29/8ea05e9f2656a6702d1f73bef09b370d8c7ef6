@@ -1,0 +1,22 @@
+apps/e2e/tests/webmcp-jupyter.spec.ts
+  s_aac849587c128f::t_adab8b9d67186a 6,8-12,14,25,29,141-144,147-150,163-166,179-180
+  s_aac849587c128f::t_25bee377066d99 13,145,167
+apps/e2e/jupyter_webmcp.py
+  s_aac849587c128f::t_3b6898f6d0179f 121-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "298ea05e9f2656a6702d1f73bef09b370d8c7ef6",
+  "prompts": {},
+  "sessions": {
+    "s_aac849587c128f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0818f-8ab6-7343-a743-0b065aeea223",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
