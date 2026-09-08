@@ -7,7 +7,7 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 
 class CustomBuildHook(BuildHookInterface):
-    """Require the browser artifact and notices shipped by the distribution."""
+    """Require the browser artifacts shipped by the distribution."""
 
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
         if version == "editable":
@@ -23,9 +23,8 @@ class CustomBuildHook(BuildHookInterface):
 
         artifact = Path(self.root, "src", "anywidget_mcp", "static", "index.html")
         webmcp = artifact.with_name("webmcp.js")
-        notices = Path(self.root, "THIRD_PARTY_NOTICES")
-        if not artifact.is_file() or not webmcp.is_file() or not notices.is_file():
+        if not artifact.is_file() or not webmcp.is_file():
             raise RuntimeError(
                 "Build @anywidget-mcp/python before packaging: "
-                "the browser artifact or third-party notices are missing"
+                "the browser artifacts are missing"
             )

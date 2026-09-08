@@ -9,7 +9,7 @@ description = "Expose AnyWidget interfaces through MCP Apps and WebMCP"
 readme = "README.md"
 authors = [{ name = "Péter Ferenc Gyarmati", email = "dev.petergy@gmail.com" }]
 license = "MIT"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES"]
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 keywords = ["anywidget", "mcp", "model-context-protocol", "webmcp"]
 classifiers = [
@@ -46,13 +46,7 @@ artifacts = ["src/anywidget_mcp/static/**"]
 packages = ["src/anywidget_mcp"]
 
 [tool.hatch.build.targets.sdist]
-include = [
-	"/README.md",
-	"/THIRD_PARTY_NOTICES",
-	"/hatch_build.py",
-	"/pyproject.toml",
-	"/src/anywidget_mcp",
-]
+include = ["/README.md", "/hatch_build.py", "/pyproject.toml", "/src/anywidget_mcp"]
 
 [tool.hatch.build.hooks.custom]
 path = "hatch_build.py"
