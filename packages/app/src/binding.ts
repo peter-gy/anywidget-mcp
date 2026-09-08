@@ -1,6 +1,6 @@
 import { scopedModel, type AnyModel, type BridgeModel } from "./model";
-import { loadModule } from "./module-loader";
-import { abortable } from "./runtime-lifecycle";
+import { loadWidget } from "./widget-definition";
+import { abortable } from "./abort";
 import {
 	isCallable,
 	isPlainObject,
@@ -634,19 +634,6 @@ export class WidgetBinding implements RuntimeBinding {
 	}
 }
 
-export async function loadWidget(esm: string, signal?: AbortSignal): Promise<WidgetDefinition> {
-	signal?.throwIfAborted();
-	const module = await loadModule(esm, signal);
-	signal?.throwIfAborted();
-	if (isCallable(module.render)) {
-		return { render: module.render };
-	}
-	const exported = module.default;
-	if (!exported) throw new Error("anywidget module must export a default definition or render");
-	const definition = isCallable(exported) ? await Promise.resolve(exported()) : exported;
-	return normalizeWidgetDefinition(definition);
-}
-
 export async function replaceCss(
 	css: string | undefined,
 	modelId: string,
@@ -714,19 +701,6 @@ function isUrl(value: string): boolean {
 
 function styleId(modelId: string): string {
 	return `anywidget-style-${modelId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-}
-
-function normalizeWidgetDefinition<Value>(value: Value): WidgetDefinition {
-	if (!isPlainObject(value)) throw new Error("anywidget default export must return a definition");
-	const initialize: unknown = Object.getOwnPropertyDescriptor(value, "initialize")?.value;
-	const render: unknown = Object.getOwnPropertyDescriptor(value, "render")?.value;
-	if (initialize !== undefined && !isCallable(initialize)) {
-		throw new Error("anywidget initialize export must be a function");
-	}
-	if (render !== undefined && !isCallable(render)) {
-		throw new Error("anywidget render export must be a function");
-	}
-	return { initialize, render };
 }
 
 function isCleanup(value: LifecycleValue): value is Cleanup {

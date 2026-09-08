@@ -8,7 +8,8 @@ import {
 
 import "./app.css";
 import { beginRuntimeReplacement } from "./runtime-replacement";
-import { abortable, randomId, RUNTIME_LIFECYCLE_TIMEOUT_MS } from "./runtime-lifecycle";
+import { abortable } from "./abort";
+import { randomId, RUNTIME_LIFECYCLE_TIMEOUT_MS } from "./runtime-lifecycle";
 import { requiredString } from "./runtime-payload";
 import {
 	loadWidgetRuntime,
