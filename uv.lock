@@ -90,7 +90,7 @@ wheels = [
 
 [[package]]
 name = "anywidget-mcp"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "packages/anywidget-mcp" }
 dependencies = [
     { name = "anywidget" },
