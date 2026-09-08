@@ -1,0 +1,26 @@
+packages/app/src/abort.ts
+  s_bed1e2487f63c3::t_0627e900f709b4 1-25
+packages/app/src/binding.ts
+  s_bed1e2487f63c3::t_866e9feb0ab28c 2
+  s_bed1e2487f63c3::t_0627e900f709b4 3
+packages/app/src/widget-definition.ts
+  s_bed1e2487f63c3::t_866e9feb0ab28c 1-29
+packages/app/src/app.ts
+  s_bed1e2487f63c3::t_0627e900f709b4 11-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "31bc65badb76e6f79cf2cf43838b3430230026bb",
+  "prompts": {},
+  "sessions": {
+    "s_bed1e2487f63c3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08047-6feb-79b1-99ae-33b900ac5f5b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
