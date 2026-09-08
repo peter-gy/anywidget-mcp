@@ -1,0 +1,20 @@
+apps/e2e/tests/webmcp-jupyter.spec.ts
+  s_aac849587c128f::t_38e5112466a7ef 89-100
+  s_aac849587c128f::t_3d289b961ceb9c 10-18,66-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "523caf5179eb3b7c42dc176cee1e326fe13d5c6c",
+  "prompts": {},
+  "sessions": {
+    "s_aac849587c128f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0818f-8ab6-7343-a743-0b065aeea223",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
