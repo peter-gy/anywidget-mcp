@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from exceptiongroup import ExceptionGroup
 from anywidget._descriptor import ReprMimeBundle
 
 from ._comm import BridgeComm

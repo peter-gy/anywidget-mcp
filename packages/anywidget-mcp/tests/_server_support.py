@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from exceptiongroup import BaseExceptionGroup
 from anywidget import AnyWidget, WidgetTrait
 from mcp.client import Client
 from mcp.client.session import ClientSession

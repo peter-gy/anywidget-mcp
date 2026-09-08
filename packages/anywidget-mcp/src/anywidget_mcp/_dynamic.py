@@ -10,6 +10,7 @@ from typing import TypeGuard
 import uuid
 import weakref
 
+from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 from anywidget import AnyWidget
 
 from ._widget_protocol import close_unclaimed_widget_graphs

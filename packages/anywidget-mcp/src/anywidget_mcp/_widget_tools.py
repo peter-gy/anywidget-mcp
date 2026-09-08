@@ -392,7 +392,7 @@ class WidgetTools:
         def anywidget_app() -> str:
             return (
                 files("anywidget_mcp")
-                .joinpath("static", "index.html")
+                .joinpath("static/index.html")
                 .read_text(encoding="utf-8")
             )
 

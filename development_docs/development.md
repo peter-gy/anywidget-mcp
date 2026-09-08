@@ -75,7 +75,7 @@ Python tests.
 
 [basedpyright](https://docs.basedpyright.com/latest/) checks Python types in the
 package, tests, scripts, and end-to-end server using its `standard` ruleset.
-Its configuration in `pyproject.toml` targets Python 3.11 and makes warnings
+Its configuration in `pyproject.toml` targets Python 3.10 and makes warnings
 fail both `make check` and CI.
 
 Use one test module or test name while iterating, then return to `make check`.

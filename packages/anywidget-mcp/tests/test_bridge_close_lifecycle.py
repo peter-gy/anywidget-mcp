@@ -4,6 +4,7 @@ import gc
 from typing import Any
 import weakref
 
+from exceptiongroup import ExceptionGroup
 import pytest
 from anywidget._descriptor import MimeBundleDescriptor
 

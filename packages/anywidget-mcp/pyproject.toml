@@ -10,19 +10,20 @@ readme = "README.md"
 authors = [{ name = "Péter Ferenc Gyarmati", email = "dev.petergy@gmail.com" }]
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 keywords = ["anywidget", "mcp", "model-context-protocol", "webmcp"]
 classifiers = [
 	"Development Status :: 3 - Alpha",
 	"Intended Audience :: Developers",
 	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3.10",
 	"Programming Language :: Python :: 3.11",
 	"Programming Language :: Python :: 3.12",
 	"Programming Language :: Python :: 3.13",
 	"Programming Language :: Python :: 3.14",
 	"Typing :: Typed",
 ]
-dependencies = ["anywidget>=0.11", "ipywidgets>=8.1", "traitlets>=5.14"]
+dependencies = ["anywidget>=0.11", "exceptiongroup==1.3.1", "ipywidgets>=8.1", "traitlets>=5.14"]
 
 [project.urls]
 Documentation = "https://peter-gy.github.io/anywidget-mcp/"

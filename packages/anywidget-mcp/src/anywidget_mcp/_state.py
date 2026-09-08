@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Generic, TypeVar, cast
 
+from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 from anywidget import AnyWidget
 
 from ._projection_json import DEFAULT_MAX_BYTES, bounded_mapping, canonical_json

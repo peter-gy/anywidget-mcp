@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from exceptiongroup import ExceptionGroup
 from typing_extensions import TypedDict
 
 PROTOCOL_VERSION = 3

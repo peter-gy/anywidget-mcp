@@ -40,7 +40,7 @@ including notebooks running Python in WebAssembly.
 
 ## Try it
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), a Python package
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/), a Python package
 runner:
 
 ```sh

@@ -10,7 +10,7 @@ anywidget-mcp = { workspace = true }
 [tool.basedpyright]
 include = ["packages/anywidget-mcp", "scripts", "apps/e2e"]
 extraPaths = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
-pythonVersion = "3.11"
+pythonVersion = "3.10"
 typeCheckingMode = "standard"
 failOnWarnings = true
 
@@ -24,10 +24,15 @@ dev = [
 	"ruff>=0.16.6",
 	"twine>=7.0.0",
 	"ty>=0.0.78",
-	"wigglystuff>=0.5.32",
+	"wigglystuff==0.5.10; python_version < '3.11'",
+	"wigglystuff>=0.5.32; python_version >= '3.11'",
 ]
 
+[tool.ty.environment]
+python-version = "3.10"
+
 [tool.pyrefly]
+python-version = "3.10"
 project-includes = ["packages/anywidget-mcp", "scripts", "apps/e2e"]
 search-path = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
 
@@ -35,7 +40,7 @@ search-path = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
 testpaths = ["packages/anywidget-mcp/tests"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]

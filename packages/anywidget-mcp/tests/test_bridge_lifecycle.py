@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from exceptiongroup import ExceptionGroup
 import anywidget
 import pytest
 from anywidget._descriptor import MimeBundleDescriptor

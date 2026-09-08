@@ -3,7 +3,7 @@
 Open a color picker in an AI conversation, choose a color, then ask the model
 about your selection.
 
-You need Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/)
+You need Python 3.10+, [uv](https://docs.astral.sh/uv/getting-started/installation/)
 to run the Python packages, and Node.js 22.22.2+ to run the Inspector host.
 Inspector Chat also needs a model provider configured in its settings. Calls
 use that provider's credentials and billing.

@@ -6,6 +6,7 @@ from typing import Any
 
 import asyncio
 
+from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 import anyio
 import pytest
 from anyio.lowlevel import checkpoint
