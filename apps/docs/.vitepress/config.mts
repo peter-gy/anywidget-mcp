@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
-import { defineConfig } from "vitepress";
+import { defineConfig, type Plugin } from "vitepress";
+import llmstxt from "vitepress-plugin-llms";
 
 const repository = "https://github.com/peter-gy/anywidget-mcp";
 const siteUrl = "https://peter-gy.github.io/anywidget-mcp/";
@@ -9,6 +10,13 @@ const socialImage = `${siteUrl}brand/anywidget-mcp-social-card-1200x630.png`;
 const basePath = process.env.BASE_PATH?.replace(/\/$/, "");
 const publicDir = fileURLToPath(new URL("../public", import.meta.url));
 const publicPath = (path: string): string => `${basePath ?? ""}${path}`;
+// The plugin appends VitePress's base path when it builds Markdown URLs.
+const llmsDomain = basePath ? new URL(siteUrl).origin : siteUrl.replace(/\/$/, "");
+// SAFETY: The plugin's standard Vite hooks run through VitePress's bundled Vite version.
+const llmsPlugins = llmstxt({
+	domain: llmsDomain,
+	excludeIndexPage: false,
+}) as [Plugin, Plugin];
 
 export default defineConfig({
 	base: basePath ? `${basePath}/` : "/",
@@ -52,7 +60,7 @@ export default defineConfig({
 	lastUpdated: true,
 	srcDir: "../../docs",
 	sitemap: { hostname: siteUrl },
-	vite: { publicDir },
+	vite: { plugins: llmsPlugins, publicDir },
 	themeConfig: {
 		logo: {
 			alt: "anywidget-mcp",

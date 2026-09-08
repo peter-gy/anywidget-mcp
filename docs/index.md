@@ -1,5 +1,6 @@
 ---
 layout: home
+title: anywidget-mcp
 
 hero:
   name: anywidget-mcp
