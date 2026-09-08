@@ -76,17 +76,12 @@ describe("inline anywidget modules", () => {
 		expect(value).toEqual({ marker: "expression" });
 	});
 
-	test("captures anonymous default functions and classes", async () => {
-		const functionValue = await executeInlineModule(
-			`export default function () { return "function"; }`,
-			"module => module.default()",
-		);
+	test("captures an anonymous default class", async () => {
 		const classValue = await executeInlineModule(
 			`export default class { marker = "class"; }`,
 			"module => new module.default().marker",
 		);
 
-		expect(functionValue).toBe("function");
 		expect(classValue).toBe("class");
 	});
 

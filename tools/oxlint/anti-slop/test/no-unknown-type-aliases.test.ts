@@ -6,6 +6,7 @@ const deeplyNestedUnknown = `${"Identity<".repeat(70)}unknown${">".repeat(70)}`;
 
 ruleTester.run("anti-slop/no-unknown-type-aliases", noUnknownTypeAliasesRule, {
   valid: [
+    "type Value = string | number;",
     "type Value = string; function outer<Value>() { type Safe = Value; }",
     "type Awaited<T> = { readonly value: T }; type Safe = Awaited<unknown>;",
     "import type * as Domain from './owner'; type Safe = Domain.Value;",
@@ -18,6 +19,10 @@ ruleTester.run("anti-slop/no-unknown-type-aliases", noUnknownTypeAliasesRule, {
     },
     {
       code: "type Identity<T> = T; type Hidden = Identity<unknown>;",
+      errors: [error],
+    },
+    {
+      code: "type Identity<Value = unknown> = Value; type Hidden = Identity;",
       errors: [error],
     },
     {

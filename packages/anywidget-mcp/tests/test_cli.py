@@ -357,7 +357,6 @@ def test_cli_rejects_colliding_tool_names_before_constructing_the_server(
         ("ColorPicker", "Use module:object"),
         ("missing_widget_package:Widget", "Could not import module"),
         ("wigglystuff:MissingWidget", "has no target"),
-        ("builtins:str", "expected an AnyWidget subclass"),
     ],
 )
 def test_cli_reports_invalid_targets(

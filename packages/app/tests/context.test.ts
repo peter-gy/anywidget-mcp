@@ -162,39 +162,10 @@ describe("ModelContextSync", () => {
 		await sync.dispose();
 	});
 
-	test("times out a wedged host update and sends the latest snapshot", async () => {
-		const calls: UpdateParams[] = [];
-		const reportError = vi.fn();
-		const app = {
-			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
-			updateModelContext(params: UpdateParams) {
-				calls.push(params);
-				if (calls.length === 1) return new Promise<never>(() => undefined);
-				return Promise.resolve({});
-			},
-		};
-		const sync = new ModelContextSync(app, Promise.resolve(), reportError, 10, 25);
-
-		sync.enqueue(snapshot(1));
-		await vi.advanceTimersByTimeAsync(10);
-		sync.enqueue(snapshot(2));
-		await vi.advanceTimersByTimeAsync(35);
-
-		expect(calls).toEqual([
-			{ structuredContent: { tool: "example.Counter", state: { value: 1 } } },
-			{ structuredContent: { tool: "example.Counter", state: { value: 2 } } },
-		]);
-		expect(reportError).toHaveBeenCalledWith(
-			expect.objectContaining({ message: "Model context update timed out" }),
-		);
-		const disposal = sync.dispose();
-		await vi.advanceTimersByTimeAsync(25);
-		await disposal;
-	});
-
 	test("restores the latest snapshot after an older timed-out update settles", async () => {
 		const first = deferred();
 		const calls: number[] = [];
+		const reportError = vi.fn();
 		let visible = 0;
 		const app = {
 			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
@@ -211,13 +182,16 @@ describe("ModelContextSync", () => {
 				return Promise.resolve({});
 			},
 		};
-		const sync = new ModelContextSync(app, Promise.resolve(), vi.fn(), 10, 25);
+		const sync = new ModelContextSync(app, Promise.resolve(), reportError, 10, 25);
 
 		sync.enqueue(snapshot(1));
 		await vi.advanceTimersByTimeAsync(10);
 		sync.enqueue(snapshot(2));
 		await vi.advanceTimersByTimeAsync(35);
 		expect(visible).toBe(2);
+		expect(reportError).toHaveBeenCalledWith(
+			expect.objectContaining({ message: "Model context update timed out" }),
+		);
 
 		first.resolve();
 		await Promise.resolve();

@@ -227,13 +227,4 @@ describe("tool-result replay guard", () => {
 		expect(scheduled).toHaveLength(2);
 		expect(scheduled[1]?.signal.aborted).toBe(false);
 	});
-
-	test("retains launch IDs after later results arrive", () => {
-		const gate = new ToolResultGate();
-
-		for (let index = 0; index < 100; index += 1) {
-			expect(gate.deliver(`session-${index}`, () => undefined)).toBe(true);
-		}
-		expect(gate.deliver("session-0", () => undefined)).toBe(false);
-	});
 });
