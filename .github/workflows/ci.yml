@@ -181,7 +181,7 @@ jobs:
 
       - name: Run browser integration tests
         id: e2e
-        run: vp run @anywidget-mcp/e2e#e2e --project="${{ matrix.browser }}"
+        run: vp exec -F @anywidget-mcp/e2e -- playwright test --project="${{ matrix.browser }}"
 
       - name: Upload browser test results
         if: always() && steps.e2e.outcome != 'skipped'
