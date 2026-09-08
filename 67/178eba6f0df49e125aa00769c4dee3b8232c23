@@ -1,0 +1,25 @@
+packages/anywidget-mcp/hatch_build.py
+  s_aa2f25694b4a09::t_40b7b74c2a70e5 10,26,29
+packages/anywidget-mcp/pyproject.toml
+  s_aa2f25694b4a09::t_10a125a9f8d18f 12,49
+.github/workflows/ci.yml
+  s_aa2f25694b4a09::t_40b7b74c2a70e5 90,128,172,215
+packages/anywidget-mcp/vite.config.ts
+  s_aa2f25694b4a09::t_40b7b74c2a70e5 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "67178eba6f0df49e125aa00769c4dee3b8232c23",
+  "prompts": {},
+  "sessions": {
+    "s_aa2f25694b4a09": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08121-68a1-7a90-8a2a-c8995549c1cc",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
