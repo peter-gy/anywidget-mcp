@@ -7,6 +7,7 @@ import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, cast
 
+from exceptiongroup import ExceptionGroup
 from anywidget import AnyWidget
 from anywidget._descriptor import ReprMimeBundle
 

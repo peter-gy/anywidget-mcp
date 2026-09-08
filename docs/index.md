@@ -35,7 +35,7 @@ Context Protocol extension for interactive tool results.
 uvx --from 'anywidget-mcp[server]' --with wigglystuff anywidget-mcp serve wigglystuff:ColorPicker --port 8010
 ```
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), a Python package
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/), a Python package
 runner. [Getting started](./getting-started) connects the server to Inspector
 Chat and checks that the model reads your selection.
 

@@ -4,6 +4,7 @@ import json
 from typing import Any
 from unittest.mock import patch
 
+from exceptiongroup import ExceptionGroup
 import anywidget
 import pytest
 import traitlets as t

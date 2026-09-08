@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from typing import Any, cast, overload
 
+from exceptiongroup import ExceptionGroup
 import pytest
 from anywidget import AnyWidget
 from anywidget._descriptor import MimeBundleDescriptor

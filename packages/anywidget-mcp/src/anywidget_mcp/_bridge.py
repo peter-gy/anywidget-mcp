@@ -7,6 +7,7 @@ import threading
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
+from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 from anywidget import AnyWidget
 from anywidget._descriptor import ReprMimeBundle
 

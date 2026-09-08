@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 import anyio
 from anyio.abc import TaskGroup
 from anyio.lowlevel import checkpoint

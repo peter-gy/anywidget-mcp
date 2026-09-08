@@ -11,6 +11,7 @@ from functools import lru_cache
 from importlib.resources import files
 from typing import Any
 
+from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 from anywidget import AnyWidget
 from ipywidgets import Widget
 from ipywidgets.widgets import widget as widget_module

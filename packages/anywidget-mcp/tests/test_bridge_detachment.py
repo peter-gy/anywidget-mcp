@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+
+from exceptiongroup import ExceptionGroup
 from anywidget._descriptor import MimeBundleDescriptor
 
 from anywidget_mcp._bridge import WidgetInUseError, WidgetSession

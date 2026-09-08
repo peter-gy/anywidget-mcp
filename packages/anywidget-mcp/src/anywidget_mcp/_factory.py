@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, NoReturn, TypeVar, cast
 
+from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 import anyio
 from anywidget import AnyWidget
 from mcp.server.mcpserver.exceptions import ToolError
