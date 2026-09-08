@@ -9,7 +9,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from importlib.resources import files
-from typing import Annotated, Any, TypedDict, overload
+from typing import Annotated, Any, Literal, TypedDict, overload
 
 import anyio
 from mcp.server.mcpserver import MCPServer
@@ -53,6 +53,7 @@ class AppCSP(TypedDict, total=False):
     resourceDomains: list[str]
     frameDomains: list[str]
     baseUriDomains: list[str]
+    scriptDirectives: list[Literal["'unsafe-eval'", "'wasm-unsafe-eval'"]]
 
 
 class AppPermissions(TypedDict, total=False):
@@ -708,6 +709,19 @@ def _app_csp(csp: AppCSP | None) -> AppCSP:
             result["frameDomains"] = list(csp["frameDomains"])
         if "baseUriDomains" in csp:
             result["baseUriDomains"] = list(csp["baseUriDomains"])
+        if "scriptDirectives" in csp:
+            directives = csp["scriptDirectives"]
+            if not isinstance(directives, list):
+                raise TypeError("csp scriptDirectives must be a list")
+            if any(
+                not isinstance(directive, str)
+                or directive not in ("'unsafe-eval'", "'wasm-unsafe-eval'")
+                for directive in directives
+            ):
+                raise ValueError(
+                    "csp scriptDirectives accepts 'unsafe-eval' and 'wasm-unsafe-eval'"
+                )
+            result["scriptDirectives"] = list(directives)
     resources = result.setdefault("resourceDomains", [])
     if "blob:" not in resources:
         resources.append("blob:")

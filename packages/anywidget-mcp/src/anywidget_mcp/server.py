@@ -107,12 +107,12 @@ class AnyWidgetMCP(MCPServer):
         csp: AppCSP | None = None,
         permissions: AppPermissions | None = None,
         prefers_border: bool = True,
-        cors_origins: Sequence[str] = (),
+        cors_origins: Sequence[str] | None = None,
         session_idle_timeout: float | None = 900.0,
         **mcp_options: Any,
     ) -> None:
         super().__init__(name, **mcp_options)
-        self._cors_origins = tuple(cors_origins)
+        self._cors_origins = None if cors_origins is None else tuple(cors_origins)
         self._widget_tools = attach(
             self,
             app_uri=app_uri,
@@ -181,10 +181,18 @@ class AnyWidgetMCP(MCPServer):
             _MCPMethodMiddleware,
             path=http_options.get("streamable_http_path", "/mcp"),
         )
-        if self._cors_origins:
+        local_origins = self._cors_origins is None and http_options.get(
+            "host", "127.0.0.1"
+        ) in ("127.0.0.1", "localhost", "::1")
+        if self._cors_origins or local_origins:
             app.add_middleware(
                 CORSMiddleware,
-                allow_origins=list(self._cors_origins),
+                allow_origins=list(self._cors_origins or ()),
+                allow_origin_regex=(
+                    r"http://(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]+"
+                    if local_origins
+                    else None
+                ),
                 allow_methods=["GET", "POST", "DELETE", "HEAD"],
                 allow_headers=["*"],
                 expose_headers=["Mcp-Session-Id"],

@@ -3,7 +3,7 @@ import {
 	getToolUiResourceUri,
 	PostMessageTransport,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
-import { McpUiResourceMetaSchema } from "@modelcontextprotocol/ext-apps";
+import { McpUiResourceCspSchema, McpUiResourceMetaSchema } from "@modelcontextprotocol/ext-apps";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolRequestSchema, CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -36,6 +36,11 @@ let readDropped = false;
 const readArgumentsSchema = z.object({ offset: z.number().int().nonnegative() });
 const readMetadataSchema = z.object({
 	anywidget: z.object({ byteLength: z.number().int().nonnegative() }),
+});
+const resourceMetadataSchema = McpUiResourceMetaSchema.extend({
+	csp: McpUiResourceCspSchema.extend({
+		scriptDirectives: z.array(z.enum(["'wasm-unsafe-eval'", "'unsafe-eval'"])).optional(),
+	}).optional(),
 });
 
 async function callTool(params: Parameters<Client["callTool"]>[0]) {
@@ -103,14 +108,14 @@ async function openWidget(): Promise<void> {
 	const resource = await client.readResource({ uri });
 	const html = resource.contents[0];
 	if (!html || !("text" in html)) throw new Error("The app resource must contain HTML");
-	const metadata = McpUiResourceMetaSchema.parse(html._meta?.ui ?? {});
+	const metadata = resourceMetadataSchema.parse(html._meta?.ui ?? {});
 	const resourceDomains = metadata.csp?.resourceDomains?.join(" ") || "'none'";
 	const document = new DOMParser().parseFromString(html.text, "text/html");
 	const policy = document.createElement("meta");
 	policy.httpEquiv = "Content-Security-Policy";
 	policy.content = [
 		"default-src 'none'",
-		`script-src 'unsafe-inline' 'wasm-unsafe-eval' ${resourceDomains}`,
+		`script-src 'unsafe-inline' ${metadata.csp?.scriptDirectives?.join(" ") ?? ""} ${resourceDomains}`,
 		`style-src 'unsafe-inline' ${resourceDomains}`,
 		`img-src data: ${resourceDomains}`,
 		`font-src ${resourceDomains}`,

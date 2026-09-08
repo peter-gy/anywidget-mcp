@@ -185,6 +185,12 @@ npx --yes @mcp-use/inspector@20.3.7 \
 Open `http://127.0.0.1:8082/inspector?tab=chat` with one named `agent-browser`
 session. Configure the OpenAI-compatible chat provider in the Inspector UI.
 
+The default local server permits direct browser connections from HTTP loopback
+origins. Check that widget calls go to the server's `/mcp` endpoint. Inspector's
+proxy shares a request limit across widget traffic and chat tool calls, which
+rapid input or attachment transfers can exhaust. After changing CORS settings,
+reconnect the server in Inspector so it selects the direct connection.
+
 Exercise the affected scenarios:
 
 - Ask Chat to invoke `bridge_probe` and report the initial payload size.

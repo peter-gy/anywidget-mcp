@@ -93,13 +93,28 @@ policy field:
 | `frameDomains`    | Embedded frames                                     |
 | `baseUriDomains`  | Document base URLs                                  |
 
+Widgets that compile WebAssembly can request
+`csp={"scriptDirectives": ["'wasm-unsafe-eval'"]}` in hosts that support the
+[`scriptDirectives` extension](./api#appcsp), including mcp-use Inspector 20.3.7.
+The host decides whether to grant the request. See the
+[Embedding Atlas example](./large-widgets#keep-queries-with-the-data) for a widget
+that also uses data URLs for its workers.
+
 The `permissions` mapping accepts `camera`, `microphone`, `geolocation`, and
 `clipboardWrite`. Request a permission when the widget uses that browser
 capability.
 
-`cors_origins` controls browser origins that may call the streamable HTTP
-endpoint. `prefers_border` defaults to `True` and advertises the app's border
-preference to the host.
+`cors_origins` controls [cross-origin browser access (CORS)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS)
+to the streamable HTTP endpoint. Its default, `None`, allows HTTP origins with
+an explicit port on `localhost`, `127.0.0.1`, and `[::1]` when the HTTP `host` is
+`localhost`, `127.0.0.1`, or `::1`. This lets local browser hosts connect directly
+and permits pages served by other local processes to interact with the server.
+Other bind addresses require an explicit origin list. A supplied list replaces
+the default. Pass `cors_origins=()` to disable cross-origin browser access.
+The SDK's HTTP host and origin validation still applies.
+
+`prefers_border` defaults to `True` and advertises the app's border preference
+to the host.
 
 ## Attachment storage
 
