@@ -1,0 +1,39 @@
+.github/workflows/ci.yml
+  s_aa2f25694b4a09::t_78748d09f860be 56
+pyproject.toml
+  s_aa2f25694b4a09::t_15ed37378dab1b 20
+  s_aa2f25694b4a09::t_6b31581713baaa 16
+packages/anywidget-mcp/tests/test_webmcp.py
+  s_aa2f25694b4a09::t_78748d09f860be 5,32
+  s_aa2f25694b4a09::t_da84f9f4432034 33-35
+packages/anywidget-mcp/tests/test_bridge_lifecycle.py
+  s_aa2f25694b4a09::t_a83232bd17e5b1 17,266,307,344
+packages/anywidget-mcp/tests/test_server_attachments.py
+  s_aa2f25694b4a09::t_78748d09f860be 276
+packages/anywidget-mcp/tests/bridge_test_widgets.py
+  s_aa2f25694b4a09::t_78748d09f860be 105-106
+packages/anywidget-mcp/tests/test_bridge_close_lifecycle.py
+  s_aa2f25694b4a09::t_78748d09f860be 11,84
+packages/anywidget-mcp/tests/test_widget_group.py
+  s_aa2f25694b4a09::t_78748d09f860be 100
+Makefile
+  s_aa2f25694b4a09::t_78748d09f860be 14
+development_docs/development.md
+  s_aa2f25694b4a09::t_78748d09f860be 69,76-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ce2ea33c0d3a6c85ad2eac2589710df1ddfdea4b",
+  "prompts": {},
+  "sessions": {
+    "s_aa2f25694b4a09": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08121-68a1-7a90-8a2a-c8995549c1cc",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Péter Ferenc Gyarmati <dev.petergy@gmail.com>"
+    }
+  }
+}
