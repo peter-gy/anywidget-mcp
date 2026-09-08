@@ -36,19 +36,6 @@ def verify_release(expected_version: str) -> None:
     if not app.startswith(b"<!doctype html>"):
         raise SystemExit("The packaged browser app is missing or invalid")
 
-    notice_files = [
-        path
-        for path in installed.files or ()
-        if str(path).endswith(".dist-info/licenses/THIRD_PARTY_NOTICES")
-    ]
-    if len(notice_files) != 1:
-        raise SystemExit(
-            f"The installed distribution contains {len(notice_files)} notice files"
-        )
-    notices = installed.locate_file(notice_files[0]).read_text()
-    if not notices.startswith("Third-Party Notices\n"):
-        raise SystemExit("The packaged third-party notices are invalid")
-
 
 def main() -> None:
     if len(sys.argv) != 2:

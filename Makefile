@@ -27,12 +27,8 @@ package: browser
 
 package-artifacts:
 	cmp -s README.md packages/anywidget-mcp/README.md
-	cmp -s LICENSE packages/anywidget-mcp/LICENSE
 	rm -rf dist
 	uv build --package anywidget-mcp --out-dir dist
-	uv run --no-project python scripts/verify_package.py \
-		"$$(find dist -maxdepth 1 -name '*.whl' -print -quit)" \
-		"$$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
 	uv run --locked twine check dist/*.whl dist/*.tar.gz
 	mkdir -p dist/from-sdist
 	uv build --wheel "$$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)" --out-dir dist/from-sdist

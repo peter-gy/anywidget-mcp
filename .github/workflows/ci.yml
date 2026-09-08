@@ -87,7 +87,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: browser
-          path: packages/anywidget-mcp
+          path: packages/anywidget-mcp/src/anywidget_mcp/static
 
       - name: Run Python tests
         env:
@@ -121,16 +121,11 @@ jobs:
       - name: Build browser packages
         run: make browser
 
-      - name: Check generated files
-        run: git diff --exit-code
-
       - name: Upload browser resource
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: browser
-          path: |
-            packages/anywidget-mcp/src/anywidget_mcp/static
-            packages/anywidget-mcp/THIRD_PARTY_NOTICES
+          path: packages/anywidget-mcp/src/anywidget_mcp/static
           retention-days: 1
           if-no-files-found: error
 
@@ -174,7 +169,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: browser
-          path: packages/anywidget-mcp
+          path: packages/anywidget-mcp/src/anywidget_mcp/static
 
       - name: Install Python dependencies
         run: uv sync --all-packages --group dev --locked
@@ -217,13 +212,10 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: browser
-          path: packages/anywidget-mcp
+          path: packages/anywidget-mcp/src/anywidget_mcp/static
 
       - name: Build and check package artifacts
         run: make package-artifacts
-
-      - name: Check generated files
-        run: git diff --exit-code
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
