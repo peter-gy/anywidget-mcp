@@ -14,6 +14,7 @@ from anywidget_mcp._bridge import (
     WidgetSession,
 )
 from anywidget_mcp._state import StateContext, StateProjection
+from anywidget_mcp._comm import BridgeComm
 
 from ._server_support import leaf_error_messages
 from .bridge_test_widgets import (
@@ -262,7 +263,7 @@ def test_close_cleans_up_after_stalled_notification(
         )
         assert widget_closed.is_set()
         assert widget.notify_change == original_notify_change
-        assert comm is not None
+        assert isinstance(comm, BridgeComm)
         with pytest.raises(RuntimeError, match="widget session is closed"):
             comm.receive({"method": "request_state"})
     finally:
@@ -303,7 +304,7 @@ def test_reentrant_close_cleans_up_before_raising() -> None:
         and "inside an active widget notification" in str(error)
         for error in errors[0].exceptions
     )
-    assert comm is not None
+    assert isinstance(comm, BridgeComm)
     with pytest.raises(RuntimeError, match="widget session is closed"):
         comm.receive({"method": "request_state"})
     session.close()
@@ -340,7 +341,7 @@ def test_widget_trait_replacement_survives_detached_cleanup_failure() -> None:
             {"method": "request_state"},
         )
         assert snapshot.messages
-        assert first_comm is not None
+        assert isinstance(first_comm, BridgeComm)
         with pytest.raises(
             ExceptionGroup,
             match="Failed to finalize detached widget models",

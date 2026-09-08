@@ -66,11 +66,17 @@ uv run --package anywidget-mcp ruff format --check packages/anywidget-mcp
 uv run --package anywidget-mcp ruff check packages/anywidget-mcp
 uv run --package anywidget-mcp ty check packages/anywidget-mcp
 uv run --package anywidget-mcp pyrefly check --min-severity warn
+uv run --package anywidget-mcp basedpyright
 uv run --package anywidget-mcp pytest -q packages/anywidget-mcp/tests
 ```
 
 The build provides the app resource and standalone WebMCP module read by the
 Python tests.
+
+[basedpyright](https://docs.basedpyright.com/latest/) checks Python types in the
+package, tests, scripts, and end-to-end server using its `standard` ruleset.
+Its configuration in `pyproject.toml` targets Python 3.11 and makes warnings
+fail both `make check` and CI.
 
 Use one test module or test name while iterating, then return to `make check`.
 

@@ -53,6 +53,7 @@ jobs:
           uv run ruff check packages/anywidget-mcp scripts apps/e2e/server.py
           uv run ty check packages/anywidget-mcp scripts apps/e2e/server.py
           uv run pyrefly check --min-severity warn
+          uv run basedpyright
 
       - name: Check shell scripts
         run: shellcheck scripts/*.sh

@@ -11,6 +11,7 @@ check:
 	uv run ruff check packages/anywidget-mcp scripts apps/e2e
 	uv run ty check packages/anywidget-mcp scripts apps/e2e
 	uv run pyrefly check --min-severity warn
+	uv run basedpyright
 	uv run pytest -q packages/anywidget-mcp/tests
 	pnpm --filter @anywidget-mcp/e2e e2e
 	$(MAKE) package-artifacts

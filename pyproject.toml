@@ -7,9 +7,17 @@ exclude-newer = "2 days"
 [tool.uv.sources]
 anywidget-mcp = { workspace = true }
 
+[tool.basedpyright]
+include = ["packages/anywidget-mcp", "scripts", "apps/e2e"]
+extraPaths = ["packages/anywidget-mcp/src", "packages/anywidget-mcp/tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+failOnWarnings = true
+
 [dependency-groups]
 dev = [
 	"anywidget-mcp[server]",
+	"basedpyright==1.39.10",
 	"marimo[recommended]>=0.24.0",
 	"pyrefly>=1.2.0",
 	"pytest>=9.1.1",
