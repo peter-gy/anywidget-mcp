@@ -7,8 +7,15 @@ interface JupyterWindow extends Window {
 		commands: { execute(command: string): Promise<void> };
 		shell: {
 			currentWidget: {
-				context: { path: string };
-				sessionContext: { ready: Promise<void>; restartKernel(): Promise<boolean> };
+				context: { path: string; ready: Promise<void> };
+				revealed: Promise<void>;
+				sessionContext: {
+					ready: Promise<void>;
+					restartKernel(): Promise<boolean>;
+					session?: {
+						kernel?: { info: Promise<unknown>; connectionStatus: string; status: string };
+					};
+				};
 				content: { activeCellIndex: number };
 			};
 		};
@@ -56,7 +63,19 @@ async function openNotebook(page: Page, session: NotebookSession) {
 		.poll(() => page.evaluate(() => window.jupyterapp.shell.currentWidget?.context?.path))
 		.toBe(session.path);
 	await expect(page.locator(".jp-Notebook")).toBeVisible();
-	await page.evaluate(async () => window.jupyterapp.shell.currentWidget.sessionContext.ready);
+	await page.waitForFunction(
+		async () => {
+			const panel = window.jupyterapp.shell.currentWidget;
+			await Promise.all([panel.context.ready, panel.revealed, panel.sessionContext.ready]);
+			const kernel = panel.sessionContext.session?.kernel;
+			if (!kernel) return false;
+			// Session readiness precedes the kernel's WebSocket and IOPub handshake.
+			await kernel.info;
+			return kernel.connectionStatus === "connected" && kernel.status === "idle";
+		},
+		undefined,
+		{ timeout: 30_000 },
+	);
 }
 
 async function deleteNotebook(page: Page, session: NotebookSession) {
@@ -67,12 +86,18 @@ async function deleteNotebook(page: Page, session: NotebookSession) {
 }
 
 async function runCell(page: Page, index: number) {
-	await page.evaluate(async (index) => {
-		window.jupyterapp.shell.currentWidget.content.activeCellIndex = index;
-		await window.jupyterapp.commands.execute("notebook:run-cell");
-	}, index);
-	await expect(page.locator(".jp-CodeCell").nth(index).locator(".jp-OutputArea-error")).toHaveCount(
-		0,
+	await test.step(
+		`Run notebook cell ${index}`,
+		async () => {
+			await page.evaluate(async (index) => {
+				window.jupyterapp.shell.currentWidget.content.activeCellIndex = index;
+				await window.jupyterapp.commands.execute("notebook:run-cell");
+			}, index);
+			await expect(
+				page.locator(".jp-CodeCell").nth(index).locator(".jp-OutputArea-error"),
+			).toHaveCount(0);
+		},
+		{ timeout: 15_000 },
 	);
 }
 
