@@ -11,14 +11,17 @@ import uuid
 import weakref
 
 from anywidget import AnyWidget
+from mcp.server.mcpserver.exceptions import ToolError
+
+from ._widget_protocol import close_unclaimed_widget_graphs
 
 
 class _GeneratedModuleLease:
-    """Keep a generated module registered while returned widgets remain reachable."""
+    """Keep a generated module registered until its returned widgets close."""
 
     def __init__(self, name: str, module: ModuleType) -> None:
         self._name = name
-        self._module = module
+        self._module: ModuleType | None = module
         self._remaining = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -28,7 +31,16 @@ class _GeneratedModuleLease:
             if self._closed:
                 raise RuntimeError("The generated AnyWidget module is closed")
             self._remaining += 1
-        weakref.finalize(widget, self._release)
+        release = weakref.finalize(widget, self._release)
+        original_close = widget.close
+
+        # Generated globals can retain the widget, so close must release the
+        # module before garbage collection can break that reference cycle.
+        def close() -> None:
+            original_close()
+            release()
+
+        setattr(widget, "close", close)
 
     def close(self) -> None:
         with self._lock:
@@ -50,6 +62,7 @@ class _GeneratedModuleLease:
     def _remove_module(self) -> None:
         if sys.modules.get(self._name) is self._module:
             sys.modules.pop(self._name, None)
+        self._module = None
 
 
 def create_anywidget(
@@ -69,11 +82,22 @@ def create_anywidget(
     it refers to a source-defined top-level ``AnyWidget`` class. Pass names
     explicitly when the source defines more than one widget.
 
+    Compose children with ``anywidget.WidgetTrait().tag(sync=True)``. In an
+    async ``render({ model, el, host, signal })``, resolve the child reference
+    with ``await host.getWidget(model.get("child"))`` and mount it with
+    ``await child.render({ el: childElement, signal })``. Forward the view's
+    abort signal to child renders and DOM listeners. Read child state in Python
+    as ``self.child.value``. In JavaScript, get its model with
+    ``const childModel = await host.getModel(model.get("child"))`` and read
+    ``childModel.get("value")``. Send custom events with
+    ``model.send(content)`` and receive them in Python with
+    ``self.on_msg(callback)``, where callback receives widget, content, buffers.
+
     The code runs with the MCP server process permissions. Run this factory in
     a sandbox with scoped filesystem, network, credential, and process access.
 
     The generated module remains in ``sys.modules`` until every returned widget
-    is garbage-collected, preserving the globals used by its live classes.
+    is closed or garbage-collected, preserving module lookup for its live classes.
 
     Args:
         code: Complete Python source defining the widget classes.
@@ -84,11 +108,42 @@ def create_anywidget(
         One widget for one selected class, otherwise an ordered widget sequence.
 
     Raises:
-        ValueError: If a requested name is missing or no fallback class exists.
-        TypeError: If a requested name does not bind an AnyWidget subclass.
-        SyntaxError: If the source cannot be compiled.
-        Exception: An exception raised by source execution or widget construction.
+        ToolError: Compilation, class selection, execution, or construction failed.
+            Includes the exception type, generated source line when available,
+            and a bounded message. Correct the source or classnames and retry.
     """
+    try:
+        return _create_anywidget(code, classnames)
+    except Exception as error:
+        raise ToolError(_generated_error(error)) from error
+
+
+def _generated_error(error: Exception) -> str:
+    cause = error
+    while isinstance(cause, ExceptionGroup):
+        cause = cause.exceptions[0]
+    line = None
+    traceback = cause.__traceback__
+    while traceback is not None:
+        if traceback.tb_frame.f_code.co_filename == "<generated-anywidget>":
+            line = traceback.tb_lineno
+        traceback = traceback.tb_next
+    if isinstance(cause, SyntaxError) and cause.filename == "<generated-anywidget>":
+        line = cause.lineno
+    message = cause.msg if isinstance(cause, SyntaxError) and cause.msg else str(cause)
+    if len(message) > 1_000:
+        message = message[:1_000] + "..."
+    location = f" at line {line}" if line is not None else ""
+    summary = f"{type(cause).__name__}{location}: {message}"
+    if cause is not error:
+        summary = f"{type(error).__name__}: {summary}"
+    return summary
+
+
+def _create_anywidget(
+    code: str,
+    classnames: Sequence[str],
+) -> AnyWidget | Sequence[AnyWidget]:
     module_name = f"_anywidget_mcp_generated_{uuid.uuid4().hex}"
     module = ModuleType(module_name)
     sys.modules[module_name] = module
@@ -119,18 +174,15 @@ def create_anywidget(
         for widget in widgets:
             lease.track(widget)
     except BaseException as error:
-        cleanup_errors: list[BaseException] = []
-        for widget in reversed(widgets):
-            try:
-                widget.close()
-            except BaseException as cleanup_error:
-                cleanup_errors.append(cleanup_error)
-        lease.close()
-        if cleanup_errors:
+        try:
+            close_unclaimed_widget_graphs(widgets)
+        except BaseException as cleanup_error:
             raise BaseExceptionGroup(
                 "Failed to construct and clean up generated AnyWidgets",
-                [error, *cleanup_errors],
+                [error, cleanup_error],
             ) from error
+        finally:
+            lease.close()
         raise
 
     return widgets[0] if len(widgets) == 1 else widgets
