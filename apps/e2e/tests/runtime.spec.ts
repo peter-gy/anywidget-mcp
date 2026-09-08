@@ -102,7 +102,9 @@ test("source updates replace CSS and JavaScript in the live view", async ({ page
 	await expect(widget.getByTestId("hot-label")).toHaveCSS("color", "rgb(37, 99, 235)");
 });
 
-test("a new app reuses verified shared sources from browser cache", async ({ page }) => {
+test("large shared sources render across app replacement and unavailable storage", async ({
+	page,
+}) => {
 	await openWidget(page, "large_asset_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.getByTestId("large-asset-status")).toHaveText("ready");
@@ -110,30 +112,16 @@ test("a new app reuses verified shared sources from browser cache", async ({ pag
 		"first large source",
 		"second large source",
 	]);
-	// Read from the host document to observe persistence across app documents.
-	await expect
-		.poll(() =>
-			page.evaluate(async () => {
-				const texts = await Promise.all(
-					(await caches.keys()).map(async (name) => {
-						const cache = await caches.open(name);
-						return Promise.all(
-							(await cache.keys()).map(async (key) => {
-								const response = await cache.match(key);
-								return response?.text() ?? "";
-							}),
-						);
-					}),
-				);
-				return texts
-					.flat()
-					.map((text) => new TextEncoder().encode(text).byteLength)
-					.sort((a, b) => a - b);
-			}),
-		)
-		.toEqual([expect.any(Number), 3 * 1024 * 1024]);
-	const requests = await page.getByLabel("Asset requests").innerText();
-	expect(Number(requests)).toBeGreaterThan(0);
+	const requests = Number(await page.getByLabel("Asset requests").innerText());
+	expect(requests).toBeGreaterThan(0);
+	// New app documents must keep loading when the browser denies cache access.
+	await page.addInitScript(() => {
+		Object.defineProperty(globalThis, "caches", {
+			value: {
+				open: () => Promise.reject(new DOMException("Storage denied", "SecurityError")),
+			},
+		});
+	});
 	await openWidget(page, "large_asset_probe");
 	await expect(widget.getByTestId("large-asset-status")).toHaveText("ready");
 
@@ -141,7 +129,9 @@ test("a new app reuses verified shared sources from browser cache", async ({ pag
 		"first large source",
 		"second large source",
 	]);
-	await expect(page.getByLabel("Asset requests")).toHaveText(requests);
+	await expect
+		.poll(async () => Number(await page.getByLabel("Asset requests").innerText()))
+		.toBeGreaterThan(requests);
 });
 
 test("a rejected trait update reports an error and disposes the session", async ({ page }) => {

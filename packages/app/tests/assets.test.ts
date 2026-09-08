@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { hydrateSources, resolveSources } from "../src/assets";
 import { AttachmentStore } from "../src/attachments";
 import { fixtureBlob, readResult } from "./attachment-test-support";
+import { deferred } from "./runtime-test-support";
 
 beforeEach(() => {
 	let pending = Promise.resolve();
@@ -35,7 +36,10 @@ function installCache() {
 	return { stored, cache };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+	vi.unstubAllGlobals();
+	vi.useRealTimers();
+});
 
 describe("content-addressed sources", () => {
 	test("decodes multibyte UTF-8 after chunk assembly and reuses identical ESM and CSS bytes", async () => {
@@ -100,6 +104,46 @@ describe("content-addressed sources", () => {
 			async (_name, args) => readResult(source.bytes, args),
 		);
 		expect(resolved.get(source.ref.id)).toBe("source");
+	});
+
+	test("loads verified attachments when a persistent cache read exceeds its deadline", async () => {
+		const { cache } = installCache();
+		const source = await fixtureBlob("export default {};");
+		const reading = deferred<void>();
+		const response = deferred<Response | undefined>();
+		cache.match.mockImplementationOnce(() => {
+			reading.resolve();
+			return response.promise;
+		});
+		const call = vi.fn(async (_name, args) => readResult(source.bytes, args));
+		vi.useFakeTimers();
+		const loading = resolveSources([{ _esm: source.ref }], new AttachmentStore("s"), call);
+		await reading.promise;
+		await vi.runOnlyPendingTimersAsync();
+		const resolved = await loading;
+		expect(resolved.get(source.ref.id)).toBe("export default {};");
+		expect(call).toHaveBeenCalledOnce();
+		response.resolve(undefined);
+	});
+
+	test("reloads verified attachments after persistent write locking is aborted", async () => {
+		installCache();
+		vi.stubGlobal("navigator", {
+			locks: {
+				request: vi.fn().mockRejectedValue(new DOMException("Lock request aborted", "AbortError")),
+			},
+		});
+		const source = await fixtureBlob("export default {};");
+		const call = vi.fn(async (_name, args) => readResult(source.bytes, args));
+		const first = await resolveSources([{ _esm: source.ref }], new AttachmentStore("first"), call);
+		const second = await resolveSources(
+			[{ _esm: source.ref }],
+			new AttachmentStore("second"),
+			call,
+		);
+		expect(first.get(source.ref.id)).toBe("export default {};");
+		expect(second.get(source.ref.id)).toBe("export default {};");
+		expect(call.mock.calls.map(([, args]) => args.instance_id)).toEqual(["first", "second"]);
 	});
 
 	test.each([

@@ -100,22 +100,28 @@ async function writePersistent(ref: BlobRef, source: string): Promise<void> {
 				CACHE_NAME,
 				{ signal: AbortSignal.timeout(CACHE_IO_TIMEOUT_MS) },
 				async () => {
-					const cache = await globalThis.caches.open(CACHE_NAME);
-					const key = cacheKey(ref.id);
-					const put = async (): Promise<void> => {
-						try {
-							await cache.put(key, new Response(source));
-						} catch (error) {
-							if (!(error instanceof DOMException) || error.name !== "QuotaExceededError")
-								throw error;
-							const oldest = (await cache.keys()).find((entry) =>
-								entry.url.startsWith(CACHE_KEY_PREFIX),
-							);
-							if (!oldest || !(await cache.delete(oldest))) throw error;
-							await put();
-						}
-					};
-					await put();
+					try {
+						const cache = await globalThis.caches.open(CACHE_NAME);
+						const key = cacheKey(ref.id);
+						const put = async (): Promise<void> => {
+							try {
+								await cache.put(key, new Response(source));
+							} catch (error) {
+								if (!(error instanceof DOMException) || error.name !== "QuotaExceededError")
+									throw error;
+								const oldest = (await cache.keys()).find((entry) =>
+									entry.url.startsWith(CACHE_KEY_PREFIX),
+								);
+								if (!oldest || !(await cache.delete(oldest))) throw error;
+								await put();
+							}
+						};
+						await put();
+					} catch {
+						// Firefox reports rejected lock callbacks as page errors even when the
+						// request rejection is handled. Keep optional storage failures here.
+						return;
+					}
 				},
 			),
 			CACHE_IO_TIMEOUT_MS,
