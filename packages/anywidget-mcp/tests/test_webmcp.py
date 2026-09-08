@@ -66,15 +66,6 @@ def test_instrumentation_preserves_host_construction_and_source_serialization() 
                 }
             }
             assert widget._esm == "export default { render() {} };"
-            widget._esm = "export default { render() { return () => {}; } };"
-            assert (
-                json.loads(
-                    widget.get_state("_esm")["_esm"].rsplit(
-                        "\nexport default () => instrument(", 1
-                    )[1][:-3]
-                )
-                == widget._esm
-            )
         finally:
             webmcp.disable()
         assert widget.get_state("_esm")["_esm"] == widget._esm
@@ -139,11 +130,12 @@ def test_enable_is_idempotent_for_existing_and_future_instances() -> None:
     first = Counter()
     second = None
     try:
-        assert webmcp.enable() is None
+        session = webmcp.enable()
+        assert isinstance(session, webmcp.Session)
         try:
             assert webmcp.is_enabled()
             first_id = descriptor(first)["id"]
-            assert webmcp.enable() is None
+            assert webmcp.enable() is session
             assert descriptor(first)["id"] == first_id
             second = Counter()
             assert descriptor(first)["id"] != descriptor(second)["id"]
@@ -178,7 +170,7 @@ def test_disable_restores_every_widget_when_one_host_delivery_fails(
                 raise RuntimeError("host disconnected")
 
             patch.setattr(first, "send_state", failed_send)
-            with pytest.raises(ExceptionGroup, match="restore WebMCP"):
+            with pytest.raises(ExceptionGroup, match="disable WebMCP"):
                 webmcp.disable()
         assert not webmcp.is_enabled()
         for widget in (first, second):
@@ -196,12 +188,11 @@ def test_disable_restores_every_widget_when_one_host_delivery_fails(
         second.close()
 
 
-def test_failed_start_restores_the_host_dispatcher_and_widget_source(
+def test_failed_start_preserves_host_construction_and_native_widget_behavior(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     widget = Counter()
-    original_dispatcher = Widget._call_widget_constructed
-    original_add_traits = Widget.add_traits
+    original_callback = Widget._widget_construction_callback
     original_send = widget.send_state
     attempts = 0
 
@@ -218,10 +209,18 @@ def test_failed_start_restores_the_host_dispatcher_and_widget_source(
             with pytest.raises(RuntimeError, match="host disconnected"):
                 webmcp.enable()
         assert not webmcp.is_enabled()
-        assert Widget._call_widget_constructed is original_dispatcher
-        assert Widget.add_traits is original_add_traits
         assert widget.get_state("_esm")["_esm"] == widget._esm
         assert request(widget, operation="read") == []
+        constructed: list[Widget] = []
+        Widget.on_widget_constructed(constructed.append)
+        later = Counter()
+        try:
+            assert later in constructed
+            later.add_traits(label=t.Unicode("ready").tag(sync=True))
+            assert later.get_state("label") == {"label": "ready"}
+            assert later.get_state("_esm")["_esm"] == later._esm
+        finally:
+            later.close()
         webmcp.enable()
         try:
             assert webmcp.is_enabled()
@@ -229,6 +228,7 @@ def test_failed_start_restores_the_host_dispatcher_and_widget_source(
         finally:
             webmcp.disable()
     finally:
+        Widget.on_widget_constructed(original_callback)
         widget.close()
 
 
@@ -260,19 +260,27 @@ def test_custom_trait_serialization_is_readable_through_its_wire_representation(
 
 
 def test_source_serializer_survives_instrumentation_hot_reload_and_close() -> None:
+    serialized: list[tuple[str, anywidget.AnyWidget]] = []
+
+    def serialize(source: str, widget: anywidget.AnyWidget) -> str:
+        serialized.append((source, widget))
+        return source + "\n// serialized"
+
     class SerializedCounter(anywidget.AnyWidget):
         _esm = t.Unicode("export default { render() {} };").tag(
-            sync=True, to_json=lambda source, widget: source + "\n// serialized"
+            sync=True, to_json=serialize
         )
 
     widget = SerializedCounter()
     try:
         webmcp.enable()
         try:
+            initial = widget.get_state("_esm")["_esm"]
+            serialized.clear()
             widget._esm = "export default { initialize() {} };"
             source = widget.get_state("_esm")["_esm"]
-            arguments = source.rsplit("\nexport default () => instrument(", 1)[1][:-3]
-            assert json.loads(arguments) == (widget._esm + "\n// serialized")
+            assert (widget._esm, widget) in serialized
+            assert source != initial
         finally:
             webmcp.disable()
         assert widget.get_state("_esm")["_esm"] == widget._esm + "\n// serialized"
@@ -372,7 +380,6 @@ def test_stop_clears_metadata_and_preserves_traits_added_during_instrumentation(
             "_webmcp": None,
             "label": "done",
         }
-        assert widget.keys.count("_webmcp") == 1
     finally:
         widget.close()
 
@@ -399,7 +406,6 @@ def test_dynamic_traits_refresh_tool_schema_through_native_add_traits() -> None:
             super().__init__()
             self.add_traits(label=t.Unicode("ready").tag(sync=True))
 
-    original_add_traits = Widget.add_traits
     widget = None
     try:
         webmcp.enable()
@@ -420,7 +426,6 @@ def test_dynamic_traits_refresh_tool_schema_through_native_add_traits() -> None:
             assert widget.get_state("_esm") == source
         finally:
             webmcp.disable()
-        assert Widget.add_traits is original_add_traits
         widget.add_traits(status=t.Unicode("closed").tag(sync=True))
         assert widget.get_state(("_webmcp", "status")) == {
             "_webmcp": None,
@@ -429,3 +434,46 @@ def test_dynamic_traits_refresh_tool_schema_through_native_add_traits() -> None:
     finally:
         if widget is not None:
             widget.close()
+
+
+def test_dictionary_property_schemas_follow_native_value_validation() -> None:
+    class Settings(anywidget.AnyWidget):
+        values = t.Dict(
+            value_trait=t.Unicode(), per_key_traits={"count": t.Int(min=0)}
+        ).tag(sync=True)
+
+    widget = Settings()
+    try:
+        webmcp.enable(widgets=[widget], discover=False)
+        assert descriptor(widget)["writable"]["values"] == {
+            "type": "object",
+            "properties": {"count": {"type": "integer", "minimum": 0}},
+            "additionalProperties": {"type": "string"},
+        }
+        messages = request(
+            widget, operation="update", state={"values": {"count": "invalid"}}
+        )
+        assert "error" in messages[-1]["content"]
+        values = {"count": 2, "label": "Sales"}
+        messages = request(widget, operation="update", state={"values": values})
+        assert messages[-1]["content"]["result"]["state"] == {"values": values}
+    finally:
+        webmcp.disable()
+        widget.close()
+
+
+def test_dictionary_with_binary_property_exposes_serialized_read_state() -> None:
+    class BinarySettings(anywidget.AnyWidget):
+        values = t.Dict(per_key_traits={"payload": t.Bytes()}).tag(sync=True)
+
+    widget = BinarySettings()
+    try:
+        webmcp.enable(widgets=[widget], discover=False)
+        assert descriptor(widget)["properties"] == {"values": {}}
+        assert descriptor(widget)["writable"] == {}
+        assert request(widget, operation="read")[-1]["content"]["result"] == {
+            "state": {"values": {}}
+        }
+    finally:
+        webmcp.disable()
+        widget.close()

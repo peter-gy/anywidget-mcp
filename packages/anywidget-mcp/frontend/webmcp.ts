@@ -1,1 +1,1 @@
-export { instrument } from "@anywidget-mcp/app/webmcp";
+export { instrument, session } from "@anywidget-mcp/app/webmcp";

@@ -49,9 +49,10 @@ jobs:
       - name: Check Python formatting, linting, and types
         run: |
           uv lock --check
-          uv run ruff format --check packages/anywidget-mcp scripts apps/e2e/server.py
-          uv run ruff check packages/anywidget-mcp scripts apps/e2e/server.py
-          uv run ty check packages/anywidget-mcp scripts apps/e2e/server.py
+          uv sync --all-packages --group dev --locked
+          uv run ruff format --check packages/anywidget-mcp scripts apps/e2e
+          uv run ruff check packages/anywidget-mcp scripts apps/e2e
+          uv run ty check packages/anywidget-mcp scripts apps/e2e
           uv run pyrefly check --min-severity warn
           uv run basedpyright
 

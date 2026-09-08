@@ -23,3 +23,23 @@ export function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> 
 		);
 	});
 }
+
+export function withTimeout<T>(
+	task: Promise<T>,
+	milliseconds: number,
+	message: string,
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timeout = globalThis.setTimeout(() => reject(new Error(message)), milliseconds);
+		void task.then(
+			(value) => {
+				globalThis.clearTimeout(timeout);
+				resolve(value);
+			},
+			(error) => {
+				globalThis.clearTimeout(timeout);
+				reject(error);
+			},
+		);
+	});
+}

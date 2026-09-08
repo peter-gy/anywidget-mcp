@@ -18,6 +18,87 @@ import {
 } from "./runtime-test-support";
 
 describe("WidgetRuntime launch and model graph", () => {
+	test("exposes a child's initialized class instance to its parent", async () => {
+		class CounterApi {
+			value() {
+				return 42;
+			}
+		}
+		const api = new CounterApi();
+		const element = document.createElement("div");
+		const runtime = new WidgetRuntime(
+			{
+				instanceId: "composition",
+				rootModelId: "parent",
+				models: {
+					parent: { state: { _esm: "parent", child: "anywidget:child" } },
+					child: { state: { _esm: "child" } },
+				},
+			},
+			fakeQueue(
+				async () => ({ content: [] }),
+				async () => ({ content: [] }),
+			),
+			{ getHostCapabilities: () => ({}), updateModelContext: vi.fn() },
+			Promise.resolve(),
+			(owner, model) =>
+				new WidgetBinding(owner, model, {
+					reportError: vi.fn(),
+					replaceCss: async () => undefined,
+					loadWidget: async () =>
+						model.modelId === "child"
+							? { initialize: () => api }
+							: {
+									async render({ host, el }) {
+										const child = await host.getWidget<CounterApi>("anywidget:child");
+										expect(child.exports).toBe(api);
+										el.textContent = String(child.exports.value());
+									},
+								},
+				}),
+		);
+		try {
+			await runtime.mount(element);
+			expect(element.textContent).toBe("42");
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	test.each(["abort", "timeout"])("rejects a stalled child lookup on %s", async (ending) => {
+		vi.useFakeTimers();
+		const events: string[] = [];
+		const runtime = new WidgetRuntime(
+			{
+				instanceId: "composition",
+				rootModelId: "child",
+				models: { child: { state: { _esm: "child" } } },
+			},
+			fakeQueue(
+				async () => ({ content: [] }),
+				async () => ({ content: [] }),
+			),
+			{ getHostCapabilities: () => ({}), updateModelContext: vi.fn() },
+			Promise.resolve(),
+			(_owner, model) => new FakeBinding(model, events),
+		);
+		const controller = new AbortController();
+		const result = runtime.host(controller.signal).getWidget("anywidget:child");
+		const rejected = expect(result).rejects.toThrow(
+			ending === "abort"
+				? "Parent view closed"
+				: "Timed out waiting for widget anywidget:child to initialize",
+		);
+		try {
+			if (ending === "abort") controller.abort(new Error("Parent view closed"));
+			else await vi.advanceTimersByTimeAsync(10_000);
+			await rejected;
+		} finally {
+			await runtime.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	test("publishes the latest nested context after the complete graph transaction", async () => {
 		vi.useFakeTimers();
 		const initializing = deferred<void>();

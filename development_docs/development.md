@@ -2,11 +2,12 @@
 
 ## Repository map
 
-- `packages/app/src/` contains the browser MCP App runtime and host-independent
-  WebMCP instrumentation.
+- `packages/app/src/` contains the browser MCP App runtime and WebMCP browser
+  integration.
 - `packages/app/tests/` contains Vite+ tests for browser contracts.
-- `apps/e2e/` contains Playwright browser tests, the MCP App host, and the
-  Python widget fixture.
+- `apps/e2e/` contains Playwright browser tests, the MCP App host, Python
+  widget fixtures, and native JupyterLab and marimo notebooks. Its Python
+  workspace member owns the notebook test dependencies.
 - `packages/anywidget-mcp/src/anywidget_mcp/` contains the public Python API,
   MCP server, state projection, widget bridge, and CLI.
 - `packages/anywidget-mcp/tests/` contains Python contract tests and fixtures.
@@ -89,9 +90,18 @@ and WebKit:
 pnpm e2e
 ```
 
-Playwright starts the Python widget server and Vite host, renders the packaged
-MCP App in an iframe, and stops both servers when the run finishes. The tests
-exercise browser interaction against Python state through the MCP connection.
+Playwright starts the MCP fixture servers, Vite host, JupyterLab, and marimo,
+and stops them when the run finishes. The MCP scenarios render the packaged app
+in an iframe and exercise browser interaction against Python state through the
+MCP connection. `apps/e2e/pyproject.toml` owns the pinned notebook dependencies,
+installed by `uv sync --all-packages --group dev --locked`.
+
+WebMCP scenarios use a controlled browser registry across all three browsers.
+Native WebMCP scenarios also run in Chromium with its WebMCP feature enabled.
+They execute actual JupyterLab notebook cells and a marimo notebook, then call
+the browser's tool API. Coverage includes class and function creation,
+current and future instance discovery, trait privacy, Python observers, native
+widget rendering, kernel shutdown, and marimo client isolation and cell reruns.
 
 Select one browser while iterating:
 
@@ -106,6 +116,24 @@ Playwright's interactive test runner:
 pnpm --filter @anywidget-mcp/e2e e2e --project=chromium
 pnpm --filter @anywidget-mcp/e2e e2e:ui
 ```
+
+Run the native notebook scenarios after building the browser resources:
+
+```sh
+pnpm --filter @anywidget-mcp/e2e e2e webmcp-jupyter.spec.ts webmcp-marimo.spec.ts --project=chromium
+```
+
+For an interactive JupyterLab fixture, run:
+
+```sh
+uv run --locked --package anywidget-mcp-e2e python apps/e2e/jupyter_webmcp.py
+```
+
+Open `http://127.0.0.1:8793/lab/tree/webmcp.ipynb?token=anywidget-mcp-e2e`.
+The fixture creates its notebook, kernel specification, and Jupyter settings
+in a temporary directory. Exiting the server shuts down its kernels and deletes
+that directory. The Playwright scenario also shuts down its notebook session
+explicitly before closing the browser.
 
 `pnpm test` runs the Vite+ unit suite. `make check` runs the browser integration
 suite after its build step. CI runs a separate job for each browser and uploads

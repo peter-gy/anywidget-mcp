@@ -13,6 +13,8 @@ from exceptiongroup import BaseExceptionGroup, ExceptionGroup
 from anywidget import AnyWidget
 
 from ._projection_json import DEFAULT_MAX_BYTES, bounded_mapping, canonical_json
+from ._models import bind_model
+from ._spec import describe_model
 
 WidgetT = TypeVar("WidgetT", bound=AnyWidget)
 StateProjector = Callable[[Any], Mapping[str, object]]
@@ -105,9 +107,6 @@ class _GroupedState:
             )
 
 
-_EXCLUDED_DEFAULT_TRAITS = frozenset({"layout", "tabbable", "tooltip"})
-
-
 @dataclass(frozen=True)
 class ProjectionUpdate:
     version: int
@@ -178,7 +177,7 @@ class StateContext:
 
         if isinstance(state, _DefaultState):
             selections = tuple(
-                (current, _default_trait_names(current))
+                (current, describe_model(current).default_state_names)
                 for current in self._projection_roots
             )
             self._projector = _traits_projector(selections[0][1])
@@ -264,7 +263,7 @@ class StateContext:
                     tracked.append(widget)
                     if not self._observes_widget_graph:
                         continue
-                    names = _observable_trait_names(widget)
+                    names = describe_model(widget).capabilities.observe
                     if not names:
                         continue
                     self._observe(widget, names)
@@ -324,6 +323,26 @@ class StateContext:
                 return
             self._mark_dirty_locked()
 
+    def commit_values(self, widget: object, names: Sequence[str]) -> None:
+        """Capture traits explicitly published through the widget comm."""
+        with self._lock:
+            if self._closed:
+                return
+            for name in names:
+                key = (id(widget), name)
+                if key in self._notified_values:
+                    value = _snapshot_containers(getattr(widget, name))
+                    if self._refresh_thread_id == threading.get_ident() and not (
+                        _values_match(value, self._notified_values[key][1])
+                    ):
+                        self._mutated_during_refresh = True
+                    self._notified_values[key] = (
+                        widget,
+                        value,
+                    )
+                    if self._dirty_traits is None or key in self._dirty_traits:
+                        self._mark_dirty_locked()
+
     def take(self) -> ProjectionUpdate | None:
         retries = 0
         while self.refresh() is _RefreshStatus.RETRY:
@@ -374,11 +393,20 @@ class StateContext:
         state_json: str | None = None
         error: Exception | None = None
         projection_guards: list[tuple[object, tuple[str, ...]]] = []
+        container_values: list[tuple[Any, Any]] = []
         try:
             try:
                 if self._guards_projection_mutations:
                     projection_guards = self._install_projection_guards()
                 if trait_selections is None:
+                    with self._lock:
+                        widgets = tuple(self._tracked_widgets)
+                    container_values = [
+                        (value, _snapshot_containers(value))
+                        for widget in widgets
+                        for name in describe_model(widget).synchronized_names
+                        if type(value := getattr(widget, name)) in (dict, list, tuple)
+                    ]
                     projected = _project_roots(
                         projector,
                         self._projection_roots,
@@ -416,13 +444,18 @@ class StateContext:
         notified_values_match = (
             trait_selections is not None or _matches_notified_values(notified_values)
         )
+        containers_mutated = any(
+            not _values_match(value, snapshot) for value, snapshot in container_values
+        )
         with self._lock:
             changed_during_refresh = self._dirty_generation != generation
             mutated_during_refresh = self._mutated_during_refresh
             self._finish_refresh()
             if self._closed:
                 return _RefreshStatus.SETTLED
-            if mutated_during_refresh:
+            if mutated_during_refresh or (
+                containers_mutated and not changed_during_refresh
+            ):
                 self._projected_generation = self._dirty_generation
                 self._pending_update = None
                 self._pending_error = RuntimeError(
@@ -569,7 +602,7 @@ class StateContext:
                 for name in names:
                     self._notified_values[(id(widget), name)] = (
                         widget,
-                        getattr(widget, name),
+                        _snapshot_containers(getattr(widget, name)),
                     )
             except BaseException as error:
                 cleanup_error: Exception | None = None
@@ -604,7 +637,10 @@ class StateContext:
                 if owner is not None and isinstance(name, str):
                     key = (id(owner), name)
                     if key in self._notified_values:
-                        self._notified_values[key] = (owner, change.get("new"))
+                        self._notified_values[key] = (
+                            owner,
+                            _snapshot_containers(change.get("new")),
+                        )
             if self._refresh_thread_id == threading.get_ident():
                 self._mutated_during_refresh = True
             if self._dirty_traits is None or key in self._dirty_traits:
@@ -626,7 +662,7 @@ class StateContext:
                 for widget in widgets:
                     names = tuple(
                         name
-                        for name in _observable_trait_names(widget)
+                        for name in describe_model(widget).capabilities.observe
                         if name not in observed.get(id(widget), ())
                     )
                     if not names:
@@ -692,19 +728,9 @@ def validate_state_spec(state: object) -> None:
     )
 
 
-def _default_trait_names(widget: AnyWidget) -> tuple[str, ...]:
-    return tuple(
-        name
-        for name, trait in widget.traits().items()
-        if trait.metadata.get("sync")
-        and not name.startswith("_")
-        and name not in _EXCLUDED_DEFAULT_TRAITS
-    )
-
-
 def _traits_projector(names: tuple[str, ...]) -> StateProjector:
     def project(widget: AnyWidget) -> Mapping[str, object]:
-        return widget.get_state(key=names)
+        return bind_model(widget).read(names)
 
     return project
 
@@ -749,11 +775,7 @@ def _project_notified_traits(
         for observed, name, value in notified_values
         if observed is widget and name in names
     }
-    state: dict[str, Any] = {}
-    for name in names:
-        to_json = widget.trait_metadata(name, "to_json", widget._trait_to_json)
-        state[name] = to_json(values[name], widget)
-    return state
+    return bind_model(widget).serialize(values)
 
 
 def _unique_trait_selections(
@@ -773,9 +795,52 @@ def _unique_trait_selections(
 def _matches_notified_values(
     notified_values: tuple[tuple[object, str, Any], ...],
 ) -> bool:
-    for widget, name, notified in notified_values:
-        current = getattr(widget, name)
-        if current is notified:
+    return all(
+        _values_match(getattr(widget, name), notified)
+        for widget, name, notified in notified_values
+    )
+
+
+def _snapshot_containers(value: Any) -> Any:
+    # Traitlets publishes container assignment, while nested mutation stays local.
+    # Preserve model and opaque leaf identities when retaining the published value.
+    memo: dict[int, Any] = {}
+    pending = [value]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        identity = id(current)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if type(current) is dict:
+            pending.extend(current.keys())
+            pending.extend(current.values())
+        elif type(current) in (list, tuple):
+            pending.extend(current)
+        else:
+            memo[identity] = current
+    return copy.deepcopy(value, memo)
+
+
+def _values_match(current: Any, notified: Any) -> bool:
+    pending = [(current, notified)]
+    seen: set[tuple[int, int]] = set()
+    while pending:
+        current, notified = pending.pop()
+        pair = (id(current), id(notified))
+        if current is notified or pair in seen:
+            continue
+        seen.add(pair)
+        if type(current) in (dict, list, tuple):
+            if type(current) is not type(notified) or len(current) != len(notified):
+                return False
+            if type(current) is dict:
+                if current.keys() != notified.keys():
+                    return False
+                pending.extend((value, notified[key]) for key, value in current.items())
+            else:
+                pending.extend(zip(current, notified))
             continue
         try:
             equal = bool(current == notified)
@@ -784,15 +849,6 @@ def _matches_notified_values(
         if equal is not True:
             return False
     return True
-
-
-def _observable_trait_names(widget: object) -> tuple[str, ...]:
-    trait_names = getattr(widget, "trait_names", None)
-    observe = getattr(widget, "observe", None)
-    unobserve = getattr(widget, "unobserve", None)
-    if not callable(trait_names) or not callable(observe) or not callable(unobserve):
-        return ()
-    return tuple(cast(list[str], trait_names()))
 
 
 def _unobserve(
@@ -805,7 +861,9 @@ def _unobserve(
 
 
 def _validate_trait_names(widget: AnyWidget, names: tuple[str, ...]) -> None:
-    missing = sorted(set(names).difference(widget.traits()))
+    missing = sorted(
+        set(names).difference(trait.name for trait in describe_model(widget).traits)
+    )
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"Unknown state trait for {type(widget).__name__}: {joined}")

@@ -6,6 +6,7 @@ import type { WidgetDefinition } from "../src/binding";
 import type { AnyModel, EventHandler } from "../src/model";
 import { isCallable, type RuntimeRecord, type WidgetValue } from "../src/runtime-value";
 import { instrument, type WebMCPDescriptor } from "../src/webmcp";
+import { deferred } from "./runtime-test-support";
 
 const load = vi.fn<() => Promise<WidgetDefinition>>();
 
@@ -29,23 +30,43 @@ const descriptor: WebMCPDescriptor = {
 function modelFixture(metadata: WidgetValue = descriptor) {
 	const listeners = new Set<EventHandler>();
 	const metadataListeners = new Set<EventHandler>();
+	const connectionListeners = new Set<EventHandler>();
 	const model: AnyModel = {
 		get: vi.fn((name: string) => (name === "_webmcp" ? metadata : undefined)),
 		set: vi.fn(),
 		save_changes: vi.fn(),
 		send: vi.fn(),
 		on: (name, callback) => {
-			(name === "msg:custom" ? listeners : metadataListeners).add(callback);
+			(name === "msg:custom"
+				? listeners
+				: name === "comm:close"
+					? connectionListeners
+					: metadataListeners
+			).add(callback);
 		},
 		off: (name, callback) => {
-			if (callback) (name === "msg:custom" ? listeners : metadataListeners).delete(callback);
+			if (callback)
+				(name === "msg:custom"
+					? listeners
+					: name === "comm:close"
+						? connectionListeners
+						: metadataListeners
+				).delete(callback);
 		},
-		widget_manager: { get_model: () => Promise.resolve(model) },
+		widget_manager: {
+			async get_model<T extends object>() {
+				// SAFETY: The fixture exposes one model for each caller's declared trait schema.
+				return model as AnyModel<T>;
+			},
+		},
 	};
 	return {
 		model,
 		listeners,
 		metadataListeners,
+		closeComm() {
+			for (const listener of Array.from(connectionListeners)) listener();
+		},
 		setMetadata(value: WidgetValue) {
 			metadata = value;
 			for (const listener of metadataListeners) listener();
@@ -66,10 +87,17 @@ function renderOptions(model: AnyModel, signal = new AbortController().signal) {
 		signal,
 		el: document.createElement("div"),
 		host: {
-			getModel: () => Promise.resolve(model),
+			async getModel<T extends object>() {
+				// SAFETY: The fixture exposes one model for each caller's declared trait schema.
+				return model as AnyModel<T>;
+			},
 			getWidget: () => Promise.reject(new Error("No child widget")),
 		},
-		experimental: { invoke: () => Promise.resolve<[undefined, DataView[]]>([undefined, []]) },
+		experimental: {
+			async invoke() {
+				throw new Error("This WebMCP fixture uses model.send for requests");
+			},
+		},
 	};
 }
 
@@ -246,10 +274,18 @@ describe("WebMCP widget instrumentation", () => {
 		await dispose(fixture.cleanup);
 	});
 
-	test("cleans partial registrations when the browser rejects a tool", async () => {
+	test("withdraws an accepted tool when the browser rejects its companion", async () => {
 		vi.spyOn(console, "warn").mockImplementation(() => {});
-		registerTool.mockImplementationOnce(() => Promise.reject(new Error("Permission denied")));
+		const permission = deferred<void>();
+		const register = registerTool.getMockImplementation();
+		if (!register) throw new Error("Missing browser registry");
+		registerTool.mockImplementationOnce(register).mockImplementationOnce(async () => {
+			await permission.promise;
+			throw new Error("Permission denied");
+		});
 		const fixture = await mount();
+		await vi.waitFor(() => expect([...tools.keys()]).toEqual(["anywidget_counter1_read"]));
+		permission.resolve();
 		await vi.waitFor(() => expect(tools.size).toBe(0));
 		await dispose(fixture.cleanup);
 	});
@@ -387,5 +423,60 @@ describe("WebMCP widget instrumentation", () => {
 		await timedOut;
 		expect(fixture.listeners.size).toBe(0);
 		await dispose(fixture.cleanup);
+	});
+
+	test("continues queued requests after a synchronous comm send failure", async () => {
+		const fixture = await mount();
+		vi.mocked(fixture.model.send).mockImplementationOnce(() => {
+			throw new Error("Comm send interrupted");
+		});
+		const failed = tool("update").execute({ count: 4 }, {});
+		const read = tool("read").execute({}, {});
+		await expect(failed).rejects.toThrow("Comm send interrupted");
+		await vi.waitFor(() => expect(fixture.model.send).toHaveBeenCalledTimes(2));
+		fixture.reply({ result: { state: { count: 0 } } }, 1);
+		await expect(read).resolves.toEqual({ state: { count: 0 } });
+		expect(fixture.listeners.size).toBe(0);
+		await dispose(fixture.cleanup);
+	});
+
+	test("rejects malformed replies and correlates later replies with the queued request", async () => {
+		const fixture = await mount();
+		const failed = tool("update").execute({ count: 4 }, {});
+		const rejected = expect(failed).rejects.toThrow("invalid AnyWidget WebMCP result");
+		const finished = vi.fn();
+		const read = tool("read").execute({}, {}).then(finished);
+		await vi.waitFor(() => expect(fixture.model.send).toHaveBeenCalledOnce());
+		fixture.reply({ result: { state: [] } });
+		await rejected;
+		await vi.waitFor(() => expect(fixture.model.send).toHaveBeenCalledTimes(2));
+		fixture.reply({ result: { state: { count: 99 } } });
+		await Promise.resolve();
+		expect(finished).not.toHaveBeenCalled();
+		fixture.reply({ result: { state: { count: 4 } } }, 1);
+		await read;
+		expect(finished).toHaveBeenCalledWith({ state: { count: 4 } });
+		expect(fixture.listeners.size).toBe(0);
+		await dispose(fixture.cleanup);
+	});
+	test("withdraws an instance when its native comm closes and retains its widget output", async () => {
+		const cleanup = vi.fn();
+		load.mockResolvedValue({
+			render: ({ el }) => {
+				el.textContent = "Counter";
+				return cleanup;
+			},
+		});
+		const fixture = await mount();
+		const read = tool("read").execute({}, {});
+		const rejected = expect(read).rejects.toMatchObject({ name: "AbortError" });
+		await Promise.resolve();
+		fixture.closeComm();
+		await rejected;
+		expect(tools.size).toBe(0);
+		expect(fixture.options.el.textContent).toBe("Counter");
+		expect(cleanup).not.toHaveBeenCalled();
+		await dispose(fixture.cleanup);
+		expect(cleanup).toHaveBeenCalledOnce();
 	});
 });

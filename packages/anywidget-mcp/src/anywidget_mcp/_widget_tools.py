@@ -32,11 +32,12 @@ from ._runtime import (
     session_result,
 )
 from ._state import DEFAULT_STATE, validate_state_spec
-from ._targets import (
+from ._mcp.targets import (
     SESSION_TOOL_NAMES,
     TargetT,
     WidgetState,
-    compile_widget_target,
+    MCPWidgetTarget,
+    prepare_target,
     normalize_state,
 )
 
@@ -209,54 +210,49 @@ class WidgetTools:
         validate_state_spec(normalized_state)
 
         def register(candidate: TargetT) -> TargetT:
-            tool_meta = {"ui": {"resourceUri": self._app_uri}}
-            compiled = compile_widget_target(
+            compiled = prepare_target(
                 candidate,
                 name=name,
                 title=title,
                 description=description,
                 annotations=annotations,
                 icons=icons,
-                meta=tool_meta,
             )
-            target_description = compiled.description
-            tool_name = target_description.tool_name
-            tool_title = target_description.title
-            if self._mcp._tool_manager.get_tool(tool_name) is not None:
-                raise ValueError(f"Tool name {tool_name!r} is already registered")
-
-            async def invoke(
-                arguments: dict[str, Any],
-                loading_message: str,
-            ) -> CallToolResult:
-                try:
-                    return await self._require_runtime().open(
-                        candidate,
-                        arguments,
-                        normalized_state,
-                        tool_name=tool_name,
-                        tool_title=tool_title,
-                        loading_message=loading_message,
-                    )
-                except WidgetCreationError as error:
-                    raise ToolError(str(error)) from error
-
-            launch = compiled.bind(invoke)
-            self._mcp.add_tool(
-                launch,
-                name=compiled.tool.name,
-                title=compiled.tool.title,
-                description=compiled.tool.description,
-                annotations=compiled.tool.annotations,
-                icons=compiled.tool.icons,
-                meta=compiled.tool.meta,
-                structured_output=False,
-            )
+            self._register_widget(compiled, state=normalized_state)
             return candidate
 
         if target is None:
             return register
         return register(target)
+
+    def _register_widget(
+        self, compiled: MCPWidgetTarget, *, state: WidgetState = DEFAULT_STATE
+    ) -> None:
+        normalized_state = normalize_state(state)
+        validate_state_spec(normalized_state)
+
+        creation = compiled.spec.call
+        if creation is None:
+            raise TypeError("Widget registration requires a creation capability")
+
+        async def invoke(
+            arguments: dict[str, Any], loading_message: str
+        ) -> CallToolResult:
+            try:
+                return await self._require_runtime().open(
+                    creation.invoke,
+                    arguments,
+                    normalized_state,
+                    tool_name=compiled.spec.identity.name,
+                    tool_title=compiled.spec.identity.title,
+                    loading_message=loading_message,
+                )
+            except WidgetCreationError as error:
+                raise ToolError(str(error)) from error
+
+        compiled.register(
+            self._mcp, invoke, meta={"ui": {"resourceUri": self._app_uri}}
+        )
 
     async def aclose(self) -> None:
         """Close every live widget session in the active server lifespan."""

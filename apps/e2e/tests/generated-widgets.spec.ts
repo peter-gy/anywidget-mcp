@@ -108,9 +108,7 @@ test("generated widget observers validate inputs and recover after correction", 
 		});
 });
 
-test("selected generated classes render together and share complete model context", async ({
-	page,
-}) => {
+test("selected generated classes share state and release their session", async ({ page }) => {
 	const code = `${staffingWidget}\nclass LargerTeam(Staffing):\n    demand = traitlets.Int(240).tag(sync=True)\n    agents = traitlets.Int(20).tag(sync=True)\n`;
 	await page.getByLabel("Widget tool").selectOption("create_anywidget");
 	await page.getByLabel("Tool arguments").fill(
@@ -133,4 +131,11 @@ test("selected generated classes render together and share complete model contex
 				{ demand: 120, capacity: 15, agents: 10, error: "" },
 			],
 		});
+	await page.getByRole("button", { name: "Close widget", exact: true }).click();
+	await expect(page.getByLabel("Host status")).toHaveText("Closed");
+	await expect(page.getByLabel("Disposed sessions")).toHaveText("1");
+	await page.getByRole("button", { name: "Read Python state" }).click();
+	await expect(page.getByLabel("Python state")).toContainText('"isError":true');
+	await page.getByRole("button", { name: "Open widget", exact: true }).click();
+	await expect(widget.locator("output")).toHaveText(["20 agents", "10 agents"]);
 });

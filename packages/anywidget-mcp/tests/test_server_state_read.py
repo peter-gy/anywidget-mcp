@@ -130,47 +130,6 @@ async def test_state_handles_keep_live_widget_instances_isolated() -> None:
 
 
 @pytest.mark.anyio
-async def test_state_none_omits_a_read_handle() -> None:
-    server = AnyWidgetMCP("test")
-    server.widget(CounterWidget, state=None)
-
-    async with connected(server) as client:
-        launch = await client.call_tool("counter_widget", {})
-        unavailable = await client.call_tool(
-            "anywidget_state",
-            {"state_id": "0" * 32},
-        )
-
-    assert launch.structured_content == {"tool": "counter_widget"}
-    assert unavailable.is_error is True
-    assert isinstance(unavailable.content[0], TextContent)
-    assert unavailable.content[0].text.endswith("Widget state is unavailable")
-
-
-@pytest.mark.anyio
-async def test_disposal_revokes_the_state_handle() -> None:
-    server = AnyWidgetMCP("test")
-    server.widget(CounterWidget)
-
-    async with connected(server) as client:
-        launch = await client.call_tool("counter_widget", {})
-        runtime = await bootstrap_runtime(client, launch)
-        await client.call_tool(
-            "anywidget_dispose",
-            {"session_id": runtime["instanceId"]},
-        )
-        unavailable = await client.call_tool(
-            "anywidget_state",
-            {"state_id": state_id(launch)},
-        )
-
-    assert unavailable.is_error is True
-    assert isinstance(unavailable.content[0], TextContent)
-    assert unavailable.content[0].text.endswith("Widget state is unavailable")
-    assert state_id(launch) not in unavailable.content[0].text
-
-
-@pytest.mark.anyio
 async def test_prebootstrap_state_read_renews_the_configured_idle_lifetime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

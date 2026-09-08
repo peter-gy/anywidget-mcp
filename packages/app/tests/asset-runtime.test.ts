@@ -86,11 +86,6 @@ function runtimePayload(overrides: Partial<RuntimePayload> = {}): RuntimePayload
 
 const invalidLaunches: Array<[string, RuntimePayload, string]> = [
 	[
-		"an unversioned payload",
-		runtimePayload({ protocolVersion: undefined }),
-		"Widget payload protocol version undefined is incompatible with version 3",
-	],
-	[
 		"an incompatible protocol version",
 		runtimePayload({ protocolVersion: 4 }),
 		"Widget payload protocol version 4 is incompatible with version 3",

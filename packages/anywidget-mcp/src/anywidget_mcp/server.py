@@ -13,7 +13,9 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ._state import DEFAULT_STATE
-from ._targets import (
+from ._spec import identity
+from ._mcp.targets import (
+    MCPWidgetTarget,
     TargetT,
     WidgetState,
     WidgetTarget,
@@ -184,6 +186,9 @@ class AnyWidgetMCP(MCPServer):
             icons=icons,
         )
 
+    def _register_widget(self, compiled: MCPWidgetTarget) -> None:
+        self._widget_tools._register_widget(compiled)
+
     def streamable_http_app(self, **http_options: Any) -> Starlette:
         """Build the HTTP app with MCP method handling and configured CORS."""
 
@@ -257,7 +262,7 @@ def serve(
     Example:
         ``serve(ColorPicker, transport="stdio")``
     """
-    target_name = getattr(target, "__name__", type(target).__name__)
+    target_name = identity(target).python_name
     server = AnyWidgetMCP(
         f"{target_name} MCP",
         log_level=log_level,

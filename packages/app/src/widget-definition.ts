@@ -1,13 +1,13 @@
 import type { WidgetDefinition } from "./binding";
 import { loadModule } from "./module-loader";
-import { isCallable, isPlainObject } from "./runtime-value";
+import { isCallable } from "./runtime-value";
 
 export async function loadWidget(esm: string, signal?: AbortSignal): Promise<WidgetDefinition> {
 	signal?.throwIfAborted();
 	const module = await loadModule(esm, signal);
 	signal?.throwIfAborted();
 	if (isCallable(module.render)) {
-		return { render: module.render };
+		return normalizeWidgetDefinition({ render: module.render });
 	}
 	const exported = module.default;
 	if (!exported) throw new Error("anywidget module must export a default definition or render");
@@ -16,14 +16,10 @@ export async function loadWidget(esm: string, signal?: AbortSignal): Promise<Wid
 }
 
 function normalizeWidgetDefinition<Value>(value: Value): WidgetDefinition {
-	if (!isPlainObject(value)) throw new Error("anywidget default export must return a definition");
-	const initialize: unknown = Object.getOwnPropertyDescriptor(value, "initialize")?.value;
-	const render: unknown = Object.getOwnPropertyDescriptor(value, "render")?.value;
-	if (initialize !== undefined && !isCallable(initialize)) {
-		throw new Error("anywidget initialize export must be a function");
+	// eslint-disable-next-line anti-slop/no-runtime-typeof -- AFM definitions are executable objects whose hooks may live on a prototype.
+	if (typeof value !== "object" || value === null) {
+		throw new Error("anywidget default export must return a definition");
 	}
-	if (render !== undefined && !isCallable(render)) {
-		throw new Error("anywidget render export must be a function");
-	}
-	return { initialize, render };
+	// SAFETY: AFM definitions are objects. Lifecycle calls validate hooks when their phase starts.
+	return value as WidgetDefinition;
 }

@@ -41,8 +41,12 @@ pnpm --filter @anywidget-mcp/python build && uv run --package anywidget-mcp pyte
 - `packages/anywidget-mcp/src/anywidget_mcp/server.py` owns the public
   `attach()`, `AnyWidgetMCP`, and `serve()` facade plus HTTP and CORS wrapping.
 - `_widget_tools.py` owns `WidgetTools`, MCP resources, protocol tool
-  registration, and shared MCPServer lifespan composition. `_targets.py` owns
-  target schemas and invocation binding.
+  registration, and shared MCPServer lifespan composition. `_spec/` owns shared
+  source inspection, trait descriptions, capabilities, and input compiler ports.
+  `_mcp/targets.py` owns MCP argument compilation and invocation binding.
+- `_models.py` implements native and descriptor model bindings through the
+  inward contracts in `_spec/ports.py`. Keep source inference in `_spec/` and
+  transport metadata and exposure policy in their integrations.
 - `_factory.py` owns factory acquisition and managed result cleanup.
   `_runtime.py` owns session leases, bootstrap and state handles, replay, idle
   expiry, disposal, and async shutdown.
@@ -191,9 +195,13 @@ before creating a distribution.
 - App tests exercise model events, binary paths, binding lifecycle, ordered
   tool calls, protocol-version validation, source verification and caching,
   host behavior, model-context delivery, and teardown.
-- `apps/e2e/` owns Playwright integration tests, their MCP App host, and the
-  Python widget fixture. `pnpm e2e` builds the packaged app and runs Chromium,
-  Firefox, and WebKit. Playwright starts and stops both fixture servers.
+- `apps/e2e/` owns Playwright integration tests, their MCP App host, Python
+  widget fixtures, and native JupyterLab and marimo notebooks. Its Python
+  workspace member owns the notebook test dependencies. `pnpm e2e` builds the
+  packaged app and runs Chromium, Firefox, and WebKit. Playwright starts and
+  stops the fixture and notebook servers. Native WebMCP scenarios run in
+  Chromium and verify widget creation, notebook interaction, kernel shutdown,
+  marimo client isolation, and cell-rerun cleanup.
   Use `pnpm --filter @anywidget-mcp/e2e e2e --project=chromium` after a browser
   build to run one browser while iterating. The suite covers binary and JSON
   transfers, dropped responses, state synchronization, composition, and lifecycle.

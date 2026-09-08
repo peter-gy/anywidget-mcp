@@ -391,6 +391,22 @@ class ValidationProbe(anywidget.AnyWidget):
     """
 
 
+class LifecycleProbe(anywidget.AnyWidget):
+    phase = traitlets.Unicode().tag(sync=True)
+    _esm = """
+    export default {
+      initialize({ model }) {
+        if (model.get("phase") === "initialize") {
+          throw new Error("Widget initialization failed");
+        }
+      },
+      render() {
+        throw new Error("Widget rendering failed");
+      }
+    };
+    """
+
+
 class LargeStateProbe(anywidget.AnyWidget):
     payload = traitlets.Bytes(bytes(8 * 1024 * 1024 - 1) + b"\xff").tag(sync=True)
     payload_size = traitlets.Int(8 * 1024 * 1024).tag(sync=True)
@@ -581,15 +597,19 @@ def create_server() -> AnyWidgetMCP:
         )
 
     server.widget(ValidationProbe, name="validation_probe")
+
+    @server.widget
+    def lifecycle_probe(phase: str) -> LifecycleProbe:
+        widget = LifecycleProbe(phase=phase)
+        if phase == "load":
+            widget._esm = 'throw new Error("Widget module loading failed");'
+        return widget
+
     server.widget(
         LargeStateProbe,
         name="large_state_probe",
         state=("payload_size", "payload_checksum", "row_count", "last_label"),
     )
-
-    @server.widget(name="widget_group", state="value")
-    def widget_group() -> list[ChildWidget]:
-        return [ChildWidget(value=2), ChildWidget(value=5)]
 
     server.widget(StartupProbe, name="startup_probe", state="stage")
 

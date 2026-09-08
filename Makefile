@@ -32,5 +32,5 @@ package-artifacts:
 	uv run --locked twine check dist/*.whl dist/*.tar.gz
 	mkdir -p dist/from-sdist
 	uv build --wheel "$$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)" --out-dir dist/from-sdist
-	uv run --no-project --with "$$(find dist/from-sdist -name '*.whl' -print -quit)" python -c 'from importlib.resources import files; import anywidget_mcp; assert files("anywidget_mcp").joinpath("static/index.html").read_bytes().startswith(b"<!doctype html>")'
+	uv run --isolated --no-project --with "$$(find dist/from-sdist -name '*.whl' -print -quit)" python -I -c 'from importlib.resources import files; import anywidget; from anywidget_mcp import webmcp; assert files("anywidget_mcp").joinpath("static/index.html").read_bytes().startswith(b"<!doctype html>"); webmcp.enable(widgets=[anywidget.AnyWidget], discover=False).close()'
 	uv run --no-project --with "$$(find dist/from-sdist -name '*.whl' -print -quit)[server]" anywidget-mcp --help >/dev/null

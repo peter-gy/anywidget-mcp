@@ -5,11 +5,12 @@ from __future__ import annotations
 import threading
 import weakref
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, cast
 
 from exceptiongroup import ExceptionGroup
 from anywidget import AnyWidget
 from anywidget._descriptor import ReprMimeBundle
+
+from ._models import bind_model, protocol_controller
 
 _claimed_widgets: dict[int, tuple[Callable[[], object | None], str, bool]] = {}
 _claimed_widgets_lock = threading.RLock()
@@ -53,7 +54,7 @@ def claim_widgets(
             for widget in reversed(widgets):
                 if claim_for(widget, controllers) is None:
                     try:
-                        close_widget(widget, controllers)
+                        bind_model(widget, controllers).close()
                     except Exception as error:
                         failed.append(widget)
                         cleanup_errors.append(error)
@@ -83,7 +84,11 @@ def claim_widgets(
 
                 reference = strong_reference
                 weak = False
-            _claimed_widgets[identity] = (reference, model_id(widget), weak)
+            _claimed_widgets[identity] = (
+                reference,
+                bind_model(widget, controllers).model_id,
+                weak,
+            )
 
 
 def claim_for(
@@ -150,7 +155,7 @@ def collect_widgets(
             continue
         seen.add(identity)
         widgets.append(widget)
-        for value in synchronized_values(widget, controllers):
+        for value in bind_model(widget, controllers).synchronized_values():
             collect_nested_widgets(value, pending, controllers)
     return widgets
 
@@ -173,7 +178,7 @@ def close_unclaimed_widget_graphs(roots: Iterable[AnyWidget]) -> None:
         if safe_claim_for(widget, controllers) is not None:
             continue
         try:
-            close_widget(widget, controllers)
+            bind_model(widget, controllers).close()
         except Exception as error:
             errors.append(error)
     if errors:
@@ -188,57 +193,6 @@ def safe_claim_for(
         return claim_for(widget, controllers)
     except Exception:
         return None
-
-
-def protocol_controller(
-    widget: object,
-    controllers: dict[int, ReprMimeBundle] | None = None,
-) -> ReprMimeBundle | None:
-    """Resolve and optionally cache a descriptor-backed model controller."""
-
-    if isinstance(widget, AnyWidget):
-        return None
-    identity = id(widget)
-    if controllers is not None:
-        cached = controllers.get(identity)
-        if cached is not None:
-            return cached
-    controller = getattr(widget, "_repr_mimebundle_", None)
-    if not isinstance(controller, ReprMimeBundle):
-        return None
-    if controllers is not None:
-        controllers[identity] = controller
-    return controller
-
-
-def model_id(
-    widget: object,
-    controllers: dict[int, ReprMimeBundle] | None = None,
-) -> str:
-    if isinstance(widget, AnyWidget):
-        return widget.model_id
-    controller = protocol_controller(widget, controllers)
-    if controller is None:
-        raise TypeError(f"{type(widget).__name__} is not an AnyWidget-compatible model")
-    return controller.model_id
-
-
-def synchronized_values(
-    widget: object,
-    controllers: dict[int, ReprMimeBundle] | None,
-) -> Iterable[object]:
-    if isinstance(widget, AnyWidget):
-        for name, trait in widget.traits().items():
-            if trait.metadata.get("sync"):
-                yield getattr(widget, name)
-        return
-
-    controller = protocol_controller(widget, controllers)
-    if controller is None:
-        return
-    state = controller._get_state(widget, include=None)
-    yield from state.values()
-    yield from controller._extra_state.values()
 
 
 def collect_nested_widgets(
@@ -275,7 +229,7 @@ def replace_widget_refs(
     """
 
     if isinstance(value, AnyWidget) or protocol_controller(value, controllers):
-        return f"anywidget:{model_id(value, controllers)}"
+        return f"anywidget:{bind_model(value, controllers).model_id}"
     if isinstance(value, Mapping):
         if seen is None:
             seen = set()
@@ -317,47 +271,6 @@ def replace_widget_refs(
         finally:
             seen.remove(identity)
     return value
-
-
-def synced_trait_names(widget: object) -> tuple[str, ...]:
-    traits = getattr(widget, "traits", None)
-    observe = getattr(widget, "observe", None)
-    unobserve = getattr(widget, "unobserve", None)
-    if not callable(traits) or not callable(observe) or not callable(unobserve):
-        return ()
-    return tuple(cast(dict[str, Any], traits(sync=True)))
-
-
-def observe(
-    widget: object,
-    callback: Callable[[object], None],
-    names: tuple[str, ...],
-) -> None:
-    observer = getattr(widget, "observe")
-    observer(callback, names=names)
-
-
-def unobserve(
-    widget: object,
-    callback: Callable[[object], None],
-    names: tuple[str, ...],
-) -> None:
-    unobserver = getattr(widget, "unobserve")
-    unobserver(callback, names=names)
-
-
-def close_widget(
-    widget: object,
-    controllers: dict[int, ReprMimeBundle] | None = None,
-) -> None:
-    if isinstance(widget, AnyWidget):
-        widget.close()
-        return
-    controller = protocol_controller(widget, controllers)
-    if controller is None:
-        return
-    controller.unsync_object_with_view()
-    controller._comm.close()
 
 
 def contains_widget_ref(value: object, references: set[str]) -> bool:

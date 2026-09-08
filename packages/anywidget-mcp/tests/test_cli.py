@@ -13,6 +13,7 @@ from traitlets import Int
 from wigglystuff import ColorPicker
 
 from anywidget_mcp import cli
+from anywidget_mcp._mcp.targets import MCPWidgetTarget
 from anywidget_mcp.server import serve
 
 
@@ -215,8 +216,8 @@ def test_cli_imports_widget_class_and_forwards_server_options(
         def __init__(self, name: str, **options: object) -> None:
             events.append(("init", (name, options)))
 
-        def widget(self, target: object) -> None:
-            events.append(("widget", target))
+        def _register_widget(self, target: MCPWidgetTarget) -> None:
+            events.append(("widget", target.spec.source))
 
         def run(self, *, transport: str, **_options: object) -> None:
             events.append(("run", transport))
@@ -261,8 +262,8 @@ def test_cli_registers_multiple_targets_in_command_line_order(
         def __init__(self, name: str, **options: object) -> None:
             events.append(("init", (name, options)))
 
-        def widget(self, target: object) -> None:
-            events.append(("widget", target))
+        def _register_widget(self, target: MCPWidgetTarget) -> None:
+            events.append(("widget", target.spec.source))
 
         def run(self, *, transport: str, **_options: object) -> None:
             events.append(("run", transport))
@@ -509,7 +510,7 @@ def test_cli_preserves_runtime_failures(
         def __init__(self, _name: str, **_options: object) -> None:
             pass
 
-        def widget(self, _target: object) -> None:
+        def _register_widget(self, _target: MCPWidgetTarget) -> None:
             pass
 
         def run(self, *, transport: str, **_options: object) -> None:
