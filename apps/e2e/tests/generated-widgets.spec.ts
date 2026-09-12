@@ -1,4 +1,4 @@
-import { expect, projectedState, test } from "./fixtures";
+import { expect, projectedState, restoreWidget, test } from "./fixtures";
 
 const wasmWidget = `
 import anywidget
@@ -24,15 +24,17 @@ class WasmWidget(anywidget.AnyWidget):
     '''
 `;
 
-test("generated widgets execute WebAssembly with the declared script permission", async ({
-	page,
-}) => {
+test("generated widgets execute WebAssembly again on reopening", async ({ page }) => {
 	await page.getByLabel("Widget tool").selectOption("create_anywidget");
 	await page.getByLabel("Tool arguments").fill(JSON.stringify({ code: wasmWidget }));
 	await page.getByRole("button", { name: "Open widget", exact: true }).click();
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.locator("output")).toHaveText("42");
 	await expect.poll(() => projectedState(page, "Model context")).toEqual({ answer: 42 });
+	await restoreWidget(page);
+	await expect(widget.locator("output")).toHaveText("42");
+	await page.getByRole("button", { name: "Read Python state" }).click();
+	await expect.poll(() => projectedState(page, "Python state")).toEqual({ answer: 42 });
 });
 
 const staffingWidget = `
@@ -108,7 +110,7 @@ test("generated widget observers validate inputs and recover after correction", 
 		});
 });
 
-test("selected generated classes share state and release their session", async ({ page }) => {
+test("selected generated classes release their group and reset on reopening", async ({ page }) => {
 	const code = `${staffingWidget}\nclass LargerTeam(Staffing):\n    demand = traitlets.Int(240).tag(sync=True)\n    agents = traitlets.Int(20).tag(sync=True)\n`;
 	await page.getByLabel("Widget tool").selectOption("create_anywidget");
 	await page.getByLabel("Tool arguments").fill(
@@ -136,6 +138,9 @@ test("selected generated classes share state and release their session", async (
 	await expect(page.getByLabel("Disposed sessions")).toHaveText("1");
 	await page.getByRole("button", { name: "Read Python state" }).click();
 	await expect(page.getByLabel("Python state")).toContainText('"isError":true');
-	await page.getByRole("button", { name: "Open widget", exact: true }).click();
+	await page.getByRole("button", { name: "Restore saved result" }).click();
 	await expect(widget.locator("output")).toHaveText(["20 agents", "10 agents"]);
+	await widget.getByLabel("demand", { exact: true }).last().fill("240");
+	await widget.getByLabel("demand", { exact: true }).last().press("Tab");
+	await expect(widget.locator("output")).toHaveText(["20 agents", "20 agents"]);
 });
