@@ -539,7 +539,9 @@ describe("WidgetRuntime asset hydration", () => {
 		expect(runtime.model("root-model").get("_css")).toBeUndefined();
 		expect(consoleError).toHaveBeenCalledWith(
 			expect.objectContaining({
-				message: "Widget source _css must use a content-addressed reference",
+				message: expect.stringContaining(
+					"Widget source _css must use a content-addressed reference",
+				),
 			}),
 		);
 	});

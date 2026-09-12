@@ -81,11 +81,13 @@ export function resultContextError(result: CallToolResult): string | undefined {
 export function normalizeContext<Value>(value: Value): ModelContextSnapshot | undefined {
 	if (!isRecord(value)) return undefined;
 	if (!isNumber(value.version) || !isString(value.tool) || !isRecord(value.state)) return undefined;
-	return {
+	const snapshot: ModelContextSnapshot = {
 		version: value.version,
 		tool: value.tool,
 		state: value.state,
 	};
+	if (isString(value.state_id)) snapshot.state_id = value.state_id;
+	return snapshot;
 }
 
 export function pollDelayLimit<Value>(value: Value, fallback: number): number {

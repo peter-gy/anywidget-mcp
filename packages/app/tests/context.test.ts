@@ -39,19 +39,39 @@ describe("ModelContextSync", () => {
 		vi.restoreAllMocks();
 	});
 
-	test("sends structured state when the host advertises that modality", async () => {
+	test("publishes structured state and retains its session handle across updates", async () => {
 		const updateModelContext = vi.fn().mockResolvedValue({});
-		const app = {
-			getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
-			updateModelContext,
-		};
-		const sync = new ModelContextSync(app, Promise.resolve(), vi.fn(), 10);
-
-		sync.enqueue(snapshot(1));
+		const sync = new ModelContextSync(
+			{
+				getHostCapabilities: () => ({ updateModelContext: { structuredContent: {} } }),
+				updateModelContext,
+			},
+			Promise.resolve(),
+			vi.fn(),
+			10,
+		);
+		sync.enqueue({ ...snapshot(1), state_id: "new-session" });
 		await vi.runAllTimersAsync();
-
-		expect(updateModelContext).toHaveBeenCalledWith(
-			{ structuredContent: { tool: "example.Counter", state: { value: 1 } } },
+		expect(updateModelContext).toHaveBeenLastCalledWith(
+			{
+				structuredContent: {
+					tool: "example.Counter",
+					state: { value: 1 },
+					state_id: "new-session",
+				},
+			},
+			{ signal: expect.any(AbortSignal) },
+		);
+		sync.enqueue(snapshot(2));
+		await vi.runAllTimersAsync();
+		expect(updateModelContext).toHaveBeenLastCalledWith(
+			{
+				structuredContent: {
+					tool: "example.Counter",
+					state: { value: 2 },
+					state_id: "new-session",
+				},
+			},
 			{ signal: expect.any(AbortSignal) },
 		);
 		await sync.dispose();

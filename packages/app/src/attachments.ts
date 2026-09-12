@@ -1,3 +1,4 @@
+import { toolResultFailure } from "./status";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { isNumber, isRecord, isString, type RuntimeRecord } from "./runtime-value";
@@ -235,11 +236,7 @@ export async function deliveryPayload(
 }
 
 function attachmentMeta(result: CallToolResult): RuntimeRecord {
-	if (result.isError)
-		throw new Error(
-			result.content.find((item) => item.type === "text")?.text ??
-				"Widget attachment request failed",
-		);
+	if (result.isError) throw toolResultFailure(result);
 	const meta = isRecord(result._meta) ? result._meta.anywidget : undefined;
 	if (!isRecord(meta)) throw new Error("Widget response has no protocol metadata");
 	requireProtocolVersion(meta.protocolVersion);

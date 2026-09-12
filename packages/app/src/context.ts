@@ -3,6 +3,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import type { State } from "./model";
 
 export interface ModelContextSnapshot {
+	state_id?: string;
 	version: number;
 	tool: string;
 	state: State;
@@ -54,6 +55,8 @@ export class ModelContextSync {
 
 	enqueue(snapshot: ModelContextSnapshot): void {
 		if (this.disposed || snapshot.version <= this.latestVersion) return;
+		const stateId = snapshot.state_id ?? this.latestSnapshot?.state_id;
+		if (stateId) snapshot = { ...snapshot, state_id: stateId };
 		this.latestVersion = snapshot.version;
 		this.latestSnapshot = snapshot;
 		this.retryCount = 0;
@@ -113,7 +116,11 @@ export class ModelContextSync {
 			await this.readiness;
 			if (this.disposed) return;
 			const capability = this.app.getHostCapabilities()?.updateModelContext;
-			const state = { tool: snapshot.tool, state: snapshot.state };
+			const state: Omit<ModelContextSnapshot, "version"> = {
+				tool: snapshot.tool,
+				state: snapshot.state,
+			};
+			if (snapshot.state_id) state.state_id = snapshot.state_id;
 			if (!capability) return;
 
 			if (capability.structuredContent) {
@@ -221,7 +228,7 @@ function settleWithin<Result>(task: Promise<Result>, milliseconds: number): Prom
 }
 
 export function modelContextText(snapshot: ModelContextSnapshot): string {
-	return `Current ${snapshot.tool} state: ${JSON.stringify(snapshot.state)}`;
+	return `Current ${snapshot.tool} state: ${JSON.stringify(snapshot.state)}${snapshot.state_id ? `. Read subsequent changes with anywidget_state({"state_id":${JSON.stringify(snapshot.state_id)}}).` : ""}`;
 }
 
 function waitUntilReady(ready: Promise<void>, signal: AbortSignal): Promise<void> {

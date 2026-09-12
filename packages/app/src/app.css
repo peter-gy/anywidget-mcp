@@ -33,6 +33,7 @@ body {
 
 #status[data-kind="error"] {
 	color: var(--color-text-danger, #b42318);
+	white-space: pre-line;
 }
 
 #status[hidden],
@@ -43,4 +44,11 @@ body {
 #widget-root {
 	min-width: 0;
 	overflow: auto;
+}
+
+#reopen {
+	margin: 0 0.75rem 0.75rem;
+	padding: 0.4rem 0.8rem;
+	font: inherit;
+	cursor: pointer;
 }

@@ -29,6 +29,50 @@ The host may replay the primary result. The app accepts each bootstrap
 capability once during its own lifetime. A new capability starts a replacement
 runtime after teardown of the previous runtime.
 
+### Reopening
+
+Opted-in registrations add `_meta.anywidget.reopen` to the primary result:
+
+```typescript
+{
+	version: 1;
+	tool: string;
+	arguments: Record<string, unknown>;
+	mode: "manual" | "auto"; ui?: boolean;
+}
+```
+
+The descriptor snapshots validated input fields and defaults before factory
+acquisition, excluding injected dependencies and synthetic loading text. Its
+JSON encoding is bounded to 64 KiB and lives in the host-retained result,
+independently of session attachments. The app ignores unknown or malformed
+reopening metadata while preserving ordinary bootstrap behavior.
+
+The `ui` flag controls optional recovery controls independently of creation mode.
+When omitted, it defaults to true for manual mode and false for automatic mode.
+Automatic creation uses the normal loading status and tool-call path whether or
+not controls are enabled. No recovery button is created when controls are disabled.
+
+Unavailable bootstrap claims and live session calls return `isError: true`
+with `_meta.anywidget.error: "session_unavailable"`. Other failures retain their
+ordinary error behavior. The app offers recreation for a lost session. Automatic
+recreation runs at most once per app lifetime, during initial materialization;
+live session loss requires a reload or an explicit reopening action.
+
+Recreation uses `tools/call` on the original named widget tool. It preserves
+host policy, SDK validation, and current context injection. Creation calls have
+no automatic transport retry. The returned bootstrap follows the existing
+claim, replay, attachment, replacement, and disposal protocol. Host notifications
+and direct responses enter the same result gate. Each new session has independent
+operation IDs and state handles; old handles never redirect to a new session.
+The browser carries the primary result's `state_id` into model-context updates,
+retaining it through subsequent projections for that runtime.
+
+These fields extend version 3 additively. Older results continue to bootstrap
+normally but cannot offer reopening without a descriptor. No state or command
+history is used to reconstruct a graph. The saved descriptor is untrusted input,
+not a capability granting access beyond an ordinary tool invocation.
+
 ## Deliveries
 
 Bootstrap, comm, and poll responses put a delivery in `_meta.anywidget`:
@@ -224,3 +268,19 @@ network requests require the matching resource CSP, the browser's content
 security policy. Source transfer does not grant browser permissions. Resource
 metadata requests those permissions through [MCP
 Apps](https://modelcontextprotocol.io/extensions/apps/overview).
+
+## Recovery failures
+
+The shell distinguishes rejected creation (`reopen_rejected`), an unconfirmed
+transport outcome (`reopen_unconfirmed`), and failure to mount a recreated graph
+(`reopen_mount_failed`). These codes appear on the status element's
+`data-error-code`. A terminal runtime fault uses `runtime_stopped` and retains its
+cause. It is distinct from advisory renderer or model-context errors. Only a
+recognized unavailable session can initiate automatic recreation.
+
+A delivered MCP cancellation unwinds managed acquisition through its existing
+owner. The SDK's stateless HTTP transport creates a dispatcher per request, so a
+separate cancellation notification cannot reliably address acquisition in another
+request. The browser still closes and ignores late replies. Once an abandoned
+factory completes, its unclaimed graph follows normal idle expiry and server
+lifespan cleanup. Application acquisition must bound its own external I/O.

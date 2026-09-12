@@ -637,7 +637,8 @@ async def test_state_none_omits_model_state_across_launch_and_updates() -> None:
         unavailable = await client.call_tool("anywidget_state", {"state_id": "0" * 32})
         assert unavailable.is_error is True
         assert isinstance(unavailable.content[0], TextContent)
-        assert unavailable.content[0].text.endswith("Widget state is unavailable")
+        assert "Widget state is unavailable" in unavailable.content[0].text
+        assert "new widget" in unavailable.content[0].text
 
         result = await client.comm(
             {

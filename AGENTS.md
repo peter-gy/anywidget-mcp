@@ -122,6 +122,14 @@ Poll replay identity includes the browser's acknowledged model-removal set.
 Detached comms remain live until the browser applies their removals and a later
 poll acknowledges those IDs.
 
+Opted-in `reopen="manual"` or `"auto"` registrations preserve normalized creation
+inputs in `_meta.anywidget.reopen`. The app recreates them through the original
+named tool with fresh validation, context, and session ownership. Creation calls
+are not automatically retried. Recovery controls are optional: `reopen_ui=None`
+enables them for manual mode and omits them for automatic mode. The descriptor
+carries their `ui` flag. Session-unavailable tool errors carry
+`_meta.anywidget.error`. Model-context updates retain the current `state_id`.
+
 The bootstrap capability is distinct from the widget instance ID. The first
 bootstrap operation ID claims it, the same ID replays its response, and another
 claimant is rejected. The configured idle timeout applies from launch onward.

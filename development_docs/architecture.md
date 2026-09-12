@@ -267,3 +267,12 @@ a model-visible pull path with the same Python-authoritative state.
   graph and factory cleanup path.
 
 [Development](development.md) lists the unit, package, and browser gates.
+
+## Saved-result reopening
+
+The MCP target compiler serializes opted-in creation inputs before factory
+acquisition. The primary result retains that descriptor independently of the
+live session. The browser shell uses the original named MCP tool to reopen it,
+then passes its result through the existing bootstrap and replacement lifecycle.
+The widget graph, managed factory ownership, and notebook WebMCP integration
+retain their existing responsibilities. See [Reopening](protocol.md#reopening).

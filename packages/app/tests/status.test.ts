@@ -6,6 +6,8 @@ import {
 	loadingMessageFromPayload,
 	loadingMessageForTool,
 	toolResultError,
+	ReopenError,
+	RuntimeStoppedError,
 } from "../src/status";
 
 describe("widget status", () => {
@@ -48,5 +50,27 @@ describe("widget status", () => {
 
 		expect(toolResultError(result)).toBe("The widget factory failed");
 		expect(toolResultError({ content: [] })).toBeUndefined();
+		expect(
+			toolResultError({
+				isError: true,
+				content: [
+					{ type: "text", text: "" },
+					{ type: "text", text: "Dataset unavailable." },
+					{ type: "text", text: "Choose another dataset." },
+				],
+			}),
+		).toBe("Dataset unavailable.\nChoose another dataset.");
+	});
+});
+
+describe("recovery diagnostics", () => {
+	test("preserves the original cause through recovery error wrapping", () => {
+		const cause = new Error("Connection closed after sending tools/call");
+		for (const error of [
+			new ReopenError("explore", cause, "reopen_unconfirmed"),
+			new RuntimeStoppedError(cause),
+		]) {
+			expect(error.cause).toBe(cause);
+		}
 	});
 });

@@ -156,7 +156,8 @@ test("failed widget sessions release state and allow subsequent launches", async
 			await page.getByLabel("Tool arguments").fill(JSON.stringify({ phase }));
 			await openWidget(page, "lifecycle_probe");
 			const widget = page.frameLocator('iframe[title="Widget"]');
-			await expect(widget.getByText(`Widget error: ${message}`, { exact: true })).toBeVisible();
+			await expect(widget.getByRole("alert")).toContainText(message);
+			await expect(widget.getByRole("alert")).toContainText("new widget");
 			await expect(page.getByLabel("Disposed sessions")).toHaveText(String(index + 1));
 			await page.getByRole("button", { name: "Read Python state" }).click();
 			await expect(page.getByLabel("Python state")).toContainText('"isError":true');
