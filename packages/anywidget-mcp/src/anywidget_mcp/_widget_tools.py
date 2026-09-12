@@ -621,7 +621,9 @@ class WidgetTools:
                 str,
                 Field(
                     description=(
-                        "The state_id returned by the widget tool that opened the app."
+                        "The state_id in this widget's latest model context. "
+                        "Reopening creates a new ID. If no context is available, "
+                        "use the ID from its latest creation result."
                     )
                 ),
             ],
@@ -629,7 +631,9 @@ class WidgetTools:
             """Read a widget's current state after user interaction.
 
             Call this before answering a question about the current state of an
-            open widget. Pass the ``state_id`` returned by its widget tool.
+            open widget. Prefer the ``state_id`` in this widget's latest model
+            context over older tool results. Reopening creates a new ID. If no
+            context is available, use the ID from its latest creation result.
             """
             tool_name, projection = self._require_runtime().state(state_id)
             return model_result(

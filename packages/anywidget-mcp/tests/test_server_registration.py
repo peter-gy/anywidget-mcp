@@ -73,7 +73,8 @@ async def test_attach_registers_classes_sync_factories_and_async_factories() -> 
             type="text",
             text=(
                 'Opened Color Picker with state {"color":"#c026d3"}. '
-                "To read later user changes, call anywidget_state with "
+                "Read later changes with anywidget_state using this widget's latest context state_id. "
+                "If no context is available, use "
                 f'{{"state_id":"{state_id(color)}"}}.'
             ),
         ),

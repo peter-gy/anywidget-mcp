@@ -593,7 +593,8 @@ def launch_result(
         structured["state_id"] = lease.state_id
         text = (
             f"Opened {tool_title} with state {canonical_json(projection.state)}. "
-            "To read later user changes, call anywidget_state with "
+            "Read later changes with anywidget_state using this widget's latest context state_id. "
+            "If no context is available, use "
             f'{{"state_id":"{lease.state_id}"}}.'
         )
 
