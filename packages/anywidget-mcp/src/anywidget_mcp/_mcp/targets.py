@@ -8,7 +8,7 @@ import json
 import math
 import re
 import unicodedata
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence, Set
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Annotated, Any, Literal, TypeVar
@@ -18,11 +18,21 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.mcpserver.tools import Tool
 from mcp.types import CallToolResult, Icon, ToolAnnotations
-from pydantic import BaseModel, Field, Secret, SecretBytes, SecretStr
+from pydantic import (
+    AliasChoices,
+    AliasPath,
+    BaseModel,
+    Field,
+    Secret,
+    SecretBytes,
+    SecretStr,
+)
+from pydantic.fields import FieldInfo
 
 from .._spec import compile_inputs, rename, scan
 from .._spec.types import CallableSpec, InputSpec, JsonSchema, TargetSpec
 from .._state import StateSpec, _DefaultState
+from .._projection_json import MAX_SAFE_INTEGER
 
 WidgetFactoryValue = AnyWidget | Sequence[AnyWidget]
 WidgetFactoryResult = (
@@ -150,16 +160,17 @@ class MCPWidgetTarget:
             ):
                 continue
             try:
+                _validate_reopen_field(model, name, model.model_fields[name])
                 _validate_reopen_values(values[name])
-                inputs.update(
-                    snapshot.model_dump(
-                        mode="json",
-                        by_alias=True,
-                        round_trip=True,
-                        warnings="error",
-                        include={name},
-                    )
+                serialized = snapshot.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    round_trip=True,
+                    warnings="error",
+                    include={name},
                 )
+                _validate_reopen_values(serialized, serialized=True)
+                inputs.update(serialized)
             except (TypeError, ValueError, RecursionError, ReopenInputError) as error:
                 reason = (
                     str(error)
@@ -178,13 +189,15 @@ class MCPWidgetTarget:
             "ui": ui,
         }
         try:
-            encoded = json.dumps(descriptor, ensure_ascii=False, allow_nan=False)
+            encoded = json.dumps(
+                descriptor, ensure_ascii=False, allow_nan=False
+            ).encode("utf-8")
         except (TypeError, ValueError, RecursionError) as error:
             raise ReopenInputError(
-                f"Cannot save reopening inputs for {self.tool.name!r}: the serialized inputs are not finite JSON. "
+                f"Cannot save reopening inputs for {self.tool.name!r}: the serialized inputs are not finite UTF-8 JSON. "
                 "Use a stable identifier and load data inside the factory."
             ) from error
-        byte_length = len(encoded.encode("utf-8"))
+        byte_length = len(encoded)
         if byte_length > 64 * 1024:
             raise ReopenInputError(
                 f"Cannot save reopening inputs for {self.tool.name!r}: creation metadata is {byte_length} bytes, "
@@ -193,25 +206,65 @@ class MCPWidgetTarget:
         return json.loads(encoded)
 
 
-def _validate_reopen_values(value: Any) -> None:
+def _validate_reopen_field(model: type[BaseModel], name: str, field: FieldInfo) -> None:
+    if field.exclude:
+        raise ReopenInputError(
+            f"contains field {name!r} excluded from JSON. Remove exclude=True or use an identifier"
+        )
+    serialized_name = field.serialization_alias
+    if serialized_name is None:
+        serialized_name = field.alias if field.alias is not None else name
+    alias = (
+        field.validation_alias if field.validation_alias is not None else field.alias
+    )
+    aliases = alias.choices if isinstance(alias, AliasChoices) else [alias]
+    accepts_name = alias is None or model.model_config.get("validate_by_name", False)
+    accepts_alias = model.model_config.get("validate_by_alias", True) and any(
+        candidate == serialized_name
+        or (isinstance(candidate, AliasPath) and candidate.path == [serialized_name])
+        for candidate in aliases
+    )
+    if not ((accepts_name and serialized_name == name) or accepts_alias):
+        raise ReopenInputError(
+            f"contains field {name!r} whose serialization name is not accepted by validation. "
+            "Use matching input and output aliases"
+        )
+
+
+def _validate_reopen_values(value: Any, *, serialized: bool = False) -> None:
     if isinstance(value, (Secret, SecretStr, SecretBytes)):
         raise ReopenInputError("contains a secret value")
     if isinstance(value, float) and not math.isfinite(value):
         raise ReopenInputError("contains a non-finite number")
+    if (
+        serialized
+        and isinstance(value, int)
+        and not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER
+    ):
+        raise ReopenInputError(
+            "contains an integer outside the browser's exact range. Use a string identifier"
+        )
     if isinstance(value, BaseModel):
-        for name in type(value).model_fields:
-            _validate_reopen_values(getattr(value, name))
-        _validate_reopen_values(value.model_extra)
+        for name, field in type(value).model_fields.items():
+            _validate_reopen_field(type(value), name, field)
+            _validate_reopen_values(getattr(value, name), serialized=serialized)
+        _validate_reopen_values(value.model_extra, serialized=serialized)
     elif is_dataclass(value) and not isinstance(value, type):
         for field in fields(value):
-            _validate_reopen_values(getattr(value, field.name))
-    elif isinstance(value, dict):
+            _validate_reopen_values(getattr(value, field.name), serialized=serialized)
+    elif isinstance(value, Mapping):
         for key, item in value.items():
-            _validate_reopen_values(key)
-            _validate_reopen_values(item)
-    elif isinstance(value, (list, tuple, set, frozenset)):
+            _validate_reopen_values(key, serialized=serialized)
+            _validate_reopen_values(item, serialized=serialized)
+    elif isinstance(value, Iterator):
+        raise ReopenInputError(
+            "contains a one-shot iterator. Use a reusable collection"
+        )
+    elif isinstance(value, (Sequence, Set)) and not isinstance(
+        value, (str, bytes, bytearray, memoryview)
+    ):
         for item in value:
-            _validate_reopen_values(item)
+            _validate_reopen_values(item, serialized=serialized)
 
 
 def prepare_target(

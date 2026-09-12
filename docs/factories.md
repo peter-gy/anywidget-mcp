@@ -165,6 +165,9 @@ if its response was lost, another click may create another session.
 Reopening stores up to 64 KiB of creation metadata in the original tool result.
 Inputs must have a faithful Pydantic JSON round trip and contain finite,
 non-secret values. Inputs that cannot be serialized fail before the factory runs.
+Serialization names must also be accepted by validation. Use consistent Pydantic
+aliases, keep input fields in JSON, and use reusable collections instead of one-shot iterators.
+Integers must fit JavaScript's exact range. Represent larger identifiers as strings.
 Injected context and dependencies are resolved for the new request. Keep durable
 identifiers in the inputs and acquire temporary resources inside the factory.
 For large or sensitive requests, accept an identifier for data in your own storage.

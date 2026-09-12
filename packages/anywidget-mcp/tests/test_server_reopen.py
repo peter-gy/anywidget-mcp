@@ -1,4 +1,5 @@
-from collections.abc import Generator
+from collections import deque
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from datetime import date
 from typing import Any, Annotated, cast
@@ -7,6 +8,7 @@ import pytest
 from mcp.server.mcpserver import Context, MCPServer, Resolve
 from pydantic import (
     BaseModel,
+    AliasChoices,
     ConfigDict,
     Field,
     Secret,
@@ -114,6 +116,8 @@ async def test_reopen_preserves_input_aliases_and_a_declared_loading_message() -
         pytest.param(float("nan"), id="non-finite"),
         pytest.param(Secret("sentinel-must-not-leak"), id="generic-secret"),
         pytest.param(b"\xff", id="invalid-utf8"),
+        pytest.param("\ud800", id="unpaired-surrogate"),
+        pytest.param(2**53 + 1, id="browser-integer-precision"),
     ],
 )
 async def test_invalid_reopen_inputs_fail_before_factory_acquisition(
@@ -204,12 +208,12 @@ async def test_reopen_rejects_secrets_before_custom_serializers_can_reveal_them(
     serialized: list[str] = []
 
     class Credentials(BaseModel):
-        token: SecretStr
+        tokens: deque[SecretStr]
 
-        @field_serializer("token")
-        def reveal(self, value: SecretStr) -> str:
+        @field_serializer("tokens")
+        def reveal(self, value: deque[SecretStr]) -> list[str]:
             serialized.append("called")
-            return value.get_secret_value()
+            return [token.get_secret_value() for token in value]
 
     server = AnyWidgetMCP("test")
 
@@ -219,7 +223,7 @@ async def test_reopen_rejects_secrets_before_custom_serializers_can_reveal_them(
 
     async with connected(server) as client:
         result = await client.call_tool(
-            "explorer", {"credentials": {"token": "sentinel-must-not-leak"}}
+            "explorer", {"credentials": {"tokens": ["sentinel-must-not-leak"]}}
         )
     assert result.is_error
     text = " ".join(item.text for item in result.content if item.type == "text")
@@ -227,6 +231,67 @@ async def test_reopen_rejects_secrets_before_custom_serializers_can_reveal_them(
     assert "contains a secret value" in text
     assert "sentinel-must-not-leak" not in text
     assert serialized == []
+
+
+class AsymmetricInput(BaseModel):
+    count: int = Field(validation_alias="inputCount", serialization_alias="outputCount")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "annotation, arguments, remedy",
+    [
+        (Annotated[int, Field(validation_alias="input")], {"input": 7}, "aliases"),
+        (Annotated[int, Field(serialization_alias="output")], {"value": 7}, "aliases"),
+        (AsymmetricInput, {"value": {"inputCount": 7}}, "aliases"),
+        (Annotated[int, Field(exclude=True)], {"value": 7}, "exclude=True"),
+        (Iterable[int], {"value": [3, 7]}, "reusable collection"),
+    ],
+)
+async def test_unreusable_inputs_fail_before_factory_acquisition(
+    annotation: Any, arguments: dict[str, Any], remedy: str
+) -> None:
+    server = AnyWidgetMCP("test")
+
+    def explorer(value: Any) -> CounterWidget:
+        pytest.fail("Unreusable inputs reached the factory")
+
+    explorer.__annotations__["value"] = annotation
+    server.widget(explorer, reopen="auto")
+    async with connected(server) as client:
+        result = await client.call_tool("explorer", arguments)
+    assert result.is_error
+    text = " ".join(item.text for item in result.content if item.type == "text")
+    assert "explorer" in text
+    assert remedy in text
+
+
+@pytest.mark.anyio
+async def test_accepted_alias_choices_and_reusable_collections_round_trip() -> None:
+    class Request(BaseModel):
+        counts: deque[int] = Field(validation_alias=AliasChoices("input", "counts"))
+        dataset_id: int = 2**53 + 1
+
+        @field_serializer("dataset_id")
+        def serialize_identifier(self, value: int) -> str:
+            return str(value)
+
+    received: list[list[int]] = []
+    server = AnyWidgetMCP("test")
+
+    @server.widget(reopen="auto")
+    def explorer(request: Request) -> CounterWidget:
+        assert request.dataset_id == 2**53 + 1
+        received.append(list(request.counts))
+        return CounterWidget(value=sum(request.counts))
+
+    async with connected(server) as client:
+        original = await client.call_tool("explorer", {"request": {"input": [3, 7]}})
+        assert original.meta is not None
+        descriptor = original.meta["anywidget"]["reopen"]
+        reopened = await client.call_tool("explorer", descriptor["arguments"])
+        assert not reopened.is_error
+    assert received == [[3, 7], [3, 7]]
 
 
 @pytest.mark.anyio
