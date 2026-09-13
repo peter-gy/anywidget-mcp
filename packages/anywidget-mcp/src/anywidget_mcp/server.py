@@ -16,6 +16,7 @@ from ._state import DEFAULT_STATE
 from ._spec import identity
 from ._mcp.targets import (
     MCPWidgetTarget,
+    ReopenMode,
     TargetT,
     WidgetState,
     WidgetTarget,
@@ -145,6 +146,8 @@ class AnyWidgetMCP(MCPServer):
         title: str | None = None,
         description: str | None = None,
         state: WidgetState = DEFAULT_STATE,
+        reopen: ReopenMode | None = None,
+        reopen_ui: bool | None = None,
         annotations: ToolAnnotations | None = None,
         icons: list[Icon] | None = None,
     ) -> TargetT: ...
@@ -159,6 +162,8 @@ class AnyWidgetMCP(MCPServer):
         title: str | None = None,
         description: str | None = None,
         state: WidgetState = DEFAULT_STATE,
+        reopen: ReopenMode | None = None,
+        reopen_ui: bool | None = None,
         annotations: ToolAnnotations | None = None,
         icons: list[Icon] | None = None,
     ) -> Callable[[TargetT], TargetT]: ...
@@ -172,6 +177,8 @@ class AnyWidgetMCP(MCPServer):
         title: str | None = None,
         description: str | None = None,
         state: WidgetState = DEFAULT_STATE,
+        reopen: ReopenMode | None = None,
+        reopen_ui: bool | None = None,
         annotations: ToolAnnotations | None = None,
         icons: list[Icon] | None = None,
     ) -> TargetT | Callable[[TargetT], TargetT]:
@@ -182,6 +189,8 @@ class AnyWidgetMCP(MCPServer):
             title=title,
             description=description,
             state=state,
+            reopen=reopen,
+            reopen_ui=reopen_ui,
             annotations=annotations,
             icons=icons,
         )
@@ -227,6 +236,8 @@ def serve(
     title: str | None = None,
     description: str | None = None,
     state: WidgetState = DEFAULT_STATE,
+    reopen: ReopenMode | None = None,
+    reopen_ui: bool | None = None,
     annotations: ToolAnnotations | None = None,
     icons: list[Icon] | None = None,
     transport: Transport = "streamable-http",
@@ -244,6 +255,8 @@ def serve(
         title: Human-facing tool title.
         description: Tool description.
         state: Model-visible state selection or a read-only projection callable.
+        reopen: Saved-result reopening mode forwarded to widget registration.
+        reopen_ui: Whether to show built-in recovery controls.
         annotations: Standard MCP tool behavior hints.
         icons: Icons applied to the sole widget tool and its MCP server.
         transport: ``"streamable-http"`` or ``"stdio"``.
@@ -275,6 +288,8 @@ def serve(
         title=title,
         description=description,
         state=state,
+        reopen=reopen,
+        reopen_ui=reopen_ui,
         annotations=annotations,
         icons=icons,
     )

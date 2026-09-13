@@ -69,6 +69,10 @@ serve(ColorPicker, state="color")
 `state="color"` gives the model the current color while the full widget remains
 interactive. Use [`AnyWidgetMCP`](https://peter-gy.github.io/anywidget-mcp/composition)
 to register several tools or `attach()` to add widgets to an existing server.
+Register with `@mcp.widget(reopen="manual")` to offer **Reopen** for saved results,
+or `reopen="auto"` to recreate them on remount without adding recovery controls.
+Use `reopen_ui=True` to add fallback controls to automatic mode. Each reopening calls the factory
+with saved inputs and owns a fresh session. See [Reopen saved results](https://peter-gy.github.io/anywidget-mcp/factories#reopen-saved-results).
 
 ## Use a browser agent
 

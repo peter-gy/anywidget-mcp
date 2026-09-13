@@ -38,6 +38,14 @@ logger = logging.getLogger(__name__)
 
 BOOTSTRAP_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 BOOTSTRAP_MARKER_PREFIX = "urn:anywidget-mcp:bootstrap:"
+STATE_UNAVAILABLE_MESSAGE = (
+    "Widget state is unavailable. Use the state_id from the current widget context "
+    "if it was reopened, or call the original widget tool to create a new widget."
+)
+
+
+class SessionUnavailableError(ToolError):
+    """The app cannot use this bootstrap or live session."""
 
 
 @dataclass
@@ -269,7 +277,7 @@ class SessionRuntime:
                 if renew:
                     lease.deadline = self._deadline()
         if lease is None:
-            raise ToolError(f"Unknown widget session: {instance_id}")
+            raise SessionUnavailableError(f"Unknown widget session: {instance_id}")
         try:
             yield lease
         finally:
@@ -292,16 +300,18 @@ class SessionRuntime:
         with self._lock:
             lease = self._bootstraps.get(bootstrap_id)
             if lease is None:
-                raise ToolError("Widget bootstrap is unavailable")
+                raise SessionUnavailableError("Widget bootstrap is unavailable")
             claimed_by = lease.bootstrap_operation_id
             if claimed_by is not None and claimed_by != operation_id:
-                raise ToolError("Widget bootstrap was claimed by another operation")
+                raise SessionUnavailableError(
+                    "Widget bootstrap was claimed by another operation"
+                )
 
             replay = lease.bootstrap_replay
             if replay is None:
                 payload = lease.bootstrap_payload
                 if payload is None:
-                    raise ToolError("Widget bootstrap is unavailable")
+                    raise SessionUnavailableError("Widget bootstrap is unavailable")
                 replay = CallToolResult(
                     content=[],
                     _meta={"anywidget": copy.deepcopy(payload)},
@@ -319,22 +329,22 @@ class SessionRuntime:
         with self._lock:
             lease = self._state_handles.get(state_id)
         if lease is None:
-            raise ToolError("Widget state is unavailable")
+            raise ToolError(STATE_UNAVAILABLE_MESSAGE)
 
         try:
             with self.use(lease.session.instance_id) as active_lease:
                 if active_lease is not lease:
-                    raise ToolError("Widget state is unavailable")
+                    raise ToolError(STATE_UNAVAILABLE_MESSAGE)
                 with lease.protocol_lock:
                     projection = lease.session.current_projection()
-        except ToolError as error:
-            if protocol_error(error).startswith("Unknown widget session:"):
-                raise ToolError("Widget state is unavailable") from error
+        except SessionUnavailableError as error:
+            raise ToolError(STATE_UNAVAILABLE_MESSAGE) from error
+        except ToolError:
             raise
         except Exception as error:
             raise ToolError(f"Widget state projection failed: {error}") from error
         if projection is None:
-            raise ToolError("Widget state is unavailable")
+            raise ToolError(STATE_UNAVAILABLE_MESSAGE)
         return lease.tool_name, projection
 
     async def dispose(
@@ -583,7 +593,8 @@ def launch_result(
         structured["state_id"] = lease.state_id
         text = (
             f"Opened {tool_title} with state {canonical_json(projection.state)}. "
-            "To read later user changes, call anywidget_state with "
+            "Read later changes with anywidget_state using this widget's latest context state_id. "
+            "If no context is available, use "
             f'{{"state_id":"{lease.state_id}"}}.'
         )
 
@@ -693,7 +704,7 @@ def validate_bootstrap_id(bootstrap_id: str) -> None:
 
 def validate_state_id(state_id: str) -> None:
     if BOOTSTRAP_ID_PATTERN.fullmatch(state_id) is None:
-        raise ToolError("Widget state is unavailable")
+        raise ToolError(STATE_UNAVAILABLE_MESSAGE)
 
 
 def remember_comm_replay(

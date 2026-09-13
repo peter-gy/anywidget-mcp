@@ -1,3 +1,4 @@
+import { SessionUnavailableError } from "../src/status";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test, vi } from "vite-plus/test";
 
@@ -226,5 +227,86 @@ describe("tool-result replay guard", () => {
 		expect(gate.deliver("first-session", schedule)).toBe(false);
 		expect(scheduled).toHaveLength(2);
 		expect(scheduled[1]?.signal.aborted).toBe(false);
+	});
+});
+
+describe("reopen descriptors", () => {
+	const descriptor = {
+		version: 1,
+		tool: "explore",
+		arguments: { query: { values: [3, 7] }, scale: 2 },
+		mode: "manual",
+		ui: true,
+	};
+	const saved: CallToolResult = {
+		...primaryResult,
+		structuredContent: { tool: "explore", state_id: "original-state" },
+		_meta: { anywidget: { reopen: descriptor } },
+	};
+
+	test("retains creation inputs separately from the live state and bootstrap", async () => {
+		const launch = parseToolLaunch(saved);
+		expect(launch).toEqual({
+			kind: "bootstrap",
+			bootstrapId,
+			reopen: descriptor,
+			stateId: "original-state",
+		});
+		expect(parseToolLaunch({ ...primaryResult, _meta: saved._meta })).toEqual({
+			kind: "bootstrap",
+			bootstrapId,
+			reopen: descriptor,
+		});
+		const loaded = await loadWidgetRuntime(launch, async () =>
+			delivery({
+				...bootstrapPayload,
+				context: { tool: "explore", version: 1, state: { selection: 0 } },
+			}),
+		);
+		expect(loaded.payload.context).toMatchObject({ state_id: "original-state" });
+		for (const [mode, ui] of [
+			["auto", false],
+			["manual", true],
+		] as const) {
+			expect(
+				parseToolLaunch({
+					...primaryResult,
+					_meta: { anywidget: { reopen: { version: 1, tool: "explore", arguments: {}, mode } } },
+				}),
+			).toMatchObject({ reopen: { ui } });
+		}
+	});
+
+	test("ignores unavailable or invalid reopen metadata while preserving fresh bootstrap", () => {
+		for (const reopen of [
+			undefined,
+			{},
+			{ ...descriptor, version: 2 },
+			{ ...descriptor, tool: "other" },
+			{ ...descriptor, mode: "always" },
+			{ ...descriptor, ui: "yes" },
+			{ ...descriptor, arguments: [] },
+			{ ...descriptor, arguments: { data: "x".repeat(65536) } },
+		]) {
+			expect(parseToolLaunch({ ...saved, _meta: { anywidget: { reopen } } })).toEqual({
+				kind: "bootstrap",
+				bootstrapId,
+				stateId: "original-state",
+			});
+		}
+	});
+
+	test("distinguishes session loss from other tool failures", async () => {
+		const failure: CallToolResult = {
+			isError: true,
+			content: [{ type: "text", text: "unavailable" }],
+			_meta: { anywidget: { error: "session_unavailable" } },
+		};
+		await expect(
+			loadWidgetRuntime(parseToolLaunch(saved), async () => failure),
+		).rejects.toBeInstanceOf(SessionUnavailableError);
+		await expect(
+			loadWidgetRuntime(parseToolLaunch(saved), async () => ({ ...failure, _meta: {} })),
+		).rejects.not.toBeInstanceOf(SessionUnavailableError);
 	});
 });

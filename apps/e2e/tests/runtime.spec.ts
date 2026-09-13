@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, projectedState, test } from "./fixtures";
+import { expect, projectedState, restoreWidget, test } from "./fixtures";
 
 async function openWidget(page: Page, name: string): Promise<void> {
 	await page.getByLabel("Widget tool").selectOption(name);
@@ -7,7 +7,9 @@ async function openWidget(page: Page, name: string): Promise<void> {
 	await expect(page.getByLabel("Host status")).toHaveText("Connected");
 }
 
-test("binary edits commit Python observer results before model context", async ({ page }) => {
+test("binary edits and reopening commit Python observer results before model context", async ({
+	page,
+}) => {
 	await openWidget(page, "bridge_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.getByTestId("binary-state")).toHaveText("0,127,255 | size 3");
@@ -21,6 +23,12 @@ test("binary edits commit Python observer results before model context", async (
 			size: 4,
 			payload: { type: "binary", bytes: 4 },
 		});
+	await restoreWidget(page);
+	await expect(widget.getByTestId("binary-state")).toHaveText("0,127,255 | size 3");
+	await widget.getByRole("button", { name: "Change binary" }).click();
+	await expect(widget.getByTestId("binary-state")).toHaveText("9,8,7,6 | size 4");
+	await page.getByRole("button", { name: "Read Python state" }).click();
+	await expect.poll(() => projectedState(page, "Python state")).toMatchObject({ size: 4 });
 });
 
 test("custom commands return text and binary buffers", async ({ page }) => {
@@ -30,9 +38,7 @@ test("custom commands return text and binary buffers", async ({ page }) => {
 	await expect(widget.getByTestId("command-result")).toHaveText("retpada | 3,2,1");
 });
 
-test("large binary state recovers a lost response and commits Python observer results", async ({
-	page,
-}) => {
+test("large binary state recovers a lost response and resets on reopening", async ({ page }) => {
 	test.slow();
 	await page.goto("/?drop-read");
 	await openWidget(page, "large_state_probe");
@@ -50,9 +56,15 @@ test("large binary state recovers a lost response and commits Python observer re
 		.poll(() => projectedState(page, "Python state"))
 		.toMatchObject({ payload_size: 8388608, payload_checksum: 58720266 });
 	await expect(page.getByLabel("Lost read responses")).toHaveText("1");
+	await restoreWidget(page);
+	await expect(widget.getByTestId("large-binary")).toHaveText("8388608 | 0 | 255");
+	await page.getByRole("button", { name: "Read Python state" }).click();
+	await expect
+		.poll(() => projectedState(page, "Python state"))
+		.toMatchObject({ payload_size: 8388608, payload_checksum: 255 });
 });
 
-test("large JSON updates preserve every record and Unicode text", async ({ page }) => {
+test("large JSON updates preserve Unicode and reset on reopening", async ({ page }) => {
 	test.slow();
 	await openWidget(page, "large_state_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
@@ -66,6 +78,12 @@ test("large JSON updates preserve every record and Unicode text", async ({ page 
 	await expect
 		.poll(() => projectedState(page, "Python state"))
 		.toMatchObject({ row_count: 40000, last_label: "row 39999 λ" });
+	await restoreWidget(page);
+	await expect(widget.getByTestId("large-json")).toHaveText("0 |");
+	await page.getByRole("button", { name: "Read Python state" }).click();
+	await expect
+		.poll(() => projectedState(page, "Python state"))
+		.toMatchObject({ row_count: 0, last_label: "" });
 });
 
 test("child replacement renders the newly enrolled model", async ({ page }) => {
@@ -76,7 +94,9 @@ test("child replacement renders the newly enrolled model", async ({ page }) => {
 	await expect(widget.getByTestId("child-value")).toHaveText("11");
 });
 
-test("recursive references share a protocol child and replace its graph", async ({ page }) => {
+test("recursive references share a protocol child across replacement and reopening", async ({
+	page,
+}) => {
 	await openWidget(page, "nested_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.getByTestId("nested-ref-count")).toHaveText("3");
@@ -88,9 +108,16 @@ test("recursive references share a protocol child and replace its graph", async 
 	await expect(widget.getByTestId("child-value")).toHaveText("21");
 	await page.getByRole("button", { name: "Read Python state" }).click();
 	await expect.poll(() => projectedState(page, "Python state")).toEqual({ values: [20, 21, 20] });
+	await restoreWidget(page);
+	await expect(widget.getByTestId("protocol-value")).toHaveText("3");
+	await expect(widget.getByTestId("child-value")).toHaveText("7");
+	await widget.getByRole("button", { name: "Increment protocol child" }).click();
+	await expect.poll(() => projectedState(page, "Model context")).toEqual({ values: [4, 7, 4] });
 });
 
-test("source updates replace CSS and JavaScript in the live view", async ({ page }) => {
+test("source updates replace live code and reopening restores factory sources", async ({
+	page,
+}) => {
 	await openWidget(page, "hot_reload_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.getByTestId("hot-label")).toHaveText("first generation");
@@ -100,11 +127,12 @@ test("source updates replace CSS and JavaScript in the live view", async ({ page
 	await widget.getByRole("button", { name: "Change ESM" }).click();
 	await expect(widget.getByTestId("hot-label")).toHaveText("second generation");
 	await expect(widget.getByTestId("hot-label")).toHaveCSS("color", "rgb(37, 99, 235)");
+	await restoreWidget(page);
+	await expect(widget.getByTestId("hot-label")).toHaveText("first generation");
+	await expect(widget.getByTestId("hot-label")).toHaveCSS("color", "rgb(220, 38, 38)");
 });
 
-test("large shared sources render across app replacement and unavailable storage", async ({
-	page,
-}) => {
+test("large shared sources render on reopening with unavailable storage", async ({ page }) => {
 	await openWidget(page, "large_asset_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.getByTestId("large-asset-status")).toHaveText("ready");
@@ -122,7 +150,7 @@ test("large shared sources render across app replacement and unavailable storage
 			},
 		});
 	});
-	await openWidget(page, "large_asset_probe");
+	await restoreWidget(page);
 	await expect(widget.getByTestId("large-asset-status")).toHaveText("ready");
 
 	await expect(widget.getByTestId("large-asset-leaf")).toHaveText([
@@ -134,7 +162,9 @@ test("large shared sources render across app replacement and unavailable storage
 		.toBeGreaterThan(requests);
 });
 
-test("a rejected trait update reports an error and disposes the session", async ({ page }) => {
+test("a rejected trait update disposes the session and permits explicit reopening", async ({
+	page,
+}) => {
 	await openWidget(page, "validation_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await widget.getByRole("button", { name: "Send invalid value" }).click();
@@ -142,6 +172,10 @@ test("a rejected trait update reports an error and disposes the session", async 
 	await expect(page.getByLabel("Disposed sessions")).toHaveText("1");
 	await page.getByRole("button", { name: "Read Python state" }).click();
 	await expect(page.getByLabel("Python state")).toContainText('"isError":true');
+	await widget.getByRole("button", { name: "Reopen", exact: true }).click();
+	await expect(widget.getByRole("button", { name: "Send invalid value" })).toBeVisible();
+	await page.getByRole("button", { name: "Read Python state" }).click();
+	await expect.poll(() => projectedState(page, "Python state")).toMatchObject({ value: 1 });
 });
 
 test("failed widget sessions release state and allow subsequent launches", async ({ page }) => {
@@ -156,7 +190,8 @@ test("failed widget sessions release state and allow subsequent launches", async
 			await page.getByLabel("Tool arguments").fill(JSON.stringify({ phase }));
 			await openWidget(page, "lifecycle_probe");
 			const widget = page.frameLocator('iframe[title="Widget"]');
-			await expect(widget.getByText(`Widget error: ${message}`, { exact: true })).toBeVisible();
+			await expect(widget.getByRole("alert")).toContainText(message);
+			await expect(widget.getByRole("alert")).toContainText("new widget");
 			await expect(page.getByLabel("Disposed sessions")).toHaveText(String(index + 1));
 			await page.getByRole("button", { name: "Read Python state" }).click();
 			await expect(page.getByLabel("Python state")).toContainText('"isError":true');
@@ -184,7 +219,7 @@ test("hosts can pull current Python state without context delivery", async ({ pa
 	await expect(page.getByLabel("Model context")).toBeEmpty();
 });
 
-test("startup reconciles many source revisions and retains its initial event backlog", async ({
+test("reopening reruns initialization and creates a fresh startup event backlog", async ({
 	page,
 }) => {
 	test.slow();
@@ -196,11 +231,11 @@ test("startup reconciles many source revisions and retains its initial event bac
 	await expect.poll(() => projectedState(page, "Model context")).toEqual({ stage: 41 });
 	await widget.getByRole("button", { name: "Resume live events" }).click();
 	await expect(widget.getByTestId("startup-progress")).toHaveText("Stage 41, 251 events");
+	await restoreWidget(page);
+	await expect(widget.getByTestId("startup-progress")).toHaveText("Stage 41, 250 events");
 });
 
-test("fitting projections preserve full collections, text, keys and deep values", async ({
-	page,
-}) => {
+test("deep projections preserve complete values through edits and reopening", async ({ page }) => {
 	await openWidget(page, "projection_probe");
 	const widget = page.frameLocator('iframe[title="Widget"]');
 	await expect(widget.getByRole("status")).toHaveText(
@@ -227,4 +262,8 @@ test("fitting projections preserve full collections, text, keys and deep values"
 	expect(result.structuredContent.tool).toBe("projection_probe");
 	const text = result.content[0].text;
 	expect(JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1))).toEqual({ payload });
+	await restoreWidget(page);
+	await expect(widget.getByRole("status")).toHaveText(
+		"200 records; 1500 characters; 300 levels; complete",
+	);
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import functools
 import json
 import threading
 from collections.abc import Callable
@@ -25,6 +26,7 @@ from ._runtime import (
     acknowledge_operations,
     PollReplay,
     SessionRuntime,
+    SessionUnavailableError,
     comm_fingerprint,
     remember_comm_replay,
     protocol_error,
@@ -37,6 +39,7 @@ from ._mcp.targets import (
     TargetT,
     WidgetState,
     MCPWidgetTarget,
+    ReopenMode,
     prepare_target,
     normalize_state,
 )
@@ -135,6 +138,8 @@ class WidgetTools:
         title: str | None = None,
         description: str | None = None,
         state: WidgetState = DEFAULT_STATE,
+        reopen: ReopenMode | None = None,
+        reopen_ui: bool | None = None,
         annotations: ToolAnnotations | None = None,
         icons: list[Icon] | None = None,
     ) -> TargetT: ...
@@ -149,6 +154,8 @@ class WidgetTools:
         title: str | None = None,
         description: str | None = None,
         state: WidgetState = DEFAULT_STATE,
+        reopen: ReopenMode | None = None,
+        reopen_ui: bool | None = None,
         annotations: ToolAnnotations | None = None,
         icons: list[Icon] | None = None,
     ) -> Callable[[TargetT], TargetT]: ...
@@ -162,6 +169,8 @@ class WidgetTools:
         title: str | None = None,
         description: str | None = None,
         state: WidgetState = DEFAULT_STATE,
+        reopen: ReopenMode | None = None,
+        reopen_ui: bool | None = None,
         annotations: ToolAnnotations | None = None,
         icons: list[Icon] | None = None,
     ) -> TargetT | Callable[[TargetT], TargetT]:
@@ -180,6 +189,10 @@ class WidgetTools:
                 projection callable, or ``None`` to disable model-context
                 projection. Projection callables must not mutate synchronized
                 widget traits.
+            reopen: Allow fresh creation from saved inputs, manually or once on
+                remount. The factory and its initialization must be safe to repeat.
+            reopen_ui: Show built-in recovery controls. Defaults to True for
+                manual reopening and False for automatic reopening.
             annotations: Standard MCP tool behavior hints.
             icons: Icons shown for the MCP tool.
 
@@ -206,6 +219,10 @@ class WidgetTools:
         Example:
             ``widgets.widget(ColorPicker, state="color")``
         """
+        if reopen_ui is not None and not isinstance(reopen_ui, bool):
+            raise TypeError("reopen_ui must be a bool or None")
+        if reopen not in (None, "manual", "auto"):
+            raise ValueError("reopen must be None, 'manual', or 'auto'")
         normalized_state = normalize_state(state)
         validate_state_spec(normalized_state)
 
@@ -218,7 +235,9 @@ class WidgetTools:
                 annotations=annotations,
                 icons=icons,
             )
-            self._register_widget(compiled, state=normalized_state)
+            self._register_widget(
+                compiled, state=normalized_state, reopen=reopen, reopen_ui=reopen_ui
+            )
             return candidate
 
         if target is None:
@@ -226,7 +245,12 @@ class WidgetTools:
         return register(target)
 
     def _register_widget(
-        self, compiled: MCPWidgetTarget, *, state: WidgetState = DEFAULT_STATE
+        self,
+        compiled: MCPWidgetTarget,
+        *,
+        state: WidgetState = DEFAULT_STATE,
+        reopen: ReopenMode | None = None,
+        reopen_ui: bool | None = None,
     ) -> None:
         normalized_state = normalize_state(state)
         validate_state_spec(normalized_state)
@@ -251,7 +275,11 @@ class WidgetTools:
                 raise ToolError(str(error)) from error
 
         compiled.register(
-            self._mcp, invoke, meta={"ui": {"resourceUri": self._app_uri}}
+            self._mcp,
+            invoke,
+            meta={"ui": {"resourceUri": self._app_uri}},
+            reopen=reopen,
+            reopen_ui=(reopen == "manual" if reopen_ui is None else reopen_ui),
         )
 
     async def aclose(self) -> None:
@@ -593,7 +621,9 @@ class WidgetTools:
                 str,
                 Field(
                     description=(
-                        "The state_id returned by the widget tool that opened the app."
+                        "The state_id in this widget's latest model context. "
+                        "Reopening creates a new ID. If no context is available, "
+                        "use the ID from its latest creation result."
                     )
                 ),
             ],
@@ -601,7 +631,9 @@ class WidgetTools:
             """Read a widget's current state after user interaction.
 
             Call this before answering a question about the current state of an
-            open widget. Pass the ``state_id`` returned by its widget tool.
+            open widget. Prefer the ``state_id`` in this widget's latest model
+            context over older tool results. Reopening creates a new ID. If no
+            context is available, use the ID from its latest creation result.
             """
             tool_name, projection = self._require_runtime().state(state_id)
             return model_result(
@@ -666,19 +698,39 @@ class WidgetTools:
             idempotent_hint=True,
             open_world_hint=False,
         )
-        self._mcp.add_tool(anywidget_bootstrap, meta=app_only, structured_output=False)
         self._mcp.add_tool(
             anywidget_state,
             annotations=state_annotations,
             meta=model_only,
             structured_output=False,
         )
-        self._mcp.add_tool(anywidget_read, meta=app_only, structured_output=False)
-        self._mcp.add_tool(anywidget_write, meta=app_only, structured_output=False)
-        self._mcp.add_tool(anywidget_comm, meta=app_only, structured_output=False)
-        self._mcp.add_tool(anywidget_poll, meta=app_only, structured_output=False)
-        self._mcp.add_tool(anywidget_dispose, meta=app_only, structured_output=False)
-        self._mcp.add_tool(anywidget_cancel, meta=app_only, structured_output=False)
+        for tool in (
+            anywidget_bootstrap,
+            anywidget_read,
+            anywidget_write,
+            anywidget_comm,
+            anywidget_poll,
+            anywidget_dispose,
+            anywidget_cancel,
+        ):
+            self._mcp.add_tool(
+                _session_tool(tool), meta=app_only, structured_output=False
+            )
+
+
+def _session_tool(tool: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(tool)
+    async def call(**arguments: Any) -> CallToolResult:
+        try:
+            return await tool(**arguments)
+        except SessionUnavailableError as error:
+            return CallToolResult(
+                is_error=True,
+                content=[TextContent(type="text", text=str(error))],
+                _meta={"anywidget": {"error": "session_unavailable"}},
+            )
+
+    return call
 
 
 def _validated_app_uri(mcp: MCPServer, app_uri: str) -> str:

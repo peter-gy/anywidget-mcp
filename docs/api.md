@@ -45,6 +45,8 @@ serve(
     title=None,
     description=None,
     state=<default>,
+    reopen=None,
+    reopen_ui=None,
     annotations=None,
     icons=None,
     transport="streamable-http",
@@ -62,6 +64,8 @@ MCP server until the transport exits.
   AnyWidget or non-empty `Sequence[AnyWidget]`.
 - `name`, `title`, and `description` define the host-facing tool identity.
 - `state` accepts the forms documented in [Model-visible state](./state).
+- `reopen` selects [saved-result reopening](./factories#reopen-saved-results).
+- `reopen_ui` overrides whether the app shows built-in recovery controls.
 - `annotations` and `icons` accept MCP tool metadata values.
 - `transport` accepts `"streamable-http"` or `"stdio"`.
 - `host`, `port`, and `log_level` configure streamable HTTP.
@@ -119,6 +123,8 @@ mcp.widget(
     title=None,
     description=None,
     state=<default>,
+    reopen=None,
+    reopen_ui=None,
     annotations=None,
     icons=None,
 )
@@ -142,6 +148,15 @@ A target that declares `loading_message` keeps its annotation, default, schema,
 and Python argument. A valid string value also supplies the app status. A value
 that cannot be used as status text selects the generated status default while
 the target receives its validated argument.
+
+`reopen` accepts `None` (disabled), `"manual"` (offer **Reopen**), or `"auto"`
+(attempt recreation once on remount, without recovery controls by default).
+`reopen_ui=True` enables the built-in controls and `False` hides them. The default
+`None` enables controls for manual mode and hides them for automatic mode.
+Reopening saves normalized creation inputs in the
+result, then calls the same registered tool to create a fresh session. See
+[Reopen saved results](./factories#reopen-saved-results) for input, host, and
+lifecycle requirements.
 
 A factory may return an AnyWidget or a non-empty `Sequence[AnyWidget]`. It may
 also return a synchronous or asynchronous context manager that yields either

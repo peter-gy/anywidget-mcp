@@ -12,6 +12,7 @@ import { z } from "zod";
 const tool = document.querySelector<HTMLSelectElement>("#tool")!;
 const argumentsInput = document.querySelector<HTMLTextAreaElement>("#arguments")!;
 const open = document.querySelector<HTMLButtonElement>("#open")!;
+const restore = document.querySelector<HTMLButtonElement>("#restore")!;
 const read = document.querySelector<HTMLButtonElement>("#read")!;
 const close = document.querySelector<HTMLButtonElement>("#close")!;
 const status = document.querySelector<HTMLOutputElement>("#status")!;
@@ -33,6 +34,7 @@ let assetRequests = 0;
 let disposedSessions = 0;
 const toolByteLimit = 128 * 1024;
 let readDropped = false;
+let recreationDropped = false;
 const readArgumentsSchema = z.object({ offset: z.number().int().nonnegative() });
 const readMetadataSchema = z.object({
 	anywidget: z.object({ byteLength: z.number().int().nonnegative() }),
@@ -43,13 +45,13 @@ const resourceMetadataSchema = McpUiResourceMetaSchema.extend({
 	}).optional(),
 });
 
-async function callTool(params: Parameters<Client["callTool"]>[0]) {
+async function callTool(params: Parameters<Client["callTool"]>[0], signal?: AbortSignal) {
 	const requestSize = new TextEncoder().encode(JSON.stringify(params)).byteLength;
 	requestBytes.value = String(Math.max(Number(requestBytes.value), requestSize));
 	if (requestSize > toolByteLimit) {
 		throw new Error(`Tool ${params.name} request exceeded ${toolByteLimit} bytes: ${requestSize}`);
 	}
-	const result = await client.callTool(params);
+	const result = await client.callTool(params, undefined, { signal });
 	const resultSize = new TextEncoder().encode(JSON.stringify(result)).byteLength;
 	resultBytes.value = String(Math.max(Number(resultBytes.value), resultSize));
 	if (resultSize > toolByteLimit) {
@@ -89,7 +91,7 @@ async function closeWidget(): Promise<void> {
 	status.value = "Closed";
 }
 
-async function openWidget(): Promise<void> {
+async function openWidget(saved = false): Promise<void> {
 	open.disabled = true;
 	await closeWidget();
 	context.value = "";
@@ -99,7 +101,14 @@ async function openWidget(): Promise<void> {
 		method: "tools/call",
 		params: { name: tool.value, arguments: JSON.parse(argumentsInput.value) },
 	});
-	const result = await callTool(request.params);
+	const result = saved
+		? CallToolResultSchema.parse(JSON.parse(sessionStorage.getItem("saved-result")!))
+		: await callTool(request.params);
+	if (!saved) {
+		sessionStorage.setItem("saved-result", JSON.stringify(result));
+		sessionStorage.setItem("saved-tool", tool.value);
+	}
+	restore.disabled = false;
 	if (result.isError) throw new Error(JSON.stringify(result.content));
 	stateArguments = { state_id: result.structuredContent?.state_id };
 	read.disabled = stateArguments.state_id == null;
@@ -140,16 +149,28 @@ async function openWidget(): Promise<void> {
 	);
 	bridge.onupdatemodelcontext = async (params) => {
 		context.value = JSON.stringify(params.structuredContent);
+		if (params.structuredContent?.state_id)
+			stateArguments = { state_id: params.structuredContent.state_id };
 		return {};
 	};
 	bridge.onsizechange = ({ height }) => {
 		if (height) iframe.style.height = `${height}px`;
 	};
-	const forward: NonNullable<AppBridge["oncalltool"]> = async (params) => {
+	const forward: NonNullable<AppBridge["oncalltool"]> = async (params, extra) => {
 		if (params.name === "anywidget_read") assets.value = String(++assetRequests);
-		const response = await callTool(params);
+		const response = await callTool(params, extra.signal);
 		if (params.name === "anywidget_dispose" && !response.isError) {
 			disposed.value = String(++disposedSessions);
+		}
+		if (bridge !== activeBridge) return response;
+		if (response.structuredContent?.state_id) {
+			if (new URLSearchParams(location.search).has("drop-reopen") && !recreationDropped) {
+				recreationDropped = true;
+				throw new Error("Creation response lost after the server completed it");
+			}
+			stateArguments = { state_id: response.structuredContent.state_id };
+			if (new URLSearchParams(location.search).has("echo-result"))
+				await bridge?.sendToolResult(response);
 		}
 		return response;
 	};
@@ -177,6 +198,10 @@ async function openWidget(): Promise<void> {
 open.addEventListener("click", () => {
 	void openWidget().catch(report);
 });
+restore.addEventListener("click", () => {
+	tool.value = sessionStorage.getItem("saved-tool")!;
+	void openWidget(true).catch(report);
+});
 close.addEventListener("click", () => {
 	void closeWidget().catch(report);
 });
@@ -189,7 +214,11 @@ read.addEventListener("click", () => {
 });
 
 const endpoint = new URLSearchParams(location.search).has("webmcp") ? "/webmcp/mcp" : "/mcp";
-await client.connect(new StreamableHTTPClientTransport(new URL(endpoint, location.href)));
+await client.connect(
+	new StreamableHTTPClientTransport(
+		new URL(new URLSearchParams(location.search).get("server") ?? endpoint, location.href),
+	),
+);
 const listing = await client.listTools();
 for (const entry of listing.tools) {
 	const uri = getToolUiResourceUri(entry);
@@ -200,3 +229,5 @@ for (const entry of listing.tools) {
 }
 status.value = "Ready";
 open.disabled = false;
+
+restore.disabled = sessionStorage.getItem("saved-result") === null;

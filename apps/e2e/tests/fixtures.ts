@@ -21,6 +21,17 @@ export const test = base.extend({
 
 export { expect } from "@playwright/test";
 
+export async function restoreWidget(page: Page) {
+	const element = await page.locator('iframe[title="Widget"]').elementHandle();
+	const previous = await element?.contentFrame();
+	if (!previous)
+		throw new Error("A live widget frame is required before restoring its saved result");
+	await Promise.all([
+		page.waitForEvent("framedetached", { predicate: (frame) => frame === previous }),
+		page.getByRole("button", { name: "Restore saved result" }).click(),
+	]);
+}
+
 export async function projectedState(page: Page, label: "Model context" | "Python state") {
 	const text = await page.getByLabel(label).textContent();
 	if (!text) return undefined;

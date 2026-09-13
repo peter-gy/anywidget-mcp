@@ -724,7 +724,7 @@ describe("WidgetRuntime launch and model graph", () => {
 			expect.any(AbortSignal),
 		);
 		expect(consoleError).toHaveBeenCalledWith(
-			expect.objectContaining({ message: "initialize failed" }),
+			expect.objectContaining({ message: expect.stringContaining("initialize failed") }),
 		);
 
 		await runtime.dispose();

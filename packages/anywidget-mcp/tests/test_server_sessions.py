@@ -240,6 +240,8 @@ async def test_successful_session_call_consumes_bootstrap_claim() -> None:
     assert replay.is_error is True
     assert isinstance(replay.content[0], TextContent)
     assert "Widget bootstrap is unavailable" in replay.content[0].text
+    assert replay.meta is not None
+    assert replay.meta["anywidget"] == {"error": "session_unavailable"}
 
 
 @pytest.mark.anyio
@@ -366,7 +368,8 @@ async def test_dispose_releases_widget_session() -> None:
         )
         assert unavailable.is_error is True
         assert isinstance(unavailable.content[0], TextContent)
-        assert unavailable.content[0].text.endswith("Widget state is unavailable")
+        assert "Widget state is unavailable" in unavailable.content[0].text
+        assert "current widget context" in unavailable.content[0].text
         assert state_id(launch) not in unavailable.content[0].text
 
         second = await client.call_tool(
@@ -385,6 +388,8 @@ async def test_dispose_releases_widget_session() -> None:
     assert poll.is_error is True
     assert isinstance(poll.content[0], TextContent)
     assert "Unknown widget session" in poll.content[0].text
+    assert poll.meta is not None
+    assert poll.meta["anywidget"] == {"error": "session_unavailable"}
 
 
 @pytest.mark.anyio

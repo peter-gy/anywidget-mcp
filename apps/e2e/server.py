@@ -557,9 +557,9 @@ def create_server() -> AnyWidgetMCP:
             "http://127.0.0.1:8082",
         ],
     )
-    server.widget(create_anywidget)
+    server.widget(create_anywidget, reopen="auto")
 
-    @server.widget(title="Browser bridge probe")
+    @server.widget(title="Browser bridge probe", reopen="auto")
     def bridge_probe() -> BridgeProbe:
         """Open the browser integration probe."""
         return BridgeProbe(child=ChildWidget())
@@ -569,9 +569,12 @@ def create_server() -> AnyWidgetMCP:
         name="hot_reload_probe",
         title="Hot reload probe",
         state=None,
+        reopen="auto",
     )
 
-    @server.widget(name="large_asset_probe", title="Large asset probe", state=None)
+    @server.widget(
+        name="large_asset_probe", title="Large asset probe", state=None, reopen="auto"
+    )
     def large_asset_probe() -> LargeAssetProbe:
         """Open two models that share one three-megabyte ESM source."""
         return LargeAssetProbe(
@@ -583,6 +586,7 @@ def create_server() -> AnyWidgetMCP:
         name="nested_probe",
         title="Nested composition probe",
         state=nested_state,
+        reopen="auto",
     )
     def nested_probe() -> NestedProbe:
         """Open recursive AnyWidget composition with a protocol child."""
@@ -596,7 +600,9 @@ def create_server() -> AnyWidgetMCP:
             }
         )
 
-    server.widget(ValidationProbe, name="validation_probe")
+    server.widget(
+        ValidationProbe, name="validation_probe", reopen="auto", reopen_ui=True
+    )
 
     @server.widget
     def lifecycle_probe(phase: str) -> LifecycleProbe:
@@ -605,15 +611,17 @@ def create_server() -> AnyWidgetMCP:
             widget._esm = 'throw new Error("Widget module loading failed");'
         return widget
 
-    server.widget(
-        LargeStateProbe,
+    @server.widget(
         name="large_state_probe",
         state=("payload_size", "payload_checksum", "row_count", "last_label"),
+        reopen="auto",
     )
+    def large_state_probe() -> LargeStateProbe:
+        return LargeStateProbe()
 
-    server.widget(StartupProbe, name="startup_probe", state="stage")
+    server.widget(StartupProbe, name="startup_probe", state="stage", reopen="auto")
 
-    @server.widget(name="projection_probe", state="payload")
+    @server.widget(name="projection_probe", state="payload", reopen="auto")
     def projection_probe() -> ProjectionProbe:
         nested: Any = "complete"
         for _ in range(300):

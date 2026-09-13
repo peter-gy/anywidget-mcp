@@ -546,6 +546,8 @@ def test_serve_registers_and_runs_the_server(
         port=8123,
         transport="stdio",
         state=("color",),
+        reopen="manual",
+        reopen_ui=False,
     )
 
     assert events == [
@@ -568,6 +570,8 @@ def test_serve_registers_and_runs_the_server(
                     "title": None,
                     "description": None,
                     "state": ("color",),
+                    "reopen": "manual",
+                    "reopen_ui": False,
                     "annotations": None,
                     "icons": None,
                 },

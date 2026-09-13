@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
 	App,
 	applyDocumentTheme,
@@ -24,6 +25,10 @@ import {
 	loadingMessageFromArguments,
 	loadingMessageFromPayload,
 	toolResultError,
+	toolResultFailure,
+	SessionUnavailableError,
+	ReopenError,
+	RuntimeStoppedError,
 } from "./status";
 import { ToolCallQueue } from "./tool-calls";
 import { mountDetachedWidget } from "./widget-mount";
@@ -35,6 +40,12 @@ declare const __ANYWIDGET_MCP_VERSION__: string;
 let shell: HTMLElement;
 let status: HTMLElement;
 let root: HTMLElement;
+let reopenButton: HTMLButtonElement | undefined;
+let currentLaunch: Extract<ToolLaunch, { kind: "bootstrap" }> | undefined;
+let reopenAttempt: AbortController | undefined;
+let reopenTask: Promise<void> | undefined;
+let autoReopened = false;
+let closed = false;
 let app: App;
 let calls: ToolCallQueue;
 let runtime: WidgetRuntime | undefined;
@@ -69,29 +80,7 @@ function startApp(): void {
 
 	// Ext Apps delivers the first tool result during connect, so handlers must be
 	// installed before the bridge starts receiving host notifications.
-	app.addEventListener("toolresult", (result) => {
-		const resultError = toolResultError(result);
-		if (resultError) {
-			if (!resultGate.acceptedLaunch) queueResultError(new Error(resultError));
-			return;
-		}
-		const launch = parseToolLaunch(result);
-		if (launch.kind === "other") {
-			if (!resultGate.acceptedLaunch) {
-				queueResultError(new Error("Widget host did not preserve launch metadata"));
-			}
-			return;
-		}
-		if (launch.kind === "malformed") {
-			if (!resultGate.acceptedLaunch) queueResultError(launch.error);
-			return;
-		}
-		resultGate.deliver(launch.bootstrapId, (controller) => {
-			renderRequest = renderRequest
-				.then(() => mountToolResult(launch, controller))
-				.catch(showError);
-		});
-	});
+	app.addEventListener("toolresult", receiveToolResult);
 	app.addEventListener("toolinput", ({ arguments: args }) => {
 		if (resultGate.acceptedLaunch) return;
 		loadingMessage =
@@ -108,6 +97,9 @@ function startApp(): void {
 	app.addEventListener("hostcontextchanged", applyHostContext);
 	app.onerror = (error) => showError(error);
 	app.onteardown = async () => {
+		closed = true;
+		reopenAttempt?.abort(new DOMException("Widget app is closing", "AbortError"));
+		await reopenTask;
 		resultGate.abort(new DOMException("Widget app is closing", "AbortError"));
 		// A queued replacement can publish a runtime after the first disposal.
 		// Drain the render queue, then close anything that it committed.
@@ -138,7 +130,53 @@ function startApp(): void {
 
 if ("document" in globalThis) startApp();
 
-async function mountToolResult(launch: ToolLaunch, controller: AbortController): Promise<void> {
+function receiveToolResult(result: CallToolResult): void {
+	const resultError = toolResultError(result);
+	if (resultError) {
+		if (!resultGate.acceptedLaunch) queueResultError(new Error(resultError));
+		return;
+	}
+	const launch = parseToolLaunch(result);
+	if (launch.kind === "other") {
+		if (!resultGate.acceptedLaunch) {
+			queueResultError(
+				new Error(
+					"Widget host did not preserve launch metadata. Reconnect the server or request a new widget in a compatible MCP Apps host.",
+				),
+			);
+		}
+		return;
+	}
+	if (launch.kind === "malformed") {
+		if (!resultGate.acceptedLaunch) queueResultError(launch.error);
+		return;
+	}
+	if (closed) {
+		void disposeServerSession(
+			calls,
+			launch.bootstrapId,
+			"Disposing late widget result",
+			RUNTIME_LIFECYCLE_TIMEOUT_MS,
+			randomId(),
+		).catch(console.error);
+		return;
+	}
+	resultGate.deliver(launch.bootstrapId, (controller) => {
+		const recreated = reopenAttempt !== undefined;
+		currentLaunch = launch;
+		reopenAttempt?.abort(new DOMException("Widget result received", "AbortError"));
+		setReopenVisible(false);
+		renderRequest = renderRequest
+			.then(() => mountToolResult(launch, controller, recreated))
+			.catch(showError);
+	});
+}
+
+async function mountToolResult(
+	launch: ToolLaunch,
+	controller: AbortController,
+	recreated = false,
+): Promise<void> {
 	if (launch.kind !== "bootstrap") return;
 	let sessionHandle = launch.bootstrapId;
 	const bootstrapOperationId = randomId();
@@ -167,7 +205,9 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 					connected,
 					undefined,
 					signal,
-					showError,
+					(cause) => {
+						if (!controller.signal.aborted) showRuntimeError(cause);
+					},
 				);
 			} catch (error) {
 				// WidgetRuntime.create owns session cleanup once entered. Failures before
@@ -210,6 +250,7 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 		);
 		root.hidden = false;
 		status.hidden = true;
+		setReopenVisible(false);
 		setBusy(false);
 	} catch (error) {
 		if (next !== undefined) {
@@ -219,10 +260,115 @@ async function mountToolResult(launch: ToolLaunch, controller: AbortController):
 		root.replaceChildren();
 		root.hidden = true;
 		if (controller.signal.aborted) return;
-		throw error;
+		if (recreated && !(error instanceof SessionUnavailableError)) {
+			showReopenError(
+				new ReopenError(launch.reopen?.tool ?? "widget", error, "reopen_mount_failed"),
+			);
+			return;
+		}
+		if (error instanceof SessionUnavailableError && launch.reopen) {
+			if (launch.reopen.mode === "auto" && !autoReopened) startReopen();
+			else showUnavailable();
+			return;
+		}
+		if (error instanceof SessionUnavailableError) {
+			showError(
+				new SessionUnavailableError(
+					"Widget session is unavailable and this result has no supported reopening metadata. Ask for a new widget.",
+				),
+			);
+			return;
+		}
+		throw new Error(
+			`Unable to open widget. ${error instanceof Error ? error.message : String(error)}. Check the server connection and reload this result, or ask for a new widget.`,
+			{ cause: error },
+		);
 	} finally {
 		if (pendingAttempt?.controller === controller) pendingAttempt = undefined;
 	}
+}
+
+function recoveryAction(): string {
+	const descriptor = currentLaunch?.reopen;
+	if (descriptor?.ui) return "Choose Reopen to start again from the original inputs.";
+	if (descriptor?.mode === "auto")
+		return "Reload this result to start again from the original inputs.";
+	return "Ask for a new widget.";
+}
+
+function setReopenVisible(visible: boolean): void {
+	const show = visible && currentLaunch?.reopen?.ui && !closed;
+	if (!reopenButton) {
+		if (!show) return;
+		reopenButton = document.createElement("button");
+		reopenButton.id = "reopen";
+		reopenButton.textContent = "Reopen";
+		reopenButton.addEventListener("click", startReopen);
+		status.after(reopenButton);
+	}
+	reopenButton.hidden = !show;
+}
+
+function showUnavailable(): void {
+	root.hidden = true;
+	showStatus(`This widget session is no longer available. ${recoveryAction()}`);
+	setBusy(false);
+	setReopenVisible(true);
+}
+
+function showRuntimeError(cause: unknown): void {
+	const reason = cause instanceof RuntimeStoppedError ? cause.cause : cause;
+	if (reason instanceof SessionUnavailableError && currentLaunch?.reopen) showUnavailable();
+	else {
+		showError(cause);
+		if (cause instanceof RuntimeStoppedError) {
+			root.hidden = true;
+			setReopenVisible(true);
+		}
+	}
+}
+
+function startReopen(): void {
+	const descriptor = currentLaunch?.reopen;
+	if (!descriptor || reopenAttempt || closed) return;
+	const controller = new AbortController();
+	reopenAttempt = controller;
+	autoReopened = true;
+	setReopenVisible(false);
+	showLoadingStatus();
+	// Creation has ordinary tools/call semantics. A lost response must not
+	// silently rerun a factory, unlike replayable bootstrap and comm calls.
+	reopenTask = calls
+		.call(descriptor.tool, descriptor.arguments, controller.signal)
+		.then((result) => {
+			controller.signal.throwIfAborted();
+			if (result.isError)
+				throw new ReopenError(descriptor.tool, toolResultFailure(result), "reopen_rejected");
+			const launch = parseToolLaunch(result);
+			if (launch.kind !== "bootstrap")
+				throw new ReopenError(
+					descriptor.tool,
+					"The tool returned no valid widget launch.",
+					"reopen_mount_failed",
+				);
+			receiveToolResult(result);
+		})
+		.catch((error) => {
+			if (controller.signal.aborted || closed) return;
+			showReopenError(
+				error instanceof ReopenError
+					? error
+					: new ReopenError(descriptor.tool, error, "reopen_unconfirmed"),
+			);
+		})
+		.finally(() => {
+			if (reopenAttempt === controller) reopenAttempt = undefined;
+		});
+}
+
+function showReopenError(error: ReopenError): void {
+	showError(error);
+	setReopenVisible(true);
 }
 
 async function disposeRuntime(preserve?: AbortSignal): Promise<void> {
@@ -255,6 +401,7 @@ function applyHostContext(context: McpUiHostContext): void {
 }
 
 function showStatus(message: string): void {
+	delete status.dataset.errorCode;
 	status.hidden = false;
 	status.dataset.kind = "status";
 	status.setAttribute("role", "status");
@@ -271,9 +418,20 @@ function setBusy(busy: boolean): void {
 }
 
 function showError(cause: unknown): void {
-	const message = cause instanceof Error ? cause.message : String(cause);
+	let message = cause instanceof Error ? cause.message : String(cause);
+	if (cause instanceof ReopenError || cause instanceof RuntimeStoppedError) {
+		message += `\nCheck the server connection and access permissions. ${recoveryAction()} If the problem persists, ask for a new widget with updated inputs.`;
+	}
 	status.hidden = false;
 	status.dataset.kind = "error";
+	status.dataset.errorCode =
+		cause instanceof RuntimeStoppedError
+			? "runtime_stopped"
+			: cause instanceof ReopenError
+				? cause.code
+				: cause instanceof SessionUnavailableError
+					? "session_unavailable"
+					: "widget_error";
 	status.setAttribute("role", "alert");
 	status.textContent = `Widget error: ${message}`;
 	setBusy(false);

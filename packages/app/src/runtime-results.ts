@@ -1,12 +1,21 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { AttachmentStore, deliveryPayload } from "./attachments";
 import { randomId } from "./runtime-lifecycle";
-import { isNumber, isRecord, isString, type RuntimeRecord } from "./runtime-value";
+import { isBoolean, isNumber, isRecord, isString, type RuntimeRecord } from "./runtime-value";
 import type { ToolArguments } from "./tool-calls";
 import { retryTransport } from "./transport";
+import { toolResultFailure } from "./status";
+
+export interface ReopenDescriptor {
+	version: 1;
+	tool: string;
+	arguments: ToolArguments;
+	mode: "manual" | "auto";
+	ui: boolean;
+}
 
 export type ToolLaunch =
-	| { kind: "bootstrap"; bootstrapId: string }
+	| { kind: "bootstrap"; bootstrapId: string; reopen?: ReopenDescriptor; stateId?: string }
 	| { kind: "malformed"; error: Error }
 	| { kind: "other" };
 
@@ -34,7 +43,36 @@ export function parseToolLaunch(result: CallToolResult): ToolLaunch {
 	}
 	if (bootstrapId === undefined) return { kind: "other" };
 
-	return { kind: "bootstrap", bootstrapId };
+	const reopen = parseReopen(result);
+	const stateId = nonemptyString(result.structuredContent?.state_id);
+	const launch: Extract<ToolLaunch, { kind: "bootstrap" }> = { kind: "bootstrap", bootstrapId };
+	if (reopen) launch.reopen = reopen;
+	if (stateId) launch.stateId = stateId;
+	return launch;
+}
+
+function parseReopen(result: CallToolResult): ReopenDescriptor | undefined {
+	const descriptor = anywidgetMeta(result._meta)?.reopen;
+	if (
+		!isRecord(descriptor) ||
+		descriptor.version !== 1 ||
+		!isString(descriptor.tool) ||
+		descriptor.tool.length === 0 ||
+		(result.structuredContent?.tool !== undefined &&
+			descriptor.tool !== result.structuredContent.tool) ||
+		!isRecord(descriptor.arguments) ||
+		(descriptor.ui !== undefined && !isBoolean(descriptor.ui)) ||
+		(descriptor.mode !== "manual" && descriptor.mode !== "auto")
+	)
+		return undefined;
+	if (new TextEncoder().encode(JSON.stringify(descriptor)).byteLength > 64 * 1024) return undefined;
+	return {
+		version: 1,
+		tool: descriptor.tool,
+		arguments: descriptor.arguments,
+		mode: descriptor.mode,
+		ui: descriptor.ui === undefined ? descriptor.mode === "manual" : descriptor.ui,
+	};
 }
 
 export async function loadWidgetRuntime(
@@ -51,7 +89,7 @@ export async function loadWidgetRuntime(
 		operation_id: operationId,
 	};
 	const result = await retryTransport(() => call("anywidget_bootstrap", args), signal);
-	if (result.isError) throw new Error(toolErrorText(result));
+	if (result.isError) throw toolResultFailure(result);
 	const delivery = anywidgetMeta(result._meta);
 	if (!delivery) throw new Error("Widget bootstrap returned no runtime data");
 	const instanceId = nonemptyString(delivery.instanceId);
@@ -68,6 +106,7 @@ export async function loadWidgetRuntime(
 	) {
 		throw new Error("Widget bootstrap returned no valid session idle timeout");
 	}
+	if (launch.stateId && isRecord(payload.context)) payload.context.state_id = launch.stateId;
 	return { result, payload };
 }
 
@@ -104,14 +143,9 @@ function anywidgetMeta<Value>(value: Value): RuntimeRecord | undefined {
 }
 
 function malformed(message: string): ToolLaunch {
-	return { kind: "malformed", error: new Error(message) };
+	return { kind: "malformed", error: new Error(`${message}. Ask for a new widget.`) };
 }
 
 function nonemptyString<Value>(value: Value): string | undefined {
 	return isString(value) && value.length > 0 ? value : undefined;
-}
-
-function toolErrorText(result: CallToolResult): string {
-	const text = result.content.find((item) => item.type === "text");
-	return text?.text || "Widget bootstrap failed";
 }

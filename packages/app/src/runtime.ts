@@ -1,3 +1,4 @@
+import { toolResultFailure, RuntimeStoppedError } from "./status";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { abortable, withTimeout } from "./abort";
@@ -21,12 +22,7 @@ import {
 	type ModelPayload,
 	type State,
 } from "./model";
-import {
-	disposeServerSession,
-	randomId,
-	RUNTIME_LIFECYCLE_TIMEOUT_MS,
-	toolErrorText,
-} from "./runtime-lifecycle";
+import { disposeServerSession, randomId, RUNTIME_LIFECYCLE_TIMEOUT_MS } from "./runtime-lifecycle";
 import {
 	decodeBuffers,
 	hydrateRuntimePayload,
@@ -780,7 +776,7 @@ export class WidgetRuntime {
 				dispatched = true;
 			});
 			signal.throwIfAborted();
-			if (result.isError) throw new Error(toolErrorText(result));
+			if (result.isError) throw toolResultFailure(result);
 			const count = await this.processResult(result, call, signal);
 			signal.throwIfAborted();
 			this.confirmOperation(operationId, previousCall !== undefined);
@@ -830,7 +826,7 @@ export class WidgetRuntime {
 			() => this.calls.callNow("anywidget_cancel", args, signal),
 			signal,
 		);
-		if (result.isError) throw new Error(toolErrorText(result));
+		if (result.isError) throw toolResultFailure(result);
 		const meta = resultAnywidget(result);
 		requireProtocolVersion(meta?.protocolVersion);
 		if (
@@ -858,8 +854,8 @@ export class WidgetRuntime {
 	}
 
 	private fail(cause: unknown): void {
-		this.reportError(cause);
 		void this.dispose(cause).catch(this.reportError);
+		this.reportError(new RuntimeStoppedError(cause));
 	}
 
 	private processResult(
